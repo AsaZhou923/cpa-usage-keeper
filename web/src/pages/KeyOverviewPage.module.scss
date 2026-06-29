@@ -383,6 +383,12 @@
   line-height: 1.6;
 }
 
+.credentialsSections {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
 .loadingOverlay {
   position: absolute;
   inset: 0;

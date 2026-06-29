@@ -78,12 +78,13 @@ func ReplaceUsageIdentitiesForProviderTypes(ctx context.Context, db *gorm.DB, id
 }
 
 type ListUsageIdentitiesPageRequest struct {
-	AuthType   *entities.UsageIdentityAuthType
-	ActiveOnly *bool
-	Types      []string
-	Sort       string
-	Page       int
-	PageSize   int
+	AuthType    *entities.UsageIdentityAuthType
+	ActiveOnly  *bool
+	Types       []string
+	APIGroupKey string
+	Sort        string
+	Page        int
+	PageSize    int
 }
 
 const (
@@ -146,7 +147,7 @@ func ListActiveUsageIdentitiesPage(ctx context.Context, db *gorm.DB, request Lis
 	}
 
 	// 先在同一过滤条件下统计总数，再追加 offset/limit 取当前页数据。
-	query := activeUsageIdentitiesPageBaseQuery(db.WithContext(ctx), request.AuthType, request.ActiveOnly)
+	query := activeUsageIdentitiesPageBaseQuery(db.WithContext(ctx), request)
 	query = applyUsageIdentityTypesFilter(query, types)
 	var total int64
 	if err := query.Model(&entities.UsageIdentity{}).Count(&total).Error; err != nil {
@@ -201,7 +202,7 @@ func ListActiveUsageIdentityTypeCounts(ctx context.Context, db *gorm.DB, request
 	}
 	var counts []dto.UsageIdentityTypeCount
 	// 按数据库原始 type 聚合，不做 lower/alias/归一化；展示归并交给前端映射层。
-	if err := activeUsageIdentitiesPageBaseQuery(db.WithContext(ctx), request.AuthType, request.ActiveOnly).
+	if err := activeUsageIdentitiesPageBaseQuery(db.WithContext(ctx), request).
 		Model(&entities.UsageIdentity{}).
 		Select("type, COUNT(*) AS count").
 		Group("type").
@@ -221,12 +222,40 @@ func activeUsageIdentitiesQuery(db *gorm.DB, authType *entities.UsageIdentityAut
 	return query
 }
 
-func activeUsageIdentitiesPageBaseQuery(db *gorm.DB, authType *entities.UsageIdentityAuthType, activeOnly *bool) *gorm.DB {
-	query := activeUsageIdentitiesQuery(db, authType)
-	if activeOnly != nil && *activeOnly {
+func activeUsageIdentitiesPageBaseQuery(db *gorm.DB, request ListUsageIdentitiesPageRequest) *gorm.DB {
+	query := activeUsageIdentitiesQuery(db, request.AuthType)
+	if request.ActiveOnly != nil && *request.ActiveOnly {
 		query = query.Where("disabled IS NULL OR disabled = ?", false)
 	}
-	return query
+	return applyUsageIdentityAPIGroupKeyFilter(query, request.APIGroupKey, request.AuthType)
+}
+
+func applyUsageIdentityAPIGroupKeyFilter(query *gorm.DB, apiGroupKey string, authType *entities.UsageIdentityAuthType) *gorm.DB {
+	apiGroupKey = strings.TrimSpace(apiGroupKey)
+	if apiGroupKey == "" {
+		return query
+	}
+	existsSQL := "EXISTS (SELECT 1 FROM usage_events WHERE usage_events.auth_index = usage_identities.identity AND usage_events.api_group_key = ?"
+	args := []any{apiGroupKey}
+	if authType != nil {
+		if eventAuthType, ok := usageEventAuthTypeForUsageIdentityAuthType(*authType); ok {
+			existsSQL += " AND LOWER(TRIM(usage_events.auth_type)) = ?"
+			args = append(args, eventAuthType)
+		}
+	}
+	existsSQL += ")"
+	return query.Where(existsSQL, args...)
+}
+
+func usageEventAuthTypeForUsageIdentityAuthType(authType entities.UsageIdentityAuthType) (string, bool) {
+	switch authType {
+	case entities.UsageIdentityAuthTypeAuthFile:
+		return "oauth", true
+	case entities.UsageIdentityAuthTypeAIProvider:
+		return "apikey", true
+	default:
+		return "", false
+	}
 }
 
 func applyUsageIdentityTypesFilter(query *gorm.DB, types []string) *gorm.DB {
@@ -256,6 +285,19 @@ func applyUsageIdentityPageSort(query *gorm.DB, sort string, authType *entities.
 	default:
 		return query.Order("total_requests DESC").Order("id ASC")
 	}
+}
+
+func ListActiveUsageIdentityAuthIndexes(ctx context.Context, db *gorm.DB, request ListUsageIdentitiesPageRequest) ([]string, error) {
+	if db == nil {
+		return nil, fmt.Errorf("database is nil")
+	}
+	query := activeUsageIdentitiesPageBaseQuery(db.WithContext(ctx), request)
+	query = applyUsageIdentityTypesFilter(query, normalizeUsageIdentityTypes(request.Types))
+	var values []string
+	if err := query.Model(&entities.UsageIdentity{}).Select("identity").Pluck("identity", &values).Error; err != nil {
+		return nil, fmt.Errorf("list active usage identity auth indexes: %w", err)
+	}
+	return normalizeUniqueAuthIndexes(values), nil
 }
 
 func GetActiveAuthFileUsageIdentityByAuthIndex(ctx context.Context, db *gorm.DB, authIndex string) (entities.UsageIdentity, error) {

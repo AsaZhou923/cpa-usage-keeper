@@ -19,11 +19,17 @@ import (
 type usageFilterStub struct {
 	overview      *servicedto.UsageOverviewSnapshot
 	realtime      *servicedto.UsageOverviewRealtime
+	eventsPage    *servicedto.UsageEventsPage
+	filterOptions *servicedto.UsageEventFilterOptions
 	err           error
 	lastFilter    servicedto.UsageFilter
 	lastRealtime  servicedto.UsageFilter
+	lastEvents    servicedto.UsageFilter
+	lastOptions   servicedto.UsageFilter
 	overviewCalls int
 	realtimeCalls int
+	eventsCalls   int
+	optionsCalls  int
 }
 
 func (s *usageFilterStub) GetUsageOverview(_ context.Context, filter servicedto.UsageFilter) (*servicedto.UsageOverviewSnapshot, error) {
@@ -38,16 +44,34 @@ func (s *usageFilterStub) GetUsageOverviewRealtime(_ context.Context, filter ser
 	return s.realtime, s.err
 }
 
-func (s *usageFilterStub) ListUsageEvents(context.Context, servicedto.UsageFilter) (*servicedto.UsageEventsPage, error) {
-	return nil, s.err
+func (s *usageFilterStub) ListUsageEvents(_ context.Context, filter servicedto.UsageFilter) (*servicedto.UsageEventsPage, error) {
+	s.lastEvents = filter
+	s.eventsCalls++
+	if s.eventsPage != nil {
+		return s.eventsPage, s.err
+	}
+	return &servicedto.UsageEventsPage{Events: []servicedto.UsageEventRecord{}, Page: filter.Page, PageSize: filter.PageSize}, s.err
 }
 
-func (s *usageFilterStub) StreamUsageEvents(context.Context, servicedto.UsageFilter, func(servicedto.UsageEventRecord) error) error {
+func (s *usageFilterStub) StreamUsageEvents(_ context.Context, filter servicedto.UsageFilter, emit func(servicedto.UsageEventRecord) error) error {
+	s.lastEvents = filter
+	if s.eventsPage != nil {
+		for _, row := range s.eventsPage.Events {
+			if err := emit(row); err != nil {
+				return err
+			}
+		}
+	}
 	return s.err
 }
 
-func (s *usageFilterStub) ListUsageEventFilterOptions(context.Context, servicedto.UsageFilter) (*servicedto.UsageEventFilterOptions, error) {
-	return nil, s.err
+func (s *usageFilterStub) ListUsageEventFilterOptions(_ context.Context, filter servicedto.UsageFilter) (*servicedto.UsageEventFilterOptions, error) {
+	s.lastOptions = filter
+	s.optionsCalls++
+	if s.filterOptions != nil {
+		return s.filterOptions, s.err
+	}
+	return &servicedto.UsageEventFilterOptions{}, s.err
 }
 
 func (s *usageFilterStub) GetAnalysis(context.Context, servicedto.UsageFilter) (*servicedto.AnalysisSnapshot, error) {

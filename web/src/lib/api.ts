@@ -323,12 +323,38 @@ export async function fetchUsageEventSourceFilterOptions(signal?: AbortSignal): 
   return response.json()
 }
 
+export async function fetchKeyOverviewUsageEventModelFilterOptions(signal?: AbortSignal): Promise<UsageEventModelFilterOptionsResponse> {
+  const response = await apiFetch(apiPath('/key-overview/events/filters/models'), { signal, cache: 'no-store' })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to load key overview usage event model filters: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchKeyOverviewUsageEventSourceFilterOptions(signal?: AbortSignal): Promise<UsageEventSourceFilterOptionsResponse> {
+  const response = await apiFetch(apiPath('/key-overview/events/filters/sources'), { signal, cache: 'no-store' })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to load key overview usage event source filters: ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function fetchUsageEvents(range: string, start?: string, end?: string, signal?: AbortSignal, options?: FetchUsageEventsOptions): Promise<UsageEventsResponse> {
   const params = buildUsageEventsParams(range, start, end, options)
   const query = params.toString()
   const response = await apiFetch(`${apiPath('/usage/events')}${query ? `?${query}` : ''}`, { signal })
   if (!response.ok) {
     await parseApiError(response, `Failed to load usage events: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchKeyOverviewUsageEvents(range: string, start?: string, end?: string, signal?: AbortSignal, options?: FetchUsageEventsOptions): Promise<UsageEventsResponse> {
+  const params = buildUsageEventsParams(range, start, end, options)
+  const query = params.toString()
+  const response = await apiFetch(`${apiPath('/key-overview/events')}${query ? `?${query}` : ''}`, { signal })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to load key overview usage events: ${response.status}`)
   }
   return response.json()
 }
@@ -340,6 +366,20 @@ export async function exportUsageEvents(range: string, start: string | undefined
   const response = await apiFetch(`${apiPath('/usage/events/export')}${query ? `?${query}` : ''}`)
   if (!response.ok) {
     await parseApiError(response, `Failed to export usage events: ${response.status}`)
+  }
+  return {
+    blob: await response.blob(),
+    filename: parseAttachmentFilename(response.headers.get('Content-Disposition'), `usage-events.${format}`),
+  }
+}
+
+export async function exportKeyOverviewUsageEvents(range: string, start: string | undefined, end: string | undefined, format: UsageEventsExportFormat, options?: FetchUsageEventsOptions): Promise<UsageEventsExportFile> {
+  const params = buildUsageEventsParams(range, start, end, options, false)
+  params.set('format', format)
+  const query = params.toString()
+  const response = await apiFetch(`${apiPath('/key-overview/events/export')}${query ? `?${query}` : ''}`)
+  if (!response.ok) {
+    await parseApiError(response, `Failed to export key overview usage events: ${response.status}`)
   }
   return {
     blob: await response.blob(),
@@ -397,6 +437,36 @@ export async function fetchUsageIdentitiesPage(signal?: AbortSignal, options?: F
   return response.json()
 }
 
+export async function fetchKeyOverviewUsageIdentitiesPage(signal?: AbortSignal, options?: FetchUsageIdentitiesPageOptions): Promise<UsageIdentitiesPageResponse> {
+  const params = new URLSearchParams()
+  if (options?.authType) {
+    params.set('auth_type', String(options.authType))
+  }
+  if (typeof options?.activeOnly === 'boolean') {
+    params.set('active_only', String(options.activeOnly))
+  }
+  if (options?.sort) {
+    params.set('sort', options.sort)
+  }
+  for (const type of options?.types ?? []) {
+    if (type !== '') {
+      params.append('type', type)
+    }
+  }
+  if (typeof options?.page === 'number' && Number.isFinite(options.page) && options.page > 0) {
+    params.set('page', String(Math.floor(options.page)))
+  }
+  if (typeof options?.pageSize === 'number' && Number.isFinite(options.pageSize) && options.pageSize > 0) {
+    params.set('page_size', String(Math.floor(options.pageSize)))
+  }
+  const query = params.toString()
+  const response = await apiFetch(`${apiPath('/key-overview/usage/identities/page')}${query ? `?${query}` : ''}`, { signal })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to load key overview usage identities page: ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function updateUsageIdentityAlias(id: string, alias: string | null): Promise<UsageIdentity> {
   const response = await apiFetch(apiPath(`/usage/identities/${encodeURIComponent(id)}`), {
     method: 'PATCH',
@@ -423,6 +493,21 @@ export async function fetchUsageQuotaCache(authIndexes: string[], signal?: Abort
   })
   if (!response.ok) {
     await parseApiError(response, `Failed to load cached usage quotas: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchKeyOverviewUsageQuotaCache(authIndexes: string[], signal?: AbortSignal): Promise<UsageQuotaCacheResponse> {
+  const response = await apiFetch(apiPath('/key-overview/quota/cache'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ auth_indexes: authIndexes }),
+    signal,
+  })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to load key overview cached usage quotas: ${response.status}`)
   }
   return response.json()
 }

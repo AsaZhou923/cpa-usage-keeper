@@ -17,6 +17,7 @@ type UsageQueryFilter struct {
 	Offset          int
 	Model           string
 	AuthIndex       string
+	AuthIndexes     []string
 	APIGroupKey     string
 	Result          string
 }

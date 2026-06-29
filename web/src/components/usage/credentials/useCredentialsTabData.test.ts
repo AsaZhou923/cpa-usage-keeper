@@ -271,8 +271,8 @@ describe('runQuotaResetForAuthIndex', () => {
 })
 
 describe('useCredentialsTabData quota response contract', () => {
-  it('narrows reset callback dependencies to refreshQuotaForAuthIndex and notice handler', () => {
-    expect(credentialsTabDataSource).toMatch(/}, \[onNotice, refreshQuotaForAuthIndex\]\)/)
+  it('narrows reset callback dependencies to the read-only guard, refresh callback, and notice handler', () => {
+    expect(credentialsTabDataSource).toMatch(/}, \[onNotice, readOnly, refreshQuotaForAuthIndex\]\)/)
   })
 
   it('routes reset outcomes through the shared helper and top notice', () => {

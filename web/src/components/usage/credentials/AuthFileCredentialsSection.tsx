@@ -68,6 +68,7 @@ interface AuthFileCredentialsSectionProps {
   quotaInspectionLoading: boolean
   quotaInspectionStarting: boolean
   quotaInspectionError: string
+  readOnly?: boolean
   onPageChange: (page: number) => void
   onPageSizeChange: (pageSize: number) => void
   onActiveOnlyChange: (activeOnly: boolean) => void
@@ -82,15 +83,17 @@ interface AuthFileCredentialsSectionProps {
   onAfterInvalidAccountAction?: () => Promise<void>
 }
 
-export function AuthFileCredentialsSection({ rows, total, page, totalPages, pageSize, activeOnly, sort, loading, quotaRefreshing, quotaRefreshError, quotaAutoRefreshEnabled, quotaInspectionStatus, quotaInspectionLoading, quotaInspectionStarting, quotaInspectionError, onPageChange, onPageSizeChange, onActiveOnlyChange, onSortChange, onRefreshQuota, onRefreshQuotaForAuthIndex, onResetQuotaForAuthIndex, aliasSavingId, onSaveAlias, onRefreshInspectionStatus, onStartInspection, onAfterInvalidAccountAction }: AuthFileCredentialsSectionProps) {
+export function AuthFileCredentialsSection({ rows, total, page, totalPages, pageSize, activeOnly, sort, loading, quotaRefreshing, quotaRefreshError, quotaAutoRefreshEnabled, quotaInspectionStatus, quotaInspectionLoading, quotaInspectionStarting, quotaInspectionError, readOnly = false, onPageChange, onPageSizeChange, onActiveOnlyChange, onSortChange, onRefreshQuota, onRefreshQuotaForAuthIndex, onResetQuotaForAuthIndex, aliasSavingId, onSaveAlias, onRefreshInspectionStatus, onStartInspection, onAfterInvalidAccountAction }: AuthFileCredentialsSectionProps) {
   const { t } = useTranslation()
   const [inspectionOpen, setInspectionOpen] = useState(false)
   const [quotaUsageMode, setQuotaUsageMode] = useState<QuotaUsageMode>('current')
   const [displayMode, setDisplayModeState] = useState<AuthFileDisplayMode>(() => readStoredAuthFileDisplayMode())
   const showHealthMode = displayMode === 'health'
-  const canRefresh = rows.some((row) => !isRowRefreshing(row) && !row.identity.is_deleted) && !quotaRefreshing
+  const canManage = !readOnly
+  const canRefresh = canManage && rows.some((row) => !isRowRefreshing(row) && !row.identity.is_deleted) && !quotaRefreshing
   const inspectionTone = inspectionIndicatorTone(quotaInspectionStatus)
   const openInspection = () => {
+    if (!canManage) return
     setInspectionOpen(true)
     void onRefreshInspectionStatus()
   }
@@ -117,7 +120,7 @@ export function AuthFileCredentialsSection({ rows, total, page, totalPages, page
             <AuthFileDisplayModeSwitch mode={displayMode} onChange={setDisplayMode} />
           </div>
         )}
-        actions={(
+        actions={canManage ? (
           <div className={styles.credentialSectionActionButtons}>
             <div className={`${styles.credentialRefreshSwitcher} ${styles.credentialInspectionSwitcher}`.trim()}>
               <button
@@ -148,7 +151,7 @@ export function AuthFileCredentialsSection({ rows, total, page, totalPages, page
               </button>
             </div>
           </div>
-        )}
+        ) : undefined}
       >
       {/* 批量刷新失败显示在区块顶部，单行任务失败显示在对应限额位置。 */}
       {quotaRefreshError && <div className={styles.credentialInlineError}>{quotaRefreshError}</div>}
@@ -168,7 +171,7 @@ export function AuthFileCredentialsSection({ rows, total, page, totalPages, page
       {rows.map((row) => {
         const rowRefreshing = isRowRefreshing(row)
         const resetCredits = row.quotaResetCreditsAvailableCount ?? 0
-        const canResetQuota = resetCredits > 0 && !row.identity.is_deleted && !rowRefreshing && !row.quotaResetting
+        const canResetQuota = canManage && resetCredits > 0 && !row.identity.is_deleted && !rowRefreshing && !row.quotaResetting
         return (
           <CredentialRowShell
             key={row.identity.id || row.identity.identity}
@@ -202,6 +205,8 @@ export function AuthFileCredentialsSection({ rows, total, page, totalPages, page
             rowClassName={styles.authFileCredentialRow}
             side={showHealthMode ? (
               <CredentialHealthPanel displayName={row.displayName} health={row.credentialHealth} lastUsedAt={row.identity.last_used_at} statsUpdatedAt={row.identity.stats_updated_at} />
+            ) : readOnly ? (
+              <AuthFileQuotaPanel row={row} quotaUsageMode={quotaUsageMode} />
             ) : (
               <div className={styles.credentialQuotaSideWithAction}>
                 <AuthFileQuotaPanel row={row} quotaUsageMode={quotaUsageMode} />
@@ -253,18 +258,20 @@ export function AuthFileCredentialsSection({ rows, total, page, totalPages, page
         onSortChange={(nextSort) => onSortChange(nextSort as UsageIdentityPageSort)}
       />
       </CredentialSectionShell>
-      <QuotaInspectionModal
-        open={inspectionOpen}
-        status={quotaInspectionStatus}
-        loading={quotaInspectionLoading}
-        starting={quotaInspectionStarting}
-        error={quotaInspectionError}
-        quotaAutoRefreshEnabled={quotaAutoRefreshEnabled}
-        onClose={() => setInspectionOpen(false)}
-        onStart={onStartInspection}
-        onRefreshStatus={onRefreshInspectionStatus}
-        onAfterInvalidAccountAction={onAfterInvalidAccountAction}
-      />
+      {canManage && (
+        <QuotaInspectionModal
+          open={inspectionOpen}
+          status={quotaInspectionStatus}
+          loading={quotaInspectionLoading}
+          starting={quotaInspectionStarting}
+          error={quotaInspectionError}
+          quotaAutoRefreshEnabled={quotaAutoRefreshEnabled}
+          onClose={() => setInspectionOpen(false)}
+          onStart={onStartInspection}
+          onRefreshStatus={onRefreshInspectionStatus}
+          onAfterInvalidAccountAction={onAfterInvalidAccountAction}
+        />
+      )}
     </>
   )
 }

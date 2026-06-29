@@ -3,6 +3,8 @@ import { ApiError, fetchUsageQuotaCache } from '@/lib/api'
 import type { UsageQuotaCheckResponse } from '@/lib/types'
 import { quotaRefreshDisplayError, type QuotaState } from './useQuotaRefreshTasks'
 
+export type FetchUsageQuotaCache = typeof fetchUsageQuotaCache
+
 export const QUOTA_CACHE_REFRESH_INTERVAL_MS = 60 * 1000
 
 export const buildQuotaCacheAuthIndexesKey = (authIndexes: string[]) => JSON.stringify(authIndexes)
@@ -11,6 +13,7 @@ interface UseQuotaCacheOptions {
   enabled: boolean
   authIndexes: string[]
   onAuthRequired?: () => void
+  fetchUsageQuotaCache?: FetchUsageQuotaCache
 }
 
 export interface QuotaCacheState {
@@ -20,7 +23,7 @@ export interface QuotaCacheState {
   refreshQuotaCache: () => Promise<void>
 }
 
-export function useQuotaCache({ enabled, authIndexes, onAuthRequired }: UseQuotaCacheOptions): QuotaCacheState {
+export function useQuotaCache({ enabled, authIndexes, onAuthRequired, fetchUsageQuotaCache: fetchUsageQuotaCacheForScope = fetchUsageQuotaCache }: UseQuotaCacheOptions): QuotaCacheState {
   const [quotaResponseByAuthIndex, setQuotaResponseByAuthIndex] = useState<Record<string, UsageQuotaCheckResponse>>({})
   const [cachedQuotaStateByAuthIndex, setCachedQuotaStateByAuthIndex] = useState<Record<string, QuotaState>>({})
   const requestControllerRef = useRef<AbortController | null>(null)
@@ -45,7 +48,7 @@ export function useQuotaCache({ enabled, authIndexes, onAuthRequired }: UseQuota
     requestControllerRef.current = controller
     try {
       // 缓存接口不会刷新限额；当前页有多少 auth_index 就查询多少缓存。
-      const response = await fetchUsageQuotaCache(stableAuthIndexes, controller.signal)
+      const response = await fetchUsageQuotaCacheForScope(stableAuthIndexes, controller.signal)
       if (controller.signal.aborted || requestControllerRef.current !== controller) {
         return
       }
@@ -97,7 +100,7 @@ export function useQuotaCache({ enabled, authIndexes, onAuthRequired }: UseQuota
         requestControllerRef.current = null
       }
     }
-  }, [enabled, onAuthRequired, stableAuthIndexes])
+  }, [enabled, fetchUsageQuotaCacheForScope, onAuthRequired, stableAuthIndexes])
 
   useEffect(() => {
     if (!enabled) {

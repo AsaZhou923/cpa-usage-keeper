@@ -315,9 +315,13 @@ func applyUsageAnalysisTabQuery(query *gorm.DB, filter dto.UsageQueryFilter) *go
 	return query
 }
 
-// Request Event Log 筛选项第一步：只应用时间窗口，不叠加当前列表筛选。
+// Request Event Log 筛选项第一步：应用时间窗口和全局 API-Key，不叠加当前列表筛选。
 func applyUsageEventFilterOptionsQuery(query *gorm.DB, filter dto.UsageQueryFilter) *gorm.DB {
-	return applyUsageQueryWindow(query, filter)
+	query = applyUsageQueryWindow(query, filter)
+	if apiGroupKey := strings.TrimSpace(filter.APIGroupKey); apiGroupKey != "" {
+		query = query.Where("api_group_key = ?", apiGroupKey)
+	}
+	return query
 }
 
 // Request Event Log 列表第一步：在时间窗口上叠加 model/auth_index/result。
@@ -333,6 +337,9 @@ func applyUsageEventListQuery(query *gorm.DB, filter dto.UsageQueryFilter) *gorm
 		// Source 下拉在 API 层已转换成 auth_index，仓储层只保留真实查询维度。
 		query = query.Where("auth_index = ?", authIndex)
 	}
+	if authIndexes := normalizeUsageEventAuthIndexes(filter.AuthIndexes); len(authIndexes) > 0 {
+		query = query.Where("auth_index IN ?", authIndexes)
+	}
 	switch strings.TrimSpace(filter.Result) {
 	case "success":
 		query = query.Where("failed = ?", false)
@@ -340,6 +347,26 @@ func applyUsageEventListQuery(query *gorm.DB, filter dto.UsageQueryFilter) *gorm
 		query = query.Where("failed = ?", true)
 	}
 	return query
+}
+
+func normalizeUsageEventAuthIndexes(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return normalized
 }
 
 func BuildAnalysisWithFilter(db *gorm.DB, filter dto.UsageQueryFilter) (*dto.AnalysisRecord, error) {

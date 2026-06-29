@@ -11,12 +11,13 @@ import (
 )
 
 type ListUsageIdentitiesRequest struct {
-	AuthType   *entities.UsageIdentityAuthType
-	ActiveOnly *bool
-	Types      []string
-	Sort       string
-	Page       int
-	PageSize   int
+	AuthType    *entities.UsageIdentityAuthType
+	ActiveOnly  *bool
+	Types       []string
+	APIGroupKey string
+	Sort        string
+	Page        int
+	PageSize    int
 }
 
 type UsageIdentityTypeCount = repodto.UsageIdentityTypeCount
@@ -51,6 +52,7 @@ type UsageIdentityProvider interface {
 	ListUsageIdentities(context.Context) ([]entities.UsageIdentity, error)
 	ListActiveUsageIdentities(context.Context) ([]entities.UsageIdentity, error)
 	ListActiveUsageIdentitiesPage(context.Context, ListUsageIdentitiesRequest) (ListUsageIdentitiesResponse, error)
+	ListActiveUsageIdentityAuthIndexes(context.Context, ListUsageIdentitiesRequest) ([]string, error)
 	UpdateUsageIdentityAlias(context.Context, int64, string) (entities.UsageIdentity, error)
 }
 
@@ -89,17 +91,27 @@ func (s *usageIdentityService) ListActiveUsageIdentities(ctx context.Context) ([
 
 func (s *usageIdentityService) ListActiveUsageIdentitiesPage(ctx context.Context, request ListUsageIdentitiesRequest) (ListUsageIdentitiesResponse, error) {
 	items, total, typeCounts, err := repository.ListActiveUsageIdentitiesPage(ctx, s.db, repository.ListUsageIdentitiesPageRequest{
-		AuthType:   request.AuthType,
-		ActiveOnly: request.ActiveOnly,
-		Types:      request.Types,
-		Sort:       request.Sort,
-		Page:       request.Page,
-		PageSize:   request.PageSize,
+		AuthType:    request.AuthType,
+		ActiveOnly:  request.ActiveOnly,
+		Types:       request.Types,
+		APIGroupKey: request.APIGroupKey,
+		Sort:        request.Sort,
+		Page:        request.Page,
+		PageSize:    request.PageSize,
 	})
 	if err != nil {
 		return ListUsageIdentitiesResponse{}, err
 	}
 	return ListUsageIdentitiesResponse{Items: items, Total: total, TypeCounts: typeCounts, CredentialHealth: s.credentialHealthSnapshots(items)}, nil
+}
+
+func (s *usageIdentityService) ListActiveUsageIdentityAuthIndexes(ctx context.Context, request ListUsageIdentitiesRequest) ([]string, error) {
+	return repository.ListActiveUsageIdentityAuthIndexes(ctx, s.db, repository.ListUsageIdentitiesPageRequest{
+		AuthType:    request.AuthType,
+		ActiveOnly:  request.ActiveOnly,
+		Types:       request.Types,
+		APIGroupKey: request.APIGroupKey,
+	})
 }
 
 func (s *usageIdentityService) UpdateUsageIdentityAlias(ctx context.Context, id int64, alias string) (entities.UsageIdentity, error) {

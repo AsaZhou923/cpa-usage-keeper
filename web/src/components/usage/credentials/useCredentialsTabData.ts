@@ -6,8 +6,8 @@ import {
   type AiProviderCredentialRow,
   type AuthFileCredentialRow,
 } from './credentialViewModels'
-import { useCredentialPages } from './useCredentialPages'
-import { useQuotaCache } from './useQuotaCache'
+import { useCredentialPages, type FetchUsageIdentitiesPage } from './useCredentialPages'
+import { useQuotaCache, type FetchUsageQuotaCache } from './useQuotaCache'
 import { useQuotaInspection } from './useQuotaInspection'
 import { ApiError, resetUsageQuota, updateUsageIdentityAlias, type UsageIdentityPageSort } from '@/lib/api'
 import i18n from '@/i18n'
@@ -25,8 +25,11 @@ interface UseCredentialsTabDataOptions {
   enabledAuthFiles: boolean
   enabledAiProviders: boolean
   quotaAutoRefreshEnabled: boolean
+  readOnly?: boolean
   onAuthRequired?: () => void
   onNotice?: (kind: 'success' | 'info' | 'error', message: string) => void
+  fetchUsageIdentitiesPage?: FetchUsageIdentitiesPage
+  fetchUsageQuotaCache?: FetchUsageQuotaCache
 }
 
 export interface CredentialsTabData {
@@ -74,8 +77,8 @@ export interface CredentialsTabData {
   startQuotaInspection: () => Promise<void>
 }
 
-export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, quotaAutoRefreshEnabled, onAuthRequired, onNotice }: UseCredentialsTabDataOptions): CredentialsTabData {
-  const credentialPages = useCredentialPages({ enabledAuthFiles, enabledAiProviders, onAuthRequired })
+export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, quotaAutoRefreshEnabled, readOnly = false, onAuthRequired, onNotice, fetchUsageIdentitiesPage, fetchUsageQuotaCache }: UseCredentialsTabDataOptions): CredentialsTabData {
+  const credentialPages = useCredentialPages({ enabledAuthFiles, enabledAiProviders, onAuthRequired, fetchUsageIdentitiesPage })
   const currentAuthIndexes = useMemo(
     () => selectQuotaEligibleAuthIndexes(credentialPages.authFileIdentities),
     [credentialPages.authFileIdentities],
@@ -84,9 +87,10 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
     enabled: enabledAuthFiles,
     authIndexes: currentAuthIndexes,
     onAuthRequired,
+    fetchUsageQuotaCache,
   })
   const quotaRefreshTasks = useQuotaRefreshTasks({
-    enabled: enabledAuthFiles,
+    enabled: enabledAuthFiles && !readOnly,
     currentAuthIndexes,
     setQuotaResponseByAuthIndex,
     onAuthRequired,
@@ -95,10 +99,12 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
   const [quotaResetStateByAuthIndex, setQuotaResetStateByAuthIndex] = useState<Record<string, CredentialResetState>>({})
   const [aliasSavingId, setAliasSavingId] = useState('')
   const quotaInspection = useQuotaInspection({
-    enabled: enabledAuthFiles,
+    enabled: enabledAuthFiles && !readOnly,
     onAuthRequired,
     onInspectionCompleted: refreshQuotaCache,
   })
+  const noopAction = useCallback(async () => undefined, [])
+  const noopAuthIndexAction = useCallback(async (_authIndex: string) => undefined, [])
 
   const quotaResponsesByAuthIndex = useMemo(() => new Map(Object.entries(quotaResponseByAuthIndex)), [quotaResponseByAuthIndex])
   const quotaStates = useMemo(
@@ -120,6 +126,9 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
   }, [refreshCredentialPages, refreshQuotaCache])
 
   const saveUsageIdentityAlias = useCallback(async (id: string, alias: string) => {
+    if (readOnly) {
+      return
+    }
     setAliasSavingId(id)
     try {
       const updated = await updateUsageIdentityAlias(id, alias)
@@ -136,9 +145,12 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
     } finally {
       setAliasSavingId((current) => (current === id ? '' : current))
     }
-  }, [credentialPages, onAuthRequired, onNotice])
+  }, [credentialPages, onAuthRequired, onNotice, readOnly])
 
   const resetQuotaForAuthIndex = useCallback(async (authIndex: string) => {
+    if (readOnly) {
+      return
+    }
     setQuotaResetStateByAuthIndex((current) => ({
       ...current,
       [authIndex]: { quotaResetting: true },
@@ -162,7 +174,7 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
       }))
       onNotice?.('error', quotaResetDisplayError())
     }
-  }, [onNotice, refreshQuotaForAuthIndex])
+  }, [onNotice, readOnly, refreshQuotaForAuthIndex])
 
   return {
     authFileRows,
@@ -202,11 +214,11 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
     aliasSavingId,
     refresh: refresh,
     saveUsageIdentityAlias,
-    refreshQuotaForCurrentAuthFilePage: quotaRefreshTasks.refreshQuotaForCurrentAuthFilePage,
-    refreshQuotaForAuthIndex: quotaRefreshTasks.refreshQuotaForAuthIndex,
-    resetQuotaForAuthIndex,
-    refreshQuotaInspectionStatus: quotaInspection.refreshQuotaInspectionStatus,
-    startQuotaInspection: quotaAutoRefreshEnabled ? async () => undefined : quotaInspection.startQuotaInspection,
+    refreshQuotaForCurrentAuthFilePage: readOnly ? noopAction : quotaRefreshTasks.refreshQuotaForCurrentAuthFilePage,
+    refreshQuotaForAuthIndex: readOnly ? noopAuthIndexAction : quotaRefreshTasks.refreshQuotaForAuthIndex,
+    resetQuotaForAuthIndex: readOnly ? noopAuthIndexAction : resetQuotaForAuthIndex,
+    refreshQuotaInspectionStatus: readOnly ? noopAction : quotaInspection.refreshQuotaInspectionStatus,
+    startQuotaInspection: readOnly || quotaAutoRefreshEnabled ? noopAction : quotaInspection.startQuotaInspection,
   }
 }
 

@@ -45,6 +45,14 @@ func (s usageIdentitiesStub) ListActiveUsageIdentitiesPage(_ context.Context, re
 	return service.ListUsageIdentitiesResponse{Items: s.items, Total: int64(len(s.items)), TypeCounts: s.pagedTypeCounts}, s.err
 }
 
+func (s usageIdentitiesStub) ListActiveUsageIdentityAuthIndexes(context.Context, service.ListUsageIdentitiesRequest) ([]string, error) {
+	indexes := make([]string, 0, len(s.items))
+	for _, item := range s.items {
+		indexes = append(indexes, item.Identity)
+	}
+	return indexes, s.err
+}
+
 func (s usageIdentitiesStub) UpdateUsageIdentityAlias(context.Context, int64, string) (entities.UsageIdentity, error) {
 	if len(s.items) == 0 {
 		return entities.UsageIdentity{}, s.err

@@ -108,7 +108,7 @@ func registerUsageEventsRoute(
 	cpaAPIKeyProvider service.CPAAPIKeyProvider,
 ) {
 	router.GET("/usage/events/filters/models", func(c *gin.Context) {
-		models, err := loadUsageEventModelFilterOptions(c, usageProvider)
+		models, err := loadUsageEventModelFilterOptions(c, usageProvider, servicedto.UsageFilter{})
 		if err != nil {
 			writeInternalError(c, "list usage event model filter options failed", err)
 			return
@@ -559,11 +559,11 @@ func usageEventPublicSource(row servicedto.UsageEventRecord, identity resolvedUs
 	}
 }
 
-func loadUsageEventModelFilterOptions(c *gin.Context, usageProvider service.UsageProvider) ([]string, error) {
+func loadUsageEventModelFilterOptions(c *gin.Context, usageProvider service.UsageProvider, filter servicedto.UsageFilter) ([]string, error) {
 	if usageProvider == nil {
 		return []string{}, nil
 	}
-	options, err := usageProvider.ListUsageEventFilterOptions(c.Request.Context(), servicedto.UsageFilter{})
+	options, err := usageProvider.ListUsageEventFilterOptions(c.Request.Context(), filter)
 	if err != nil {
 		return nil, err
 	}

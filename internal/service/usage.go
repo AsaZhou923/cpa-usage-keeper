@@ -423,6 +423,7 @@ func (s *usageService) ListUsageEvents(_ context.Context, filter servicedto.Usag
 		Offset:      filter.Offset,
 		Model:       filter.Model,
 		AuthIndex:   filter.AuthIndex,
+		AuthIndexes: filter.AuthIndexes,
 		APIGroupKey: apiGroupKey,
 		Result:      filter.Result,
 	})
@@ -473,6 +474,7 @@ func (s *usageService) StreamUsageEvents(ctx context.Context, filter servicedto.
 		EndTime:     filter.EndTime,
 		Model:       filter.Model,
 		AuthIndex:   filter.AuthIndex,
+		AuthIndexes: filter.AuthIndexes,
 		APIGroupKey: apiGroupKey,
 		Result:      filter.Result,
 	}, func(row repodto.UsageEventRecord) error {
@@ -506,11 +508,16 @@ func (s *usageService) StreamUsageEvents(ctx context.Context, filter servicedto.
 	})
 }
 
-// Request Event Log 的 model 筛选项只应用调用方传入的时间窗口；独立筛选项接口当前传空 filter。
+// Request Event Log 的 model 筛选项只应用调用方传入的时间窗口和全局 API-Key，不跟随当前列表筛选。
 func (s *usageService) ListUsageEventFilterOptions(_ context.Context, filter servicedto.UsageFilter) (*servicedto.UsageEventFilterOptions, error) {
+	apiGroupKey, err := s.resolveAPIGroupKey(filter.APIKeyID)
+	if err != nil {
+		return nil, err
+	}
 	options, err := repository.ListUsageEventFilterOptionsWithFilter(s.db, repodto.UsageQueryFilter{
-		StartTime: filter.StartTime,
-		EndTime:   filter.EndTime,
+		StartTime:   filter.StartTime,
+		EndTime:     filter.EndTime,
+		APIGroupKey: apiGroupKey,
 	})
 	if err != nil {
 		return nil, err

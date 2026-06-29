@@ -118,6 +118,9 @@ func NewRouter(
 	keyViewerProtected := apiV1.Group("")
 	keyViewerProtected.Use(authHandler.apiKeyViewerMiddleware())
 	registerKeyOverviewRoute(keyViewerProtected, usageProvider, cpaAPIKeyProvider, authHandler)
+	registerKeyUsageEventsRoute(keyViewerProtected, usageProvider, usageIdentityProvider, cpaAPIKeyProvider, authHandler)
+	registerKeyUsageIdentityRoutes(keyViewerProtected, usageIdentityProvider, cpaAPIKeyProvider, authHandler)
+	registerKeyQuotaRoutes(keyViewerProtected, quotaProvider, usageIdentityProvider, cpaAPIKeyProvider, authHandler)
 
 	if staticFS != nil {
 		if indexFile, err := staticFS.Open("index.html"); err == nil {
