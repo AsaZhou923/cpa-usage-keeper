@@ -623,8 +623,10 @@ export function RequestEventsDetailsCard({
       const source = String(event.source ?? '').trim() || '-';
       const sourceType = String(event.source_type ?? '').trim();
       const apiKey = String(event.api_key ?? '').trim() || '-';
-      const model = String(event.model ?? '').trim() || '-';
-      const modelAlias = String(event.model_alias ?? '').trim() || '-';
+      const modelValue = String(event.model ?? '').trim();
+      const model = modelValue || '-';
+      const modelAliasValue = String(event.model_alias ?? '').trim();
+      const modelAlias = modelAliasValue && modelAliasValue !== modelValue ? modelAliasValue : '-';
       const reasoningEffort = String(event.reasoning_effort ?? '').trim() || '-';
       const serviceTier = formatRequestSpeedMode(event.service_tier, t);
       const endpointFields = parseRequestEndpoint(event.endpoint);
@@ -947,15 +949,6 @@ export function RequestEventsDetailsCard({
       }
       extra={
         <div className={styles.requestEventsActions}>
-          <Button
-            variant="ghost"
-            size="sm"
-            className={styles.usagePillAction}
-            onClick={handleClearFilters}
-            disabled={!hasActiveFilters}
-          >
-            {t('usage_stats.clear_filters')}
-          </Button>
           <RequestEventsExportMenu
             label={t('usage_stats.export')}
             csvLabel={t('usage_stats.export_csv')}
@@ -1007,6 +1000,17 @@ export function RequestEventsDetailsCard({
               fullWidth={false}
             />
           </label>
+          <div className={styles.requestEventsFilterActionSlot}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`${styles.usagePillAction} ${styles.requestEventsClearFiltersButton}`.trim()}
+              onClick={handleClearFilters}
+              disabled={!hasActiveFilters}
+            >
+              {t('usage_stats.clear_filters')}
+            </Button>
+          </div>
         </div>
       </div>
 

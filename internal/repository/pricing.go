@@ -1,7 +1,9 @@
 package repository
 
 import (
+	"database/sql"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -18,6 +20,7 @@ var modelPriceSettingColumns = []string{
 	"completion_price_per1_m",
 	"cache_price_per1_m",
 	"cache_creation_price_per1_m",
+	"price_multiplier",
 	"created_at",
 	"updated_at",
 }
@@ -27,11 +30,9 @@ func ListUsedModels(db *gorm.DB) ([]string, error) {
 		return nil, fmt.Errorf("database is nil")
 	}
 
-	var modelsList []string
+	var modelsList []sql.NullString
 	if err := db.Model(&entities.UsageEvent{}).
 		Distinct().
-		Where("trim(model) <> ''").
-		Order("model asc").
 		Pluck("model", &modelsList).Error; err != nil {
 		return nil, fmt.Errorf("list used models: %w", err)
 	}
@@ -39,7 +40,10 @@ func ListUsedModels(db *gorm.DB) ([]string, error) {
 	cleaned := make([]string, 0, len(modelsList))
 	seen := make(map[string]struct{}, len(modelsList))
 	for _, model := range modelsList {
-		trimmed := strings.TrimSpace(model)
+		if !model.Valid {
+			continue
+		}
+		trimmed := strings.TrimSpace(model.String)
 		if trimmed == "" {
 			continue
 		}
@@ -94,12 +98,28 @@ func UpsertModelPriceSetting(db *gorm.DB, input dto.ModelPriceSettingInput) (*en
 	setting.CompletionPricePer1M = input.CompletionPricePer1M
 	setting.CachePricePer1M = input.CachePricePer1M
 	setting.CacheCreationPricePer1M = input.CacheCreationPricePer1M
+	multiplier, err := modelPriceMultiplierInputValue(input.PriceMultiplier)
+	if err != nil {
+		return nil, err
+	}
+	setting.PriceMultiplier = &multiplier
 
 	if err := db.Save(setting).Error; err != nil {
 		return nil, fmt.Errorf("save pricing setting: %w", err)
 	}
 
 	return setting, nil
+}
+
+func modelPriceMultiplierInputValue(input *float64) (float64, error) {
+	if input == nil {
+		return 1, nil
+	}
+	multiplier := *input
+	if multiplier < 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
+		return 0, fmt.Errorf("price_multiplier must be non-negative")
+	}
+	return multiplier, nil
 }
 
 func normalizeModelPricingStyle(style string) (string, error) {

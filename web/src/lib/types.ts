@@ -12,11 +12,13 @@ export interface AuthSessionResponse {
 }
 
 export type AuthManagedSessionKind = 'admin' | 'api_key'
+export type AuthManagedSessionSource = 'standard' | 'embed'
 
 export interface AuthManagedSessionItem {
   id: string
   kind: AuthManagedSessionKind
   role: AuthRole
+  source?: AuthManagedSessionSource
   current?: boolean
   loginAt?: string
   expiresAt?: string
@@ -33,12 +35,23 @@ export interface StatusResponse {
   running: boolean
   sync_running: boolean
   timezone: string
-  quotaAutoRefreshEnabled?: boolean
   cpa_public_url?: string
   last_run_at?: string
   last_error?: string
   last_warning?: string
   last_status?: string
+}
+
+export type QuotaAutoRefreshScheduleUnit = 'minute' | 'hour' | 'day' | 'week'
+
+export interface QuotaAutoRefreshSchedule {
+  unit: QuotaAutoRefreshScheduleUnit
+  value: number
+}
+
+export interface QuotaAutoRefreshSettings {
+  enabled: boolean
+  schedule: QuotaAutoRefreshSchedule | null
 }
 
 export interface VersionResponse {
@@ -599,6 +612,7 @@ export interface ModelPrice {
   completion: number
   cache: number
   cacheCreation: number
+  multiplier: number
 }
 
 export interface PricingSaveFailure {
@@ -619,6 +633,7 @@ export interface PricingEntry {
   completion_price_per_1m: number
   cache_price_per_1m: number
   cache_creation_price_per_1m: number
+  price_multiplier: number
 }
 
 export interface UsedModelsResponse {

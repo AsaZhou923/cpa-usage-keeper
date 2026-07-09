@@ -24,7 +24,7 @@ interface CredentialResetState {
 interface UseCredentialsTabDataOptions {
   enabledAuthFiles: boolean
   enabledAiProviders: boolean
-  quotaAutoRefreshEnabled: boolean
+  quotaAutoRefreshEnabled?: boolean
   readOnly?: boolean
   onAuthRequired?: () => void
   onNotice?: (kind: 'success' | 'info' | 'error', message: string) => void
@@ -77,7 +77,7 @@ export interface CredentialsTabData {
   startQuotaInspection: () => Promise<void>
 }
 
-export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, quotaAutoRefreshEnabled, readOnly = false, onAuthRequired, onNotice, fetchUsageIdentitiesPage, fetchUsageQuotaCache }: UseCredentialsTabDataOptions): CredentialsTabData {
+export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, quotaAutoRefreshEnabled = false, readOnly = false, onAuthRequired, onNotice, fetchUsageIdentitiesPage, fetchUsageQuotaCache }: UseCredentialsTabDataOptions): CredentialsTabData {
   const credentialPages = useCredentialPages({ enabledAuthFiles, enabledAiProviders, onAuthRequired, fetchUsageIdentitiesPage })
   const currentAuthIndexes = useMemo(
     () => selectQuotaEligibleAuthIndexes(credentialPages.authFileIdentities),

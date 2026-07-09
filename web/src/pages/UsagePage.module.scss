@@ -7,7 +7,7 @@
     radial-gradient(1200px 520px at 12% -8%, rgba($primary-color, 0.12), transparent 58%),
     radial-gradient(880px 480px at 100% 0%, rgba(0, 0, 0, 0.06), transparent 52%),
     var(--bg-secondary);
-  padding: 28px 20px 48px;
+  padding: var(--keeper-page-padding-top, 28px) var(--keeper-page-padding-x, 20px) var(--keeper-page-padding-bottom, 48px);
 
   @include mobile {
     padding: 18px 12px 32px;
@@ -15,11 +15,11 @@
 }
 
 .pageFrame {
-  width: min(1245px, 100%);
+  width: min(var(--keeper-page-max-width, 1245px), 100%);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--keeper-page-frame-gap, 18px);
 }
 
 .topBar {
@@ -29,8 +29,8 @@
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 18px;
-  padding: 18px 20px;
+  gap: var(--keeper-top-bar-gap, 18px);
+  padding: var(--keeper-top-bar-padding-y, 18px) var(--keeper-top-bar-padding-x, 20px);
   border: 1px solid var(--border-color);
   border-radius: 24px;
   background: color-mix(in srgb, var(--bg-primary) 84%, transparent);
@@ -57,7 +57,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 42px;
+  min-height: var(--keeper-toolbar-control-height, 42px);
   padding: 0 20px;
   border-radius: 999px;
   border: 1px solid rgba($primary-color, 0.24);
@@ -91,7 +91,7 @@
   display: inline-flex;
   align-items: stretch;
   gap: 4px;
-  min-height: 42px;
+  min-height: var(--keeper-toolbar-control-height, 42px);
   padding: 4px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
@@ -132,7 +132,7 @@
 .refreshSwitcher {
   display: inline-flex;
   align-items: stretch;
-  min-height: 42px;
+  min-height: var(--keeper-toolbar-control-height, 42px);
   padding: 4px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
@@ -247,7 +247,10 @@
   transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 
   &:global(.btn) {
+    min-height: 32px;
     border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
   }
 
   > span:not(:global(.loading-spinner)) {
@@ -278,6 +281,12 @@
   &:hover:not(:disabled) {
     transform: translateY(-1px);
   }
+}
+
+.usagePillAction:global(.btn.btn-sm) {
+  min-height: 32px;
+  padding: 7px 12px;
+  font-size: 12px;
 }
 
 .settingsCompactAction {
@@ -1091,10 +1100,10 @@
 }
 
 .updateCheckToast {
-  position: absolute;
-  top: 12px;
+  position: fixed;
+  top: 20px;
   right: 20px;
-  z-index: 25;
+  z-index: $z-notification;
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -1106,6 +1115,12 @@
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.16);
+
+  @include mobile {
+    top: 12px;
+    right: 12px;
+    max-width: calc(100vw - 24px);
+  }
 }
 
 .updateCheckToastInfo {
@@ -2138,6 +2153,14 @@
   line-height: 1;
 }
 
+.sessionSettingsNameRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
 .sessionSettingsName {
   min-width: 0;
   overflow: hidden;
@@ -2146,6 +2169,20 @@
   font-weight: 800;
   line-height: 1.25;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionSettingsSource {
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-tertiary) 72%, transparent);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
   white-space: nowrap;
 }
 
@@ -2366,6 +2403,12 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.modelPriceDeleteConfirmText {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
 }
 
 .syncModalBody {
@@ -2675,13 +2718,23 @@
 .requestEventsExportButton:global(.btn) {
   border: 0;
   border-radius: 999px;
-  padding: 8px 12px;
+  min-height: 32px;
+  padding: 7px 12px;
   background: var(--bg-primary);
+  background-color: var(--bg-primary);
   color: var(--text-primary);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
   font-size: 12px;
   font-weight: 600;
   transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+
+  &:global(.btn-secondary),
+  &:global(.btn-secondary):hover:not(:disabled),
+  &:global(.btn-secondary)[aria-expanded='true'] {
+    background: var(--bg-primary);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+  }
 
   &:hover:not(:disabled) {
     color: var(--text-primary);
@@ -2701,6 +2754,12 @@
     display: inline-flex;
     align-items: center;
   }
+}
+
+.requestEventsExportButton:global(.btn.btn-sm) {
+  min-height: 32px;
+  padding: 7px 12px;
+  font-size: 12px;
 }
 
 .requestEventsExportButtonInner {
@@ -2801,6 +2860,23 @@
 
 .requestEventsResultSelect {
   min-width: 118px;
+}
+
+.requestEventsFilterActionSlot {
+  display: flex;
+  align-items: center;
+  align-self: flex-end;
+  min-height: 40px;
+}
+
+.requestEventsClearFiltersButton:global(.btn) {
+  min-height: 32px;
+}
+
+.requestEventsClearFiltersButton:global(.btn.btn-sm) {
+  min-height: 32px;
+  padding: 7px 12px;
+  font-size: 12px;
 }
 
 .requestEventsPaginationFooter {

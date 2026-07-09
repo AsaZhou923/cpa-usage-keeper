@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-const credentialStyles = readFileSync(new URL('./CredentialSections.module.scss', import.meta.url), 'utf8')
-const themeStyles = readFileSync(new URL('../../../styles/themes.scss', import.meta.url), 'utf8')
-const credentialShellSource = readFileSync(new URL('./CredentialSectionShell.tsx', import.meta.url), 'utf8')
-const credentialHealthSource = readFileSync(new URL('./CredentialHealthPanel.tsx', import.meta.url), 'utf8')
-const aiProviderSectionSource = readFileSync(new URL('./AiProviderCredentialsSection.tsx', import.meta.url), 'utf8')
-const authFileSectionSource = readFileSync(new URL('./AuthFileCredentialsSection.tsx', import.meta.url), 'utf8')
+const credentialStyles = readFileSync(new URL('../CredentialSections.module.scss', import.meta.url), 'utf8')
+const themeStyles = readFileSync(new URL('../../../../styles/themes.scss', import.meta.url), 'utf8')
+const credentialShellSource = readFileSync(new URL('../CredentialSectionShell.tsx', import.meta.url), 'utf8')
+const credentialHealthSource = readFileSync(new URL('../CredentialHealthPanel.tsx', import.meta.url), 'utf8')
+const aiProviderSectionSource = readFileSync(new URL('../AiProviderCredentialsSection.tsx', import.meta.url), 'utf8')
+const authFileSectionSource = readFileSync(new URL('../AuthFileCredentialsSection.tsx', import.meta.url), 'utf8')
 
 const cssBlock = (selector: string) => {
   const start = credentialStyles.indexOf(selector)
@@ -17,12 +17,12 @@ const cssBlock = (selector: string) => {
 
 describe('Credential section styles', () => {
   it('keeps Auth Files and AI Provider row sizing separate', () => {
-    expect(credentialStyles).toMatch(/\.authFileCredentialRow\s*\{[\s\S]*?grid-template-columns:\s*200px minmax\(0, 448px\) minmax\(250px, 1fr\);/)
-    expect(credentialStyles).toMatch(/\.authFileCredentialRow\s*\{[\s\S]*?\.credentialIdentityBlock\s*\{[\s\S]*?max-width:\s*200px;/)
+    expect(credentialStyles).toMatch(/\.authFileCredentialRow\s*\{[\s\S]*?grid-template-columns:\s*236px minmax\(0, 448px\) minmax\(250px, 1fr\);/)
+    expect(credentialStyles).toMatch(/\.authFileCredentialRow\s*\{[\s\S]*?\.credentialIdentityBlock\s*\{[\s\S]*?max-width:\s*236px;/)
     expect(credentialStyles).toMatch(/\.authFileCredentialRow\s*\{[\s\S]*?@include tablet\s*\{[\s\S]*?grid-template-columns:\s*1fr;/)
     expect(credentialStyles).toMatch(/\.authFileCredentialRow\s*\{[\s\S]*?@include mobile\s*\{[\s\S]*?grid-template-columns:\s*1fr;/)
-    expect(credentialStyles).toMatch(/\.aiProviderCredentialRow\s*\{[\s\S]*?grid-template-columns:\s*200px minmax\(0, 448px\) minmax\(250px, 1fr\);/)
-    expect(credentialStyles).toMatch(/\.aiProviderCredentialRow\s*\{[\s\S]*?\.credentialIdentityBlock\s*\{[\s\S]*?max-width:\s*200px;/)
+    expect(credentialStyles).toMatch(/\.aiProviderCredentialRow\s*\{[\s\S]*?grid-template-columns:\s*236px minmax\(0, 448px\) minmax\(250px, 1fr\);/)
+    expect(credentialStyles).toMatch(/\.aiProviderCredentialRow\s*\{[\s\S]*?\.credentialIdentityBlock\s*\{[\s\S]*?max-width:\s*236px;/)
     expect(credentialStyles).toMatch(/\.aiProviderCredentialRow\s*\{[\s\S]*?@include tablet\s*\{[\s\S]*?grid-template-columns:\s*1fr;/)
     expect(credentialStyles).toMatch(/\.aiProviderCredentialRow\s*\{[\s\S]*?@include mobile\s*\{[\s\S]*?grid-template-columns:\s*1fr;/)
     expect(credentialShellSource).toContain('rowClassName?: string')
@@ -120,6 +120,50 @@ describe('Credential section styles', () => {
     expect(credentialStyles).not.toContain('#34c759')
   })
 
+  it('keeps scheduled refresh controls stable, clear, and compact', () => {
+    const scheduleGridStyles = cssBlock('.credentialAutoRefreshScheduleGrid')
+    const unitSwitcherStyles = cssBlock('.credentialAutoRefreshUnitSwitcher')
+    const intervalFieldStyles = cssBlock('.credentialAutoRefreshIntervalField')
+    const tipStyles = cssBlock('.credentialAutoRefreshScheduleTip')
+
+    expect(authFileSectionSource).toContain('credentialAutoRefreshScheduleArea')
+    expect(authFileSectionSource).toContain('credentialAutoRefreshScheduleAreaActive')
+    expect(authFileSectionSource).toContain('credentialAutoRefreshIntervalField')
+    expect(authFileSectionSource).toContain('credentialAutoRefreshUnitSuffix')
+    expect(authFileSectionSource).not.toContain('credentialAutoRefreshField')
+    expect(authFileSectionSource).toContain('width={620}')
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshSettingsModal\s*\{[\s\S]*?max-width:\s*min\(620px, calc\(100vw - 28px\)\);/)
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshScheduleArea\s*\{[\s\S]*?grid-template-rows:\s*0fr;/)
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshScheduleArea\s*\{[\s\S]*?transition:\s*grid-template-rows 0\.18s ease, opacity 0\.16s ease;/)
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshScheduleAreaActive\s*\{[\s\S]*?grid-template-rows:\s*1fr;/)
+    expect(scheduleGridStyles).toContain('grid-template-columns: minmax(300px, 1fr) 256px;')
+    expect(scheduleGridStyles).toContain('column-gap: 8px;')
+    expect(scheduleGridStyles).toContain('align-items: center;')
+    expect(scheduleGridStyles).toContain('overflow: visible;')
+    expect(unitSwitcherStyles).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));')
+    expect(unitSwitcherStyles).toContain('width: 100%;')
+    expect(unitSwitcherStyles).toContain('white-space: nowrap;')
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshUnitButtonActive\s*\{[\s\S]*?background:\s*linear-gradient\(135deg, var\(--primary-color\), var\(--primary-hover\)\) !important;/)
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshUnitButtonActive\s*\{[\s\S]*?color:\s*var\(--primary-contrast, #fff\) !important;/)
+    expect(intervalFieldStyles).toContain('grid-template-columns: 64px 100px 68px;')
+    expect(intervalFieldStyles).toContain('align-items: center;')
+    expect(intervalFieldStyles).toContain('justify-self: end;')
+    expect(intervalFieldStyles).toContain('column-gap: 12px;')
+    expect(intervalFieldStyles).toContain('width: 256px;')
+    expect(intervalFieldStyles).toContain('max-width: 100%;')
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshIntervalField\s*\{[\s\S]*?input,\s*select\s*\{[\s\S]*?min-height:\s*40px;/)
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshIntervalField\s*\{[\s\S]*?input,\s*select\s*\{[\s\S]*?text-align:\s*center;/)
+    expect(intervalFieldStyles).toMatch(/select\s*\{[\s\S]*?grid-column:\s*span 2;/)
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshIntervalLabel\s*\{[\s\S]*?text-align:\s*right;/)
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshUnitSuffix\s*\{[\s\S]*?text-align:\s*left;/)
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshUnitSuffix\s*\{[\s\S]*?overflow:\s*visible;/)
+    expect(credentialStyles).toMatch(/\.credentialAutoRefreshUnitSuffix\s*\{[\s\S]*?text-overflow:\s*clip;/)
+    expect(authFileSectionSource).toContain('credentialAutoRefreshScheduleTip')
+    expect(tipStyles).toContain('margin-top: 8px;')
+    expect(tipStyles).toContain('font-size: 12px;')
+    expect(tipStyles).toContain('line-height: 1.45;')
+  })
+
   it('renders Auth Files health buckets as compact hover detail targets', () => {
     expect(credentialHealthSource).toContain('usage_stats.credentials_health_grid_aria')
     expect(credentialHealthSource).toContain('usage_stats.credentials_health_bucket_aria')
@@ -166,6 +210,19 @@ describe('Credential section styles', () => {
     expect(authFileSectionSource).toContain('row.priorityLabel')
     expect(authFileSectionSource).toMatch(/row\.planTypeLabel[\s\S]*?row\.remainingDaysLabel[\s\S]*?row\.priorityLabel/)
     expect(aiProviderSectionSource).toContain('row.priorityLabel')
+  })
+
+  it('keeps credential alias edit buttons in a fixed name-cell action slot', () => {
+    expect(credentialStyles).toMatch(/\.credentialDisplayName\s*\{[\s\S]*?width:\s*100%;/)
+    expect(credentialStyles).toMatch(/\.credentialAliasEditor\s*\{[\s\S]*?width:\s*100%;/)
+    expect(credentialStyles).toMatch(/\.credentialAliasDisplayLayout\s*\{[\s\S]*?display:\s*grid;/)
+    expect(credentialStyles).toMatch(/\.credentialAliasDisplayLayout\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) 28px;/)
+    expect(credentialStyles).toMatch(/\.credentialAliasDisplayLayout\s*\{[\s\S]*?column-gap:\s*8px;/)
+    expect(credentialStyles).toMatch(/\.credentialAliasNameSlot\s*\{[\s\S]*?min-width:\s*0;/)
+    expect(credentialStyles).toMatch(/\.credentialAliasNameSlot\s*\{[\s\S]*?overflow-wrap:\s*anywhere;/)
+    expect(credentialStyles).toMatch(/\.credentialAliasActionSlot\s*\{[\s\S]*?width:\s*24px;/)
+    expect(credentialStyles).toMatch(/\.credentialAliasActionSlot\s*\{[\s\S]*?justify-self:\s*start;/)
+    expect(credentialStyles).not.toMatch(/\.credentialAliasDisplay\s*\{/)
   })
 
   it('keeps Auth Files inspection separate from the quota refresh pill', () => {

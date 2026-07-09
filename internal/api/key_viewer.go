@@ -35,7 +35,7 @@ func requireActiveAPIKeyViewer(c *gin.Context, cpaAPIKeyProvider service.CPAAPIK
 	if err != nil {
 		if authHandler != nil {
 			authHandler.deleteSession(token)
-			clearSessionCookie(c, authHandler.config.BasePath)
+			clearSessionCookie(c, authHandler.config.BasePath, resolveSessionToken(c).CookieKind)
 		}
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
 		return token, auth.Session{}, entities.CPAAPIKey{}, false

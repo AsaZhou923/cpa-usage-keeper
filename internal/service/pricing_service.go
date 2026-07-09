@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -63,6 +64,12 @@ func (s *pricingService) UpdatePricing(ctx context.Context, input servicedto.Upd
 	if input.PromptPricePer1M < 0 || input.CompletionPricePer1M < 0 || input.CachePricePer1M < 0 || input.CacheCreationPricePer1M < 0 {
 		return nil, fmt.Errorf("prices must be non-negative")
 	}
+	if input.PriceMultiplier != nil {
+		multiplier := *input.PriceMultiplier
+		if multiplier < 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
+			return nil, fmt.Errorf("price_multiplier must be non-negative")
+		}
+	}
 
 	return repository.UpsertModelPriceSetting(s.db, repodto.ModelPriceSettingInput{
 		Model:                   modelName,
@@ -71,6 +78,7 @@ func (s *pricingService) UpdatePricing(ctx context.Context, input servicedto.Upd
 		CompletionPricePer1M:    input.CompletionPricePer1M,
 		CachePricePer1M:         input.CachePricePer1M,
 		CacheCreationPricePer1M: input.CacheCreationPricePer1M,
+		PriceMultiplier:         input.PriceMultiplier,
 	})
 }
 
@@ -79,36 +87,54 @@ func (s *pricingService) DeletePricing(_ context.Context, model string) error {
 }
 
 func (s *pricingService) effectiveModels(ctx context.Context) ([]string, error) {
+	localModels, err := repository.ListUsedModels(s.db)
+	if err != nil {
+		return nil, err
+	}
 	if s.modelsFetcher == nil {
-		return repository.ListUsedModels(s.db)
+		return localModels, nil
 	}
 
 	result, err := s.modelsFetcher.FetchModels(ctx)
 	if err != nil {
 		logrus.WithError(err).Error("pricing model listing falling back to local usage aggregation")
-		return repository.ListUsedModels(s.db)
+		return localModels, nil
 	}
 
 	logrus.Debug("pricing model listing using CPA models endpoint")
-	return normalizeCPAModels(result), nil
+	return mergeModelNames(localModels, extractCPAModelIDs(result)), nil
 }
 
-func normalizeCPAModels(result *response.ModelsResult) []string {
+func extractCPAModelIDs(result *response.ModelsResult) []string {
 	if result == nil {
 		return []string{}
 	}
-	seen := make(map[string]struct{}, len(result.Payload.Data))
 	models := make([]string, 0, len(result.Payload.Data))
 	for _, model := range result.Payload.Data {
-		id := strings.TrimSpace(model.ID)
-		if id == "" {
-			continue
+		models = append(models, model.ID)
+	}
+	return models
+}
+
+func mergeModelNames(modelLists ...[]string) []string {
+	total := 0
+	for _, list := range modelLists {
+		total += len(list)
+	}
+	seen := make(map[string]struct{}, total)
+	models := make([]string, 0, total)
+	for _, list := range modelLists {
+		for _, model := range list {
+			id := strings.TrimSpace(model)
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			models = append(models, id)
 		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		models = append(models, id)
 	}
 	sort.Strings(models)
 	return models
