@@ -162,6 +162,36 @@ describe('UsagePage toolbar styles', () => {
     expect(eventsEffect).toContain('}, [activeTab, loadEvents]);')
   })
 
+  it('uses an authenticated native request log download URL instead of fetching a blob into memory', () => {
+    expect(apiClientSource).toContain('createUsageEventRequestLogDownloadURL')
+    expect(apiClientSource).toContain('/request-log/download-token')
+    expect(apiClientSource).not.toContain('downloadUsageEventRequestLog')
+    expect(apiClientSource).not.toContain('getUsageEventRequestLogDownloadURL')
+    expect(usagePageSource).toContain('triggerBrowserURLDownload')
+    expect(usagePageSource).toContain('createDownloadURL = createUsageEventRequestLogDownloadURL')
+    expect(usagePageSource).toContain('const downloadURL = await createDownloadURL(normalizedEventId)')
+    expect(usagePageSource).not.toContain('downloadUsageEventRequestLog(normalizedEventId)')
+    const downloadHandler = usagePageSource.slice(
+      usagePageSource.indexOf('const handleRequestLogDownload = useCallback'),
+      usagePageSource.indexOf('const refreshActiveTab = useCallback'),
+    )
+    expect(downloadHandler).not.toContain("showTopNotice('success'")
+    expect(downloadHandler).toContain("showTopNotice('error'")
+    expect(downloadHandler).not.toContain('handleRequestLogClose()')
+  })
+
+  it('cancels request log work when UsagePage unmounts', () => {
+    const cleanupStart = usagePageSource.indexOf('useEffect(() => () => {\n    requestLogDownloadGenerationRef.current += 1;')
+    expect(cleanupStart).toBeGreaterThanOrEqual(0)
+    const cleanupEnd = usagePageSource.indexOf('\n  }, []);', cleanupStart)
+    expect(cleanupEnd).toBeGreaterThan(cleanupStart)
+    const cleanupEffect = usagePageSource.slice(cleanupStart, cleanupEnd)
+
+    expect(cleanupEffect).toContain('requestLogControllerRef.current?.abort();')
+    expect(cleanupEffect).toContain('requestLogControllerRef.current = null;')
+    expect(cleanupEffect).not.toContain('setRequestLog')
+  })
+
   it('removes stale header control styles after the Overview chart cleanup', () => {
     expect(usagePageStyles).not.toContain('.syncSwitcher')
     expect(usagePageStyles).not.toContain('.syncPill')

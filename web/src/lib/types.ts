@@ -36,6 +36,7 @@ export interface StatusResponse {
   sync_running: boolean
   timezone: string
   cpa_public_url?: string
+  cpa_request_log_access_enabled?: boolean
   last_run_at?: string
   last_error?: string
   last_warning?: string
@@ -227,6 +228,7 @@ export interface UsageEventTokens {
 
 export interface UsageEvent {
   id?: string
+  request_id?: string
   timestamp: string
   api_key?: string
   model: string
@@ -262,6 +264,22 @@ export interface UsageEventsResponse {
   page: number
   page_size: number
   total_pages: number
+}
+
+export interface UsageEventRequestLogSection {
+  title: string
+  content: string
+}
+
+export interface UsageEventRequestLogResponse {
+  event_id: string
+  request_id?: string
+  filename?: string
+  available: boolean
+  previewable?: boolean
+  too_large?: boolean
+  downloadable?: boolean
+  sections: UsageEventRequestLogSection[]
 }
 
 export interface UsageEventModelFilterOptionsResponse {
