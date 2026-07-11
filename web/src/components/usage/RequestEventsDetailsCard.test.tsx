@@ -136,7 +136,7 @@ describe('RequestEventsDetailsCard pagination', () => {
       events: [{ ...events[0], timestamp: '2026-05-13T00:38:19+08:00' }],
     });
 
-    expect(html).toContain('2026/05/13 00:38:19');
+    expect(html).toContain('2026/05/13 01:38:19');
     expect(html).not.toContain('5/13/2026, 12:38:19 AM');
   });
 
@@ -432,7 +432,7 @@ describe('RequestEventsDetailsCard pagination', () => {
     expect(html).toContain('>Timestamp</th>');
     expect(html).toContain('>Model</th>');
     expect(html).toContain('>Total Cost</th>');
-    expect(html).toContain('2026/04/23 02:00:00');
+    expect(html).toContain('2026/04/23 11:00:00');
     expect(html).toContain('<td class="_modelCell_');
     expect(html).toContain('$0.1234');
     expect(html).not.toContain('<th>API Key</th>');
@@ -449,7 +449,7 @@ describe('RequestEventsDetailsCard pagination', () => {
 
     expect(html).toContain('>Timestamp</th>');
     expect(html).toContain('>Model</th>');
-    expect(html).toContain('2026/04/23 02:00:00');
+    expect(html).toContain('2026/04/23 11:00:00');
     expect(html).toContain('<td class="_modelCell_');
     expect(html).not.toContain('<th>API Key</th>');
     expect(html).not.toContain('>Total Cost</th>');

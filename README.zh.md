@@ -82,7 +82,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      TZ: Asia/Shanghai # 设置容器时区，日志时间会按该时区显示。
+      TZ: Asia/Tokyo # 设置容器时区，日志时间会按该时区显示。
       CPA_BASE_URL: http://cli-proxy-api:8317
       CPA_MANAGEMENT_KEY: replace-with-your-management-key
       REDIS_QUEUE_ADDR: cli-proxy-api:8317
@@ -110,7 +110,7 @@ networks:
 然后在宿主机的 `docker-compose.yml` 同一目录创建 `.env` 文件，例如：
 
 ```env
-TZ=Asia/Shanghai
+TZ=Asia/Tokyo
 CPA_BASE_URL=http://cli-proxy-api:8317
 CPA_MANAGEMENT_KEY=replace-with-your-management-key
 AUTH_ENABLED=true
@@ -286,7 +286,7 @@ cp .env.example .env
 
 | 变量 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `TZ` | 否 | `Asia/Shanghai` | 统计和展示使用的时区；Today、按天统计、页面时间、日志时间和每日清理时间都会按这个时区计算 |
+| `TZ` | 否 | `Asia/Tokyo` | 统计和展示使用的时区；Today、按天统计、页面时间、日志时间和每日清理时间都会按这个时区计算 |
 | `REQUEST_TIMEOUT` | 否 | `30s` | 请求 CPA HTTP 接口和 Redis 队列的超时时间 |
 | `TLS_SKIP_VERIFY` | 否 | `false` | 跳过 CPA HTTPS 和 Redis 队列 TLS 的证书验证；仅在使用自签名证书时启用 |
 

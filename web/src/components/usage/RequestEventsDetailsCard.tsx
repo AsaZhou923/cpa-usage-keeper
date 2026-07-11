@@ -26,6 +26,7 @@ import {
   LATENCY_SOURCE_FIELD,
   normalizeAuthIndex,
 } from '@/utils/usage';
+import { formatTokyoDateTime } from '@/utils/time';
 import styles from '@/pages/UsagePage.module.scss';
 
 const ALL_FILTER = '__all__';
@@ -318,9 +319,7 @@ const toNumber = (value: unknown): number => {
 };
 
 const formatRequestEventTimestamp = (timestamp: string): string => {
-  const match = timestamp.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2}):(\d{2})/);
-  if (!match) return timestamp || '-';
-  return `${match[1]}/${match[2]}/${match[3]} ${match[4]}:${match[5]}:${match[6]}`;
+  return formatTokyoDateTime(timestamp) || timestamp || '-';
 };
 
 const formatCacheRate = (cachedTokens: number, inputTokens: number): string => {

@@ -40,6 +40,7 @@ import type { UsageOverviewPayload } from '@/components/usage/hooks/useUsageData
 import { BrandLink } from '@/components/BrandLink';
 import { getCurrentOverviewUsage, getDailyAveragePanelUsage, getOverviewDisplayLoading, isDailyAverageRange } from '@/utils/usage/overview';
 import type { Theme } from '@/types';
+import { formatTokyoClock } from '@/utils/time';
 import styles from './KeyOverviewPage.module.scss';
 
 const KEY_OVERVIEW_RANGE_STORAGE_KEY = 'cli-proxy-key-overview-range-v1';
@@ -728,7 +729,7 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
             {lastRefreshedAt && (
               <div className={styles.toolbarMetaRow}>
                 <span className={styles.lastRefreshed}>
-                  {t('usage_stats.last_updated')}: {lastRefreshedAt.toLocaleTimeString()}
+                  {t('usage_stats.last_updated')}: {formatTokyoClock(lastRefreshedAt, true)}
                 </span>
               </div>
             )}
@@ -827,7 +828,6 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
                   onWindowChange={setRealtimeWindow}
                   isDark={isDark}
                   isMobile={isMobile}
-                  timezone={realtime?.timezone ?? usage?.timezone}
                   visibleDimensions={KEY_OVERVIEW_REALTIME_VISIBLE_DIMENSIONS}
                 />
               </>

@@ -40,21 +40,12 @@ vi.mock('react-i18next', () => ({
   }),
 }))
 
-const formatLocalResetTime = (resetAt: string) => {
-  const resetTime = new Date(resetAt)
-  const month = String(resetTime.getMonth() + 1).padStart(2, '0')
-  const day = String(resetTime.getDate()).padStart(2, '0')
-  const hour = String(resetTime.getHours()).padStart(2, '0')
-  const minute = String(resetTime.getMinutes()).padStart(2, '0')
-  return `${month}/${day} ${hour}:${minute}`
-}
-
 describe('AuthFileCredentialsSection quota reset formatting', () => {
   it('formats reset labels with days when remaining time exceeds 24 hours', () => {
     vi.setSystemTime(new Date('2026-05-10T10:00:00Z'))
     try {
       const resetAt = '2026-05-12T10:15:00Z'
-      expect(formatQuotaResetLabel(resetAt)).toBe(formatLocalResetTime(resetAt))
+      expect(formatQuotaResetLabel(resetAt)).toBe('05/12 19:15')
       expect(formatQuotaResetDuration(resetAt)).toBe('2d0h15m')
     } finally {
       vi.useRealTimers()
@@ -65,7 +56,7 @@ describe('AuthFileCredentialsSection quota reset formatting', () => {
     vi.setSystemTime(new Date('2026-05-10T10:00:00Z'))
     try {
       const resetAt = '2026-05-10T14:15:00Z'
-      expect(formatQuotaResetLabel(resetAt)).toBe(formatLocalResetTime(resetAt))
+      expect(formatQuotaResetLabel(resetAt)).toBe('05/10 23:15')
       expect(formatQuotaResetDuration(resetAt)).toBe('4h15m')
     } finally {
       vi.useRealTimers()

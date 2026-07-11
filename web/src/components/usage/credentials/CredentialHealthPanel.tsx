@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { UsageCredentialHealth } from '@/lib/types'
 import { IconRefreshCw, IconTimer } from '@/components/ui/icons'
+import { formatTokyoClock, formatTokyoMonthDayTime } from '@/utils/time'
 import styles from './CredentialSections.module.scss'
 
 type CredentialHealthBucketState = 'success' | 'warning' | 'failure' | 'empty'
@@ -336,52 +337,19 @@ function safeCount(value: number): number {
 }
 
 function formatHealthTime(date: Date): string {
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  return `${hours}:${minutes}`
+  return formatTokyoClock(date)
 }
 
-// API 已按项目时区写出时间字符串，这里直接读取 HH:mm，避免浏览器时区二次转换。
 function formatHealthTimeFromAPIValue(value: string | undefined, fallback: Date): string {
-  const minutes = parseAPIClockMinutes(value)
-  return minutes === undefined ? formatHealthTime(fallback) : formatClockMinutes(minutes)
+  return value ? formatTokyoClock(value) || formatHealthTime(fallback) : formatHealthTime(fallback)
 }
 
 function formatHealthTimeFromAPIBase(value: string | undefined, offsetMinutes: number, fallback: Date): string {
-  const minutes = parseAPIClockMinutes(value)
-  return minutes === undefined ? formatHealthTime(fallback) : formatClockMinutes(minutes + offsetMinutes)
-}
-
-function parseAPIClockMinutes(value: string | undefined): number | undefined {
-  const match = value?.match(/T(\d{2}):(\d{2})/)
-  if (!match) {
-    return undefined
-  }
-  return Number(match[1]) * 60 + Number(match[2])
-}
-
-function formatClockMinutes(value: number): string {
-  const normalized = ((Math.round(value) % 1440) + 1440) % 1440
-  const hours = String(Math.floor(normalized / 60)).padStart(2, '0')
-  const minutes = String(normalized % 60).padStart(2, '0')
-  return `${hours}:${minutes}`
+  const base = value ? new Date(value) : null
+  if (!base || Number.isNaN(base.getTime())) return formatHealthTime(fallback)
+  return formatTokyoClock(base.getTime() + offsetMinutes * 60_000)
 }
 
 function formatCredentialHealthDate(value: string | undefined): string {
-  if (!value) {
-    return ''
-  }
-  const apiDateTime = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
-  if (apiDateTime) {
-    return `${apiDateTime[2]}/${apiDateTime[3]} ${apiDateTime[4]}:${apiDateTime[5]}`
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return ''
-  }
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  const hours = String(date.getHours()).padStart(2, '0')
-  const minutes = String(date.getMinutes()).padStart(2, '0')
-  return `${month}/${day} ${hours}:${minutes}`
+  return value ? formatTokyoMonthDayTime(value) : ''
 }

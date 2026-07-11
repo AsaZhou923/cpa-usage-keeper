@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	DefaultTimeZone                = "Asia/Shanghai"
+	DefaultTimeZone                = "Asia/Tokyo"
 	RedisQueueBatchSizeDefault     = 10000
 	MetadataSyncIntervalDefault    = 30 * time.Second
 	QuotaRefreshWorkerLimitDefault = 10

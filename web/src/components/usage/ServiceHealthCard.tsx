@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import type { ServiceHealthData, StatusBlockDetail } from '@/utils/usage';
 import type { UsageOverviewPayload } from './hooks/useUsageData';
+import { formatTokyoMonthDayTime } from '@/utils/time';
 import styles from '@/pages/UsagePage.module.scss';
 
 const COLOR_STOPS = [
@@ -41,12 +42,7 @@ function rateToColor(rate: number): string {
 }
 
 function formatDateTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  const month = (date.getMonth() + 1).toString().padStart(2, '0');
-  const day = date.getDate().toString().padStart(2, '0');
-  const h = date.getHours().toString().padStart(2, '0');
-  const m = date.getMinutes().toString().padStart(2, '0');
-  return `${month}/${day} ${h}:${m}`;
+  return formatTokyoMonthDayTime(timestamp);
 }
 
 export function parseTime(value?: string): number {

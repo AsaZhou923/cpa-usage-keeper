@@ -18,6 +18,7 @@ import {
   formatUsd,
 } from '@/utils/usage';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { MONITORING_TIME_ZONE } from '@/utils/time';
 import styles from '@/pages/UsagePage.module.scss';
 
 type RealtimeDimensionKey = 'models' | 'api_keys' | 'auth_files' | 'ai_providers';
@@ -46,7 +47,6 @@ interface OverviewRealtimePanelProps {
   onWindowChange: (window: OverviewRealtimeWindow) => void;
   isDark: boolean;
   isMobile: boolean;
-  timezone?: string;
   visibleDimensions?: readonly RealtimeDimensionKey[];
 }
 
@@ -94,12 +94,6 @@ const emptyRealtime = (window: OverviewRealtimeWindow): OverviewRealtimeBlock =>
   cache_level: [],
 });
 
-const getIntlTimeZone = (timezone: string | undefined) => {
-  const trimmed = timezone?.trim();
-  if (!trimmed || trimmed === 'Local') return undefined;
-  return trimmed;
-};
-
 const formatBucketLabelFromLiteral = (bucket: string): string | null => {
   const match = bucket.match(/^\d{4}-\d{2}-\d{2}[T\s](\d{2}):(\d{2})(?::(\d{2}))?/);
   if (!match) return null;
@@ -111,18 +105,17 @@ const formatBucketLabelFromLiteral = (bucket: string): string | null => {
   return second === 0 ? label : `${label}:${String(second).padStart(2, '0')}`;
 };
 
-const formatBucketLabel = (bucket: string, timezone?: string): string => {
+const formatBucketLabel = (bucket: string): string => {
   const parsed = Date.parse(bucket);
   if (!Number.isFinite(parsed)) return bucket;
   const date = new Date(parsed);
-  const timeZone = getIntlTimeZone(timezone);
   try {
     const parts = new Intl.DateTimeFormat('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
       hourCycle: 'h23',
-      timeZone,
+      timeZone: MONITORING_TIME_ZONE,
     }).formatToParts(date);
     const hour = parts.find((part) => part.type === 'hour')?.value ?? '00';
     const minute = parts.find((part) => part.type === 'minute')?.value ?? '00';
@@ -409,7 +402,6 @@ function buildResponseDistributionOptions(
   averageData: ResponseDistributionDatum[],
   particles: RealtimeResponseParticle[] | null | undefined,
   xBounds: ResponseDistributionXBounds | undefined,
-  timezone?: string,
 ): ChartOptions<'line'> {
   const options = buildRealtimeLineOptions(isDark, isMobile, formatRealtimeDuration, { yMaxTicksLimit: 5 });
   const yBounds = responseDistributionLogAxisBounds(averageData, particles);
@@ -425,7 +417,7 @@ function buildResponseDistributionOptions(
       border: baseXScale?.border,
       ticks: {
         ...baseXScale?.ticks,
-        callback: (value) => formatResponseDistributionTick(Number(value), timezone),
+        callback: (value) => formatResponseDistributionTick(Number(value)),
       },
     },
     y: {
@@ -448,7 +440,7 @@ function buildResponseDistributionOptions(
         callbacks: {
           title: (items) => {
             const x = Number(items[0]?.parsed.x ?? 0);
-            return Number.isFinite(x) ? formatResponseDistributionTick(x, timezone) : '';
+            return Number.isFinite(x) ? formatResponseDistributionTick(x) : '';
           },
           label: (context) => {
             const raw = context.raw as { count?: number } | undefined;
@@ -466,9 +458,9 @@ function buildResponseDistributionOptions(
   };
 }
 
-function formatResponseDistributionTick(value: number, timezone?: string): string {
+function formatResponseDistributionTick(value: number): string {
   if (!Number.isFinite(value)) return '';
-  return formatBucketLabel(new Date(value).toISOString(), timezone);
+  return formatBucketLabel(new Date(value).toISOString());
 }
 
 function responseDistributionLogAxisBounds(averageData: ResponseDistributionDatum[] | null | undefined, particles: RealtimeResponseParticle[] | null | undefined): { min: number; max: number } {
@@ -566,7 +558,7 @@ function UsageMetaPill({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function OverviewRealtimePanel({ realtime, loading, error, window, onWindowChange, isDark, isMobile, timezone, visibleDimensions = DEFAULT_VISIBLE_DIMENSIONS }: OverviewRealtimePanelProps) {
+export function OverviewRealtimePanel({ realtime, loading, error, window, onWindowChange, isDark, isMobile, visibleDimensions = DEFAULT_VISIBLE_DIMENSIONS }: OverviewRealtimePanelProps) {
   const { t } = useTranslation();
   const data = realtime ?? emptyRealtime(window);
   const initialLoading = loading && !realtime;
@@ -574,12 +566,11 @@ export function OverviewRealtimePanel({ realtime, loading, error, window, onWind
   const showInlineError = Boolean(error && hasRealtimeData);
   const showErrorOnly = Boolean(error && !hasRealtimeData);
   const [activeDimension, setActiveDimension] = useState<RealtimeDimensionKey>('models');
-  const labels = useMemo(() => data.token_velocity.map((point) => formatBucketLabel(point.bucket, data.timezone ?? timezone)), [data.timezone, data.token_velocity, timezone]);
+  const labels = useMemo(() => data.token_velocity.map((point) => formatBucketLabel(point.bucket)), [data.token_velocity]);
 
   const tokenValues = useMemo(() => data.token_velocity.map((point) => safeNumber(point.tokens_per_minute)), [data.token_velocity]);
   const requestValues = useMemo(() => data.request_level.map((point) => safeNumber(point.requests_per_minute)), [data.request_level]);
   const cacheValues = useMemo(() => data.cache_level.map((point) => point.cache_rate == null ? null : safeNumber(point.cache_rate)), [data.cache_level]);
-  const responseTimezone = data.timezone ?? timezone;
   const ttftAveragePoints = useMemo(() => responseDistributionAveragePoints(
     data.response_distribution.ttft.average_line,
     data.response_level.map((point) => ({ bucket: point.bucket, value: point.ttft_p95_ms })),
@@ -609,16 +600,14 @@ export function OverviewRealtimePanel({ realtime, loading, error, window, onWind
     ttftAverageChartData,
     data.response_distribution.ttft.particles,
     distributionXBounds,
-    responseTimezone,
-  ), [data.response_distribution.ttft.particles, distributionXBounds, isDark, isMobile, responseTimezone, ttftAverageChartData]);
+  ), [data.response_distribution.ttft.particles, distributionXBounds, isDark, isMobile, ttftAverageChartData]);
   const latencyDistributionOptions = useMemo(() => buildResponseDistributionOptions(
     isDark,
     isMobile,
     latencyAverageChartData,
     data.response_distribution.latency.particles,
     distributionXBounds,
-    responseTimezone,
-  ), [data.response_distribution.latency.particles, distributionXBounds, isDark, isMobile, latencyAverageChartData, responseTimezone]);
+  ), [data.response_distribution.latency.particles, distributionXBounds, isDark, isMobile, latencyAverageChartData]);
   const latestLabel = t('usage_stats.overview_realtime_latest');
   const averageLabel = t('usage_stats.overview_realtime_average');
   const trendLabel = t('usage_stats.overview_realtime_trend');

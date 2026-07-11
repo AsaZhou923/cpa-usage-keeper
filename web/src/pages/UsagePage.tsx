@@ -43,6 +43,7 @@ import {
 import type { Theme } from '@/types';
 import { BrandLink } from '@/components/BrandLink';
 import { isCPAMCEmbed } from '@/embed/cpamcEmbed';
+import { formatTokyoClock, MONITORING_TIME_ZONE } from '@/utils/time';
 import styles from './UsagePage.module.scss';
 
 const TIME_RANGE_STORAGE_KEY = 'cli-proxy-usage-time-range-v1';
@@ -636,8 +637,8 @@ export const buildCustomDateRangeQuery = (range: { start: string; end: string })
 };
 
 const buildDefaultCustomRange = (anchorMs: number) => ({
-  start: toDateInputValue(anchorMs - DEFAULT_CUSTOM_WINDOW_HOURS * 60 * 60 * 1000),
-  end: toDateInputValue(anchorMs)
+  start: toDateInputValueInTimezone(anchorMs - DEFAULT_CUSTOM_WINDOW_HOURS * 60 * 60 * 1000, MONITORING_TIME_ZONE),
+  end: toDateInputValueInTimezone(anchorMs, MONITORING_TIME_ZONE)
 });
 
 const loadCustomTimeRange = () => {
@@ -771,7 +772,7 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
   const [customDateRangeAnchorMs, setCustomDateRangeAnchorMs] = useState(() => Date.now());
   const apiKeyOptionsRequestControllerRef = useRef<AbortController | null>(null);
   const credentialSectionVisibility = getCredentialSectionVisibility(activeTab);
-  const customDateRangeBounds = useMemo(() => getCustomDateRangeBounds(customDateRangeAnchorMs, status?.timezone), [customDateRangeAnchorMs, status?.timezone]);
+  const customDateRangeBounds = useMemo(() => getCustomDateRangeBounds(customDateRangeAnchorMs, MONITORING_TIME_ZONE), [customDateRangeAnchorMs]);
   const effectiveCustomTimeRange = useMemo(
     () => clampCustomDateRangeToBounds(customTimeRange, customDateRangeBounds),
     [customDateRangeBounds, customTimeRange],
@@ -1826,7 +1827,7 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
               <div className={styles.toolbarMetaRow}>
                 {lastSyncAt && (
                   <span className={styles.lastRefreshed}>
-                    {t('usage_stats.last_updated')}: {lastSyncAt.toLocaleTimeString()}
+                    {t('usage_stats.last_updated')}: {formatTokyoClock(lastSyncAt, true)}
                   </span>
                 )}
                 {(!isEmbeddedInCPAMC && cpaManagementURL) && (
@@ -2053,7 +2054,6 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
                   onWindowChange={setRealtimeWindow}
                   isDark={isDark}
                   isMobile={isMobile}
-                  timezone={currentRealtime?.timezone ?? usage?.timezone}
                 />
               </>
             )}

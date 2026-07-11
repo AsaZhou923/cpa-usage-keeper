@@ -289,8 +289,8 @@ func TestLoadFromEnvAppliesDefaultTimeZone(t *testing.T) {
 		t.Fatalf("LoadFromEnv returned error: %v", err)
 	}
 
-	if time.Local.String() != "Asia/Shanghai" {
-		t.Fatalf("expected default local timezone Asia/Shanghai, got %s", time.Local)
+	if time.Local.String() != "Asia/Tokyo" {
+		t.Fatalf("expected default local timezone Asia/Tokyo, got %s", time.Local)
 	}
 }
 

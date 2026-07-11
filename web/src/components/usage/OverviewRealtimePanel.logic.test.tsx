@@ -229,7 +229,6 @@ describe('OverviewRealtimePanel', () => {
         onWindowChange={() => {}}
         isDark={false}
         isMobile={false}
-        timezone="UTC"
       />
     );
 
@@ -346,7 +345,6 @@ describe('OverviewRealtimePanel', () => {
         onWindowChange={() => {}}
         isDark={false}
         isMobile={false}
-        timezone="UTC"
       />
     );
 
@@ -596,7 +594,7 @@ describe('OverviewRealtimePanel', () => {
     expect(html).not.toContain('width:0%');
   });
 
-  it('formats realtime bucket labels with the realtime response timezone', () => {
+  it('formats realtime bucket labels in Tokyo regardless of the response timezone', () => {
     renderToStaticMarkup(
       <OverviewRealtimePanel
         realtime={{ ...realtimeWithProjectOffset, timezone: 'Asia/Shanghai' }}
@@ -608,7 +606,7 @@ describe('OverviewRealtimePanel', () => {
       />
     );
 
-    expect(chartCapture.lineCalls[0].data.labels).toEqual(['11:55', '11:55:30']);
+    expect(chartCapture.lineCalls[0].data.labels).toEqual(['12:55', '12:55:30']);
   });
 
   it('keeps gap spanning disabled for realtime charts', () => {

@@ -82,7 +82,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      TZ: Asia/Shanghai # Sets the container timezone; log timestamps use this timezone.
+      TZ: Asia/Tokyo # Sets the container timezone; log timestamps use this timezone.
       CPA_BASE_URL: http://cli-proxy-api:8317
       CPA_MANAGEMENT_KEY: replace-with-your-management-key
       REDIS_QUEUE_ADDR: cli-proxy-api:8317
@@ -110,7 +110,7 @@ To manage Keeper settings with a `.env` file, remove the `environment` block fro
 Create `.env` on the host in the same directory as `docker-compose.yml`, for example:
 
 ```env
-TZ=Asia/Shanghai
+TZ=Asia/Tokyo
 CPA_BASE_URL=http://cli-proxy-api:8317
 CPA_MANAGEMENT_KEY=replace-with-your-management-key
 AUTH_ENABLED=true
@@ -286,7 +286,7 @@ For CPAMC frame trust, `CPA_PUBLIC_URL` must be an explicit `http://` or `https:
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `TZ` | No | `Asia/Shanghai` | Timezone used for statistics and display; Today, daily totals, page timestamps, log timestamps, and daily cleanup are calculated in this timezone |
+| `TZ` | No | `Asia/Tokyo` | Timezone used for statistics and display; Today, daily totals, page timestamps, log timestamps, and daily cleanup are calculated in this timezone |
 | `REQUEST_TIMEOUT` | No | `30s` | Timeout for CPA HTTP requests and Redis queue operations |
 | `TLS_SKIP_VERIFY` | No | `false` | Skip TLS certificate verification for CPA HTTPS and Redis queue TLS; enable only with self-signed certificates |
 

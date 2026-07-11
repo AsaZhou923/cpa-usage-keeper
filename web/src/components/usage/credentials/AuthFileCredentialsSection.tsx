@@ -13,6 +13,7 @@ import { CredentialAliasEditor, isCredentialAliasEditorDisabled } from './Creden
 import { CredentialHealthPanel } from './CredentialHealthPanel'
 import { CredentialProviderFilterIcon } from './CredentialProviderFilterBar'
 import { CredentialBadge, CredentialPriorityBadge, CredentialRowShell, CredentialSectionShell, CredentialTableHeader, CredentialsPagination, MetricPill, RequestMetric, TonePercent, cacheRateTone, capitalize, credentialToneClassName, formatCredentialNumber, successRateTone } from './CredentialSectionShell'
+import { formatTokyoDateTime, formatTokyoMonthDayTime } from '@/utils/time'
 
 type Translate = (key: string, options?: Record<string, string>) => string
 type InspectionIndicatorTone = 'idle' | 'running' | 'completed'
@@ -1276,7 +1277,7 @@ export function formatInspectionCompletedAt(value: string | undefined): string {
   if (Number.isNaN(date.getTime())) {
     return ''
   }
-  return date.toLocaleString()
+  return formatTokyoDateTime(date)
 }
 
 function formatInspectionDate(value: string | undefined): string {
@@ -1584,11 +1585,7 @@ export function formatQuotaResetLabel(resetAt: string): string {
   if (!Number.isFinite(resetMs)) {
     return ''
   }
-  const month = String(resetTime.getMonth() + 1).padStart(2, '0')
-  const day = String(resetTime.getDate()).padStart(2, '0')
-  const hour = String(resetTime.getHours()).padStart(2, '0')
-  const minute = String(resetTime.getMinutes()).padStart(2, '0')
-  return `${month}/${day} ${hour}:${minute}`
+  return formatTokyoMonthDayTime(resetTime)
 }
 
 export function formatQuotaResetDuration(resetAt: string): string {
