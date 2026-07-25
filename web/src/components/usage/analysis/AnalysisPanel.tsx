@@ -12,6 +12,9 @@ import styles from './AnalysisPanel.module.scss';
 interface AnalysisPanelProps {
   analysis: AnalysisResponse | null;
   loading: boolean;
+  latencyDiagnostics?: AnalysisLatencyDiagnostics | null;
+  latencyLoading?: boolean;
+  latencyError?: string;
   isDark: boolean;
   isMobile: boolean;
 }
@@ -22,7 +25,8 @@ type ChartRow = {
   output: number;
   rawInput: number;
   rawOutput: number;
-  cached: number;
+  cacheRead: number;
+  cacheWrite: number;
   reasoning: number;
   total: number;
   requests: number;
@@ -79,18 +83,12 @@ type ChartTooltipPointer = {
   chartY: number;
   viewport?: ViewportPoint;
 };
-type CostBreakdownSegmentKey = 'input' | 'output' | 'cached';
+type CostBreakdownSegmentKey = 'input' | 'cacheRead' | 'cacheWrite' | 'output';
 type CostBreakdownSegment = {
   key: CostBreakdownSegmentKey;
   label: string;
   value: number;
   color: string;
-  tokens: number;
-};
-type CostRatePoint = {
-  label: string;
-  rate: number;
-  cost: number;
   tokens: number;
 };
 type ModelEfficiencyColor = {
@@ -148,7 +146,8 @@ const CHART_COLORS: GradientColor[] = [
 const TOKEN_COLORS = {
   input: { base: '#2563eb', light: '#93c5fd' },
   output: { base: '#16a34a', light: '#86efac' },
-  cached: { base: '#d97706', light: '#fde68a' },
+  cacheRead: { base: '#d97706', light: '#fde68a' },
+  cacheWrite: { base: '#e11d48', light: '#fda4af' },
   reasoning: { base: '#8b5cf6', light: '#d8b4fe' },
   requests: '#ff5a40',
   cost: '#14b8a6',
@@ -191,6 +190,11 @@ const FULL_CIRCLE = Math.PI * 2;
 const HEATMAP_TOOLTIP_MAX_WIDTH = 280;
 const HEATMAP_TOOLTIP_VIEWPORT_PADDING = 8;
 const HEATMAP_TOOLTIP_CURSOR_OFFSET = 14;
+const HEATMAP_KEY_COLUMN_WIDTH = 160;
+const HEATMAP_MODEL_COLUMN_MIN_WIDTH = 82;
+const HEATMAP_SUMMARY_COLUMN_WIDTH = 88;
+const HEATMAP_GRID_GAP = 4;
+const HEATMAP_GRID_BASE_MIN_WIDTH = 680;
 const MODEL_EFFICIENCY_TOOLTIP_ID = 'analysis-model-efficiency-tooltip';
 const MODEL_EFFICIENCY_TOOLTIP_MAX_WIDTH = 320;
 const MODEL_EFFICIENCY_TOOLTIP_VIEWPORT_PADDING = 8;
@@ -228,7 +232,8 @@ Tooltip.positioners.analysisCompositionCursor = analysisCompositionCursorPositio
 type TokenLabels = {
   input: string;
   output: string;
-  cached: string;
+  cacheRead: string;
+  cacheWrite: string;
   reasoning: string;
   total: string;
   average: string;
@@ -754,7 +759,8 @@ function buildTokenUsageRows(buckets: AnalysisTokenUsageBucket[], granularity: A
     label: formatBucketLabel(bucket.bucket, granularity),
     input: calculateDisplayInputTokens({
       inputTokens: bucket.input_tokens,
-      cachedTokens: bucket.cached_tokens,
+      cacheReadTokens: bucket.cache_read_tokens,
+      cacheCreationTokens: bucket.cache_creation_tokens,
     }),
     output: calculateDisplayOutputTokens({
       outputTokens: bucket.output_tokens,
@@ -762,7 +768,8 @@ function buildTokenUsageRows(buckets: AnalysisTokenUsageBucket[], granularity: A
     }),
     rawInput: toNumber(bucket.input_tokens),
     rawOutput: toNumber(bucket.output_tokens),
-    cached: toNumber(bucket.cached_tokens),
+    cacheRead: toNumber(bucket.cache_read_tokens),
+    cacheWrite: toNumber(bucket.cache_creation_tokens),
     reasoning: toNumber(bucket.reasoning_tokens),
     total: toNumber(bucket.total_tokens),
     requests: toNumber(bucket.requests),
@@ -792,12 +799,13 @@ function takeMajorComposition(items: AnalysisCompositionItem[], othersLabel: str
       requests: sum.requests + toNumber(item.requests),
       input_tokens: sum.input_tokens + toNumber(item.input_tokens),
       output_tokens: sum.output_tokens + toNumber(item.output_tokens),
-      cached_tokens: sum.cached_tokens + toNumber(item.cached_tokens),
+      cache_read_tokens: sum.cache_read_tokens + toNumber(item.cache_read_tokens),
+      cache_creation_tokens: sum.cache_creation_tokens + toNumber(item.cache_creation_tokens),
       reasoning_tokens: sum.reasoning_tokens + toNumber(item.reasoning_tokens),
       cost_usd: sum.cost_usd + toNumber(item.cost_usd),
       cost_available: sum.cost_available && item.cost_available !== false,
     }),
-    { total_tokens: 0, requests: 0, input_tokens: 0, output_tokens: 0, cached_tokens: 0, reasoning_tokens: 0, cost_usd: 0, cost_available: true },
+    { total_tokens: 0, requests: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, reasoning_tokens: 0, cost_usd: 0, cost_available: true },
   );
   const total = items.reduce((sum, item) => sum + toNumber(item.total_tokens), 0);
   return [
@@ -809,7 +817,8 @@ function takeMajorComposition(items: AnalysisCompositionItem[], othersLabel: str
       requests: rest.requests,
       input_tokens: rest.input_tokens,
       output_tokens: rest.output_tokens,
-      cached_tokens: rest.cached_tokens,
+      cache_read_tokens: rest.cache_read_tokens,
+      cache_creation_tokens: rest.cache_creation_tokens,
       reasoning_tokens: rest.reasoning_tokens,
       cost_usd: rest.cost_usd,
       cost_available: rest.cost_available,
@@ -822,7 +831,8 @@ function buildTokenLegendItems(labels: TokenLabels, averageTokenTotal: number, a
   return [
     { label: labels.input, color: TOKEN_COLORS.input.base },
     { label: labels.output, color: TOKEN_COLORS.output.base },
-    { label: labels.cached, color: TOKEN_COLORS.cached.base },
+    { label: labels.cacheRead, color: TOKEN_COLORS.cacheRead.base },
+    { label: labels.cacheWrite, color: TOKEN_COLORS.cacheWrite.base },
     { label: labels.reasoning, color: TOKEN_COLORS.reasoning.base },
     { label: labels.requests, color: TOKEN_COLORS.requests },
     { label: labels.cost, color: TOKEN_COLORS.cost },
@@ -911,7 +921,8 @@ function buildAnalysisTokenChartData(rows: ChartRow[], labels: TokenLabels): Mix
     datasets: [
       { label: labels.input, data: rows.map((row) => row.input), tooltipData: rows.map((row) => row.rawInput), backgroundColor: (context) => toGradientFill(context, tokenColors.input), borderColor: tokenColors.input.base, stack: 'tokens', yAxisID: 'tokens' } as TokenTooltipDataset,
       { label: labels.output, data: rows.map((row) => row.output), tooltipData: rows.map((row) => row.rawOutput), backgroundColor: (context) => toGradientFill(context, tokenColors.output), borderColor: tokenColors.output.base, stack: 'tokens', yAxisID: 'tokens' } as TokenTooltipDataset,
-      { label: labels.cached, data: rows.map((row) => row.cached), tooltipData: rows.map((row) => row.cached), backgroundColor: (context) => toGradientFill(context, tokenColors.cached), borderColor: tokenColors.cached.base, stack: 'tokens', yAxisID: 'tokens' } as TokenTooltipDataset,
+      { label: labels.cacheRead, data: rows.map((row) => row.cacheRead), tooltipData: rows.map((row) => row.cacheRead), backgroundColor: (context) => toGradientFill(context, tokenColors.cacheRead), borderColor: tokenColors.cacheRead.base, stack: 'tokens', yAxisID: 'tokens' } as TokenTooltipDataset,
+      { label: labels.cacheWrite, data: rows.map((row) => row.cacheWrite), tooltipData: rows.map((row) => row.cacheWrite), backgroundColor: (context) => toGradientFill(context, tokenColors.cacheWrite), borderColor: tokenColors.cacheWrite.base, stack: 'tokens', yAxisID: 'tokens' } as TokenTooltipDataset,
       { label: labels.reasoning, data: rows.map((row) => row.reasoning), tooltipData: rows.map((row) => row.reasoning), backgroundColor: (context) => toGradientFill(context, tokenColors.reasoning), borderColor: tokenColors.reasoning.base, stack: 'tokens', yAxisID: 'tokens' } as TokenTooltipDataset,
       {
         type: 'line',
@@ -1047,7 +1058,8 @@ function TokenUsageChart({ rows, loading, isDark, isMobile }: { rows: ChartRow[]
   const tokenLabels = useMemo(() => ({
     input: t('usage_stats.input_tokens'),
     output: t('usage_stats.output_tokens'),
-    cached: t('usage_stats.cached_tokens'),
+    cacheRead: t('usage_stats.cache_read_tokens'),
+    cacheWrite: t('usage_stats.cache_creation_tokens'),
     reasoning: t('usage_stats.reasoning_tokens'),
     total: t('usage_stats.total_tokens'),
     average: t('usage_stats.analysis_token_average'),
@@ -1234,7 +1246,7 @@ function buildLatencyDiagnosticsChartOptions({
   };
 }
 
-function LatencyDiagnosticsCard({ diagnostics, loading, isDark, isMobile }: { diagnostics: AnalysisLatencyDiagnostics | undefined; loading: boolean; isDark: boolean; isMobile: boolean }) {
+function LatencyDiagnosticsCard({ diagnostics, loading, error, isDark, isMobile }: { diagnostics: AnalysisLatencyDiagnostics | null | undefined; loading: boolean; error: string; isDark: boolean; isMobile: boolean }) {
   const { t } = useTranslation();
   const safeDiagnostics = diagnostics ?? emptyLatencyDiagnostics();
   const chartTheme = useMemo(() => getChartTheme(isDark), [isDark]);
@@ -1254,6 +1266,7 @@ function LatencyDiagnosticsCard({ diagnostics, loading, isDark, isMobile }: { di
     labels,
     colors: latencyColors,
   }), [chartTheme, isMobile, labels, latencyColors, safeDiagnostics]);
+  const unsupported = safeDiagnostics.supported === false;
   const hasData = toNumber(safeDiagnostics.total_points) > 0 && safeDiagnostics.points.length > 0;
   return (
     <section className={`${styles.analysisCard} ${styles.latencyDiagnosticsCard}`}>
@@ -1265,6 +1278,10 @@ function LatencyDiagnosticsCard({ diagnostics, loading, isDark, isMobile }: { di
       />
       {loading ? (
         <div className={styles.emptyState}>{t('common.loading')}</div>
+      ) : error ? (
+        <div className={styles.emptyState}>{error}</div>
+      ) : unsupported ? (
+        <div className={styles.emptyState}>{t('usage_stats.analysis_latency_recent_range_only')}</div>
       ) : !hasData ? (
         <div className={styles.emptyState}>{t('usage_stats.no_data')}</div>
       ) : (
@@ -1406,36 +1423,29 @@ function getCostRatePerMillion(cost: number, tokens: number) {
 function getCostSegmentTokens(rows: ChartRow[]): Record<CostBreakdownSegmentKey, number> {
   return rows.reduce(
     (totals, row) => ({
-      input: totals.input + Math.max(row.rawInput - row.cached, 0),
+      input: totals.input + Math.max(row.rawInput - row.cacheRead - row.cacheWrite, 0),
+      cacheRead: totals.cacheRead + row.cacheRead,
+      cacheWrite: totals.cacheWrite + row.cacheWrite,
       output: totals.output + row.rawOutput,
-      cached: totals.cached + row.cached,
     }),
-    { input: 0, output: 0, cached: 0 },
+    { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 },
   );
 }
 
 function CostBreakdownCard({ breakdown, rows, loading }: { breakdown: AnalysisCostBreakdown | undefined; rows: ChartRow[]; loading: boolean }) {
   const { t } = useTranslation();
   const [costTooltip, setCostTooltip] = useState<FloatingTooltipState | null>(null);
-  const safeBreakdown = breakdown ?? { input_cost_usd: 0, output_cost_usd: 0, cached_cost_usd: 0, total_cost_usd: 0, cost_available: true };
+  const safeBreakdown = breakdown ?? { uncached_input_cost_usd: 0, cache_read_cost_usd: 0, cache_write_cost_usd: 0, output_cost_usd: 0, total_cost_usd: 0, cost_available: true };
   const totalCost = toNumber(safeBreakdown.total_cost_usd);
   const totalTokens = rows.reduce((sum, row) => sum + row.total, 0);
   const segmentTokens = getCostSegmentTokens(rows);
   const costAvailable = safeBreakdown.cost_available !== false;
   const blendedRate = getCostRatePerMillion(totalCost, totalTokens);
-  const ratePoints: CostRatePoint[] = rows
-    .filter((row) => row.total > 0)
-    .map((row) => ({
-      label: row.label,
-      rate: getCostRatePerMillion(row.cost, row.total),
-      cost: row.cost,
-      tokens: row.total,
-    }));
-  const rateMax = Math.max(0, ...ratePoints.map((point) => point.rate));
   const segments: CostBreakdownSegment[] = [
-    { key: 'input', label: t('usage_stats.input_tokens'), value: toNumber(safeBreakdown.input_cost_usd), color: TOKEN_COLORS.input.base, tokens: segmentTokens.input },
+    { key: 'input', label: t('usage_stats.input_tokens'), value: toNumber(safeBreakdown.uncached_input_cost_usd), color: TOKEN_COLORS.input.base, tokens: segmentTokens.input },
+    { key: 'cacheRead', label: t('usage_stats.cache_read_tokens'), value: toNumber(safeBreakdown.cache_read_cost_usd), color: TOKEN_COLORS.cacheRead.base, tokens: segmentTokens.cacheRead },
+    { key: 'cacheWrite', label: t('usage_stats.cache_creation_tokens'), value: toNumber(safeBreakdown.cache_write_cost_usd), color: TOKEN_COLORS.cacheWrite.base, tokens: segmentTokens.cacheWrite },
     { key: 'output', label: t('usage_stats.output_tokens'), value: toNumber(safeBreakdown.output_cost_usd), color: TOKEN_COLORS.output.base, tokens: segmentTokens.output },
-    { key: 'cached', label: t('usage_stats.cached_tokens'), value: toNumber(safeBreakdown.cached_cost_usd), color: TOKEN_COLORS.cached.base, tokens: segmentTokens.cached },
   ];
   const hasData = rows.length > 0 || totalCost > 0 || segments.some((segment) => segment.value > 0);
   const buildCostTooltipLines = (segment: CostBreakdownSegment, percent: number) => [
@@ -1445,13 +1455,6 @@ function CostBreakdownCard({ breakdown, rows, loading }: { breakdown: AnalysisCo
     `${t('usage_stats.total_tokens')}: ${formatCompactNumber(segment.tokens)}`,
     `${t('usage_stats.analysis_cost_per_million_tokens')}: ${formatUsd(getCostRatePerMillion(segment.value, segment.tokens))}`,
   ];
-  const buildRateTooltipLines = (point: CostRatePoint) => [
-    point.label,
-    `${t('usage_stats.analysis_cost_per_million_tokens')}: ${formatUsd(point.rate)}`,
-    `${t('usage_stats.total_cost')}: ${formatUsd(point.cost)}`,
-    `${t('usage_stats.total_tokens')}: ${formatCompactNumber(point.tokens)}`,
-  ];
-  const sparklineHint = t('usage_stats.analysis_cost_rate_sparkline_hint');
   const showCostTooltip = (
     lines: string[],
     event: MouseEvent<HTMLSpanElement> | FocusEvent<HTMLSpanElement>,
@@ -1526,6 +1529,10 @@ function CostBreakdownCard({ breakdown, rows, loading }: { breakdown: AnalysisCo
           ) : null}
           <div className={styles.costRatePanel}>
             <div className={styles.costRateMetric}>
+              <span>{t('usage_stats.total_tokens')}</span>
+              <strong>{formatCompactNumber(totalTokens)}</strong>
+            </div>
+            <div className={styles.costRateMetric}>
               <span>{t('usage_stats.total_cost')}</span>
               <strong>{formatUsd(totalCost)}</strong>
             </div>
@@ -1533,25 +1540,6 @@ function CostBreakdownCard({ breakdown, rows, loading }: { breakdown: AnalysisCo
               <span>{t('usage_stats.analysis_cost_per_million_tokens')}</span>
               <strong>{formatUsd(blendedRate)}</strong>
               <small>{t('usage_stats.analysis_blended_rate')}</small>
-            </div>
-            <div className={styles.costRateSparkline} aria-label={sparklineHint} title={sparklineHint}>
-              {ratePoints.length === 0 ? (
-                <span className={styles.costRateSparkEmpty} />
-              ) : ratePoints.slice(-12).map((point, index) => {
-                const tooltipLines = buildRateTooltipLines(point);
-                const tooltip = tooltipLines.join('\n');
-                const ariaLabel = tooltipLines.join(', ');
-                return (
-                  <span
-                    key={`${index}-${point.label}-${point.rate}`}
-                    className={styles.costRateSparkBar}
-                    style={{ height: `${Math.max(12, rateMax > 0 ? (point.rate / rateMax) * 100 : 0)}%` }}
-                    title={tooltip}
-                    aria-label={ariaLabel}
-                    tabIndex={0}
-                  />
-                );
-              })}
             </div>
           </div>
           <div className={styles.costMetricGrid}>
@@ -1577,7 +1565,7 @@ type EfficiencyPoint = {
   requests: number;
   cost: number;
   totalTokens: number;
-  cacheRate: number;
+  cacheReadRate: number;
 };
 
 const getEfficiencyPalette = (index: number) => {
@@ -1780,7 +1768,7 @@ function ModelEfficiencyCard({ rows, loading, isDark, isMobile }: { rows: Analys
         requests: toNumber(row.requests),
         cost: toNumber(row.cost_usd),
         totalTokens: toNumber(row.total_tokens),
-        cacheRate: toNumber(row.cache_rate),
+        cacheReadRate: toNumber(row.cache_read_rate),
       })),
       pointRadius: pointRadii,
       pointHoverRadius: pointRadii.map((radius) => Math.min(MODEL_EFFICIENCY_MAX_RADIUS + MODEL_EFFICIENCY_HOVER_RADIUS_DELTA, radius + MODEL_EFFICIENCY_HOVER_RADIUS_DELTA)),
@@ -1876,10 +1864,30 @@ function Heatmap({ cells, apiKeys, apiKeyLabels, models, loading, isDark }: { ce
   const { t } = useTranslation();
   const [tooltip, setTooltip] = useState<FloatingTooltipState | null>(null);
   const cellMap = useMemo(() => new Map(cells.map((cell) => [`${cell.api_key}\0${cell.model}`, cell])), [cells]);
+  // 固定汇总列按 API Key 聚合所有模型，确保与中间热力单元格使用同一数据口径。
+  const rowTotals = useMemo(() => {
+    const totals = new Map<string, { totalTokens: number; totalCost: number; costAvailable: boolean }>();
+    apiKeys.forEach((apiKey) => totals.set(apiKey, { totalTokens: 0, totalCost: 0, costAvailable: true }));
+    cells.forEach((cell) => {
+      const total = totals.get(cell.api_key) ?? { totalTokens: 0, totalCost: 0, costAvailable: true };
+      total.totalTokens += toNumber(cell.total_tokens);
+      total.totalCost += toNumber(cell.cost_usd);
+      total.costAvailable = total.costAvailable && cell.cost_available !== false;
+      totals.set(cell.api_key, total);
+    });
+    return totals;
+  }, [apiKeys, cells]);
   const hasUnavailableCost = useMemo(() => cells.some((cell) => cell.cost_available === false), [cells]);
   const maxHeatmapTokens = useMemo(
     () => cells.reduce((max, cell) => Math.max(max, toNumber(cell.total_tokens)), 0),
     [cells],
+  );
+  const heatmapGridMinWidth = Math.max(
+    HEATMAP_GRID_BASE_MIN_WIDTH,
+    HEATMAP_KEY_COLUMN_WIDTH
+      + models.length * HEATMAP_MODEL_COLUMN_MIN_WIDTH
+      + HEATMAP_SUMMARY_COLUMN_WIDTH * 2
+      + (models.length + 2) * HEATMAP_GRID_GAP,
   );
   const getAPIKeyLabel = (apiKey: string) => apiKeyLabels[apiKey] || apiKey;
   const buildTooltipLines = (apiKey: string, model: string, cell: AnalysisHeatmapCell | undefined) => {
@@ -1887,7 +1895,8 @@ function Heatmap({ cells, apiKeys, apiKeyLabels, models, loading, isDark }: { ce
     const input = toNumber(cell?.input_tokens);
     const output = toNumber(cell?.output_tokens);
     const reasoning = toNumber(cell?.reasoning_tokens);
-    const cached = toNumber(cell?.cached_tokens);
+    const cacheRead = toNumber(cell?.cache_read_tokens);
+    const cacheWrite = toNumber(cell?.cache_creation_tokens);
     const total = toNumber(cell?.total_tokens);
     const cost = toNumber(cell?.cost_usd);
     return [
@@ -1896,7 +1905,8 @@ function Heatmap({ cells, apiKeys, apiKeyLabels, models, loading, isDark }: { ce
       `${t('usage_stats.input_tokens')}: ${formatCompactNumber(input)}`,
       `${t('usage_stats.output_tokens')}: ${formatCompactNumber(output)}`,
       `${t('usage_stats.reasoning_tokens')}: ${formatCompactNumber(reasoning)}`,
-      `${t('usage_stats.cached_tokens')}: ${formatCompactNumber(cached)}`,
+      `${t('usage_stats.cache_read_tokens')}: ${formatCompactNumber(cacheRead)}`,
+      `${t('usage_stats.cache_creation_tokens')}: ${formatCompactNumber(cacheWrite)}`,
       `${t('usage_stats.total_tokens')}: ${formatCompactNumber(total)}`,
       `${t('usage_stats.total_cost')}: ${formatUsd(cost)}`,
     ];
@@ -1935,8 +1945,14 @@ function Heatmap({ cells, apiKeys, apiKeyLabels, models, loading, isDark }: { ce
         <>
           <div className={styles.analysisChartSurface}>
             <div className={styles.heatmapScroller}>
-              <div className={styles.heatmapGrid} style={{ gridTemplateColumns: `150px repeat(${models.length}, minmax(82px, 1fr))` }}>
-                <div className={styles.heatmapCorner}>{t('usage_stats.analysis_heatmap_api_key')}</div>
+              <div
+                className={styles.heatmapGrid}
+                style={{
+                  gridTemplateColumns: `var(--heatmap-key-column-width) repeat(${models.length}, minmax(${HEATMAP_MODEL_COLUMN_MIN_WIDTH}px, 1fr)) repeat(2, var(--heatmap-summary-column-width))`,
+                  minWidth: heatmapGridMinWidth,
+                } as CSSProperties}
+              >
+                <div className={`${styles.heatmapCorner} ${styles.heatmapKeyColumn}`}>{t('usage_stats.analysis_heatmap_api_key')}</div>
                 {models.map((model) => (
                   <div
                     key={model}
@@ -1953,12 +1969,40 @@ function Heatmap({ cells, apiKeys, apiKeyLabels, models, loading, isDark }: { ce
                     <span className={`${styles.heatmapTruncatedLabel} ${styles.heatmapModelLabel}`}>{model}</span>
                   </div>
                 ))}
+                <div className={`${styles.heatmapHeaderCell} ${styles.heatmapSummaryHeaderCell} ${styles.heatmapTotalTokensColumn}`}>
+                  {t('usage_stats.total_tokens')}
+                </div>
+                <div className={`${styles.heatmapHeaderCell} ${styles.heatmapSummaryHeaderCell} ${styles.heatmapTotalCostColumn}`}>
+                  {t('usage_stats.total_cost')}
+                </div>
                 {apiKeys.map((apiKey) => {
                   const apiKeyLabel = getAPIKeyLabel(apiKey);
+                  const rowTotal = rowTotals.get(apiKey) ?? { totalTokens: 0, totalCost: 0, costAvailable: true };
+                  const formattedTotalTokens = formatCompactNumber(rowTotal.totalTokens);
+                  const formattedTotalCost = formatUsd(rowTotal.totalCost);
+                  const apiKeyColumnLabel = t('usage_stats.analysis_heatmap_api_key');
+                  const summaryTooltipLines = [
+                    apiKeyLabel,
+                    `${t('usage_stats.total_tokens')}: ${formattedTotalTokens}`,
+                    `${t('usage_stats.total_cost')}: ${formattedTotalCost}`,
+                  ];
+                  const apiKeyAriaLabel = `${apiKeyColumnLabel}: ${apiKeyLabel}, ${summaryTooltipLines.slice(1).join(', ')}`;
+                  const totalTokensAriaLabel = `${t('usage_stats.total_tokens')}: ${formattedTotalTokens}, ${apiKeyColumnLabel}: ${apiKeyLabel}`;
+                  const totalCostAriaLabel = `${t('usage_stats.total_cost')}: ${formattedTotalCost}, ${apiKeyColumnLabel}: ${apiKeyLabel}`;
                   return (
                     <div key={apiKey} className={styles.heatmapRowContents}>
-                      <div className={`${styles.heatmapRowLabel} ${styles.heatmapTooltipTarget}`} data-full-name={apiKeyLabel}>
-                        <span className={styles.heatmapTruncatedLabel}>{apiKeyLabel}</span>
+                      <div
+                        className={`${styles.heatmapRowLabel} ${styles.heatmapKeyColumn}`}
+                        tabIndex={0}
+                        aria-label={apiKeyAriaLabel}
+                        onMouseEnter={(event) => showTooltip(summaryTooltipLines, event)}
+                        onMouseMove={(event) => showTooltip(summaryTooltipLines, event)}
+                        onMouseLeave={hideTooltip}
+                        onFocus={(event) => showTooltip(summaryTooltipLines, event)}
+                        onBlur={hideTooltip}
+                      >
+                        <span className={styles.heatmapKeyMarker} aria-hidden="true" />
+                        <span className={`${styles.heatmapTruncatedLabel} ${styles.heatmapKeyLabel}`}>{apiKeyLabel}</span>
                       </div>
                       {models.map((model) => {
                         const cell = cellMap.get(`${apiKey}\0${model}`);
@@ -1988,6 +2032,31 @@ function Heatmap({ cells, apiKeys, apiKeyLabels, models, loading, isDark }: { ce
                           </div>
                         );
                       })}
+                      <div
+                        className={`${styles.heatmapSummaryCell} ${styles.heatmapTotalTokensColumn}`}
+                        tabIndex={0}
+                        aria-label={totalTokensAriaLabel}
+                        onMouseEnter={(event) => showTooltip(summaryTooltipLines, event)}
+                        onMouseMove={(event) => showTooltip(summaryTooltipLines, event)}
+                        onMouseLeave={hideTooltip}
+                        onFocus={(event) => showTooltip(summaryTooltipLines, event)}
+                        onBlur={hideTooltip}
+                      >
+                        <span className={styles.heatmapTotalTokenValue}>{formattedTotalTokens}</span>
+                      </div>
+                      <div
+                        className={`${styles.heatmapSummaryCell} ${styles.heatmapTotalCostColumn}`}
+                        data-cost-available={rowTotal.costAvailable}
+                        tabIndex={0}
+                        aria-label={totalCostAriaLabel}
+                        onMouseEnter={(event) => showTooltip(summaryTooltipLines, event)}
+                        onMouseMove={(event) => showTooltip(summaryTooltipLines, event)}
+                        onMouseLeave={hideTooltip}
+                        onFocus={(event) => showTooltip(summaryTooltipLines, event)}
+                        onBlur={hideTooltip}
+                      >
+                        <span className={styles.heatmapTotalCostValue}>{formattedTotalCost}</span>
+                      </div>
                     </div>
                   );
                 })}
@@ -2020,7 +2089,7 @@ function Heatmap({ cells, apiKeys, apiKeyLabels, models, loading, isDark }: { ce
   );
 }
 
-export function AnalysisPanel({ analysis, loading, isDark, isMobile }: AnalysisPanelProps) {
+export function AnalysisPanel({ analysis, loading, latencyDiagnostics, latencyLoading = false, latencyError = '', isDark, isMobile }: AnalysisPanelProps) {
   const { t } = useTranslation();
   const tokenRows = useMemo(() => buildTokenUsageRows(analysis?.token_usage ?? [], analysis?.granularity ?? 'hourly'), [analysis]);
   const apiComposition = useMemo(() => takeMajorComposition(analysis?.api_key_composition ?? [], t('usage_stats.analysis_others')), [analysis, t]);
@@ -2042,7 +2111,7 @@ export function AnalysisPanel({ analysis, loading, isDark, isMobile }: AnalysisP
         <CostBreakdownCard breakdown={analysis?.cost_breakdown} rows={tokenRows} loading={loading} />
         <ModelEfficiencyCard rows={analysis?.model_efficiency ?? []} loading={loading} isDark={isDark} isMobile={isMobile} />
       </div>
-      <LatencyDiagnosticsCard diagnostics={analysis?.latency_diagnostics} loading={loading} isDark={isDark} isMobile={isMobile} />
+      <LatencyDiagnosticsCard diagnostics={latencyDiagnostics} loading={latencyLoading} error={latencyError} isDark={isDark} isMobile={isMobile} />
       <CompositionPanel tabs={compositionTabs} loading={loading} isDark={isDark} windowMinutes={analysisWindowMinutes} />
       <Heatmap cells={analysis?.heatmap?.cells ?? []} apiKeys={analysis?.heatmap?.api_keys ?? []} apiKeyLabels={analysis?.heatmap?.api_key_labels ?? {}} models={analysis?.heatmap?.models ?? []} loading={loading} isDark={isDark} />
     </div>

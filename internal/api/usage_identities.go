@@ -63,7 +63,7 @@ type usageIdentityResponse struct {
 	InputTokens                int64                          `json:"input_tokens"`
 	OutputTokens               int64                          `json:"output_tokens"`
 	ReasoningTokens            int64                          `json:"reasoning_tokens"`
-	CachedTokens               int64                          `json:"cached_tokens"`
+	CacheReadTokens            int64                          `json:"cache_read_tokens"`
 	TotalTokens                int64                          `json:"total_tokens"`
 	LastAggregatedUsageEventID string                         `json:"last_aggregated_usage_event_id"`
 	FirstUsedAt                *time.Time                     `json:"first_used_at,omitempty"`
@@ -247,7 +247,7 @@ func mapUsageIdentityResponse(item entities.UsageIdentity) usageIdentityResponse
 }
 
 func mapUsageIdentityResponseWithHealth(item entities.UsageIdentity, health *service.UsageCredentialHealthSnapshot) usageIdentityResponse {
-	// AI provider 的 identity 是 API Key，只在返回给前端时脱敏，数据库原值不改。
+	// AI Provider identity 是稳定 auth-index；响应不直接发布原始 LookupKey，OpenAI Compatibility 仅按 Issue #281 在 displayName 中保留脱敏 Key 片段。
 	identity := item.Identity
 	if item.AuthType == entities.UsageIdentityAuthTypeAIProvider {
 		identity = helper.RedactSensitiveValue(item.Identity)
@@ -289,7 +289,7 @@ func mapUsageIdentityResponseWithHealth(item entities.UsageIdentity, health *ser
 		InputTokens:                item.InputTokens,
 		OutputTokens:               item.OutputTokens,
 		ReasoningTokens:            item.ReasoningTokens,
-		CachedTokens:               item.CachedTokens,
+		CacheReadTokens:            item.CacheReadTokens,
 		TotalTokens:                item.TotalTokens,
 		LastAggregatedUsageEventID: strconv.FormatInt(item.LastAggregatedUsageEventID, 10),
 		FirstUsedAt:                item.FirstUsedAt,

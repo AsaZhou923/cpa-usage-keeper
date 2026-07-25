@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Interaction, Tooltip } from 'chart.js';
 import type { ChartData, ChartOptions, Plugin } from 'chart.js';
-import type { AnalysisResponse } from '@/lib/types';
+import type { AnalysisLatencyDiagnostics, AnalysisResponse } from '@/lib/types';
 
 type TokenAverageLinePluginOptions = {
   value: number;
@@ -125,9 +125,10 @@ const emptyAnalysis: AnalysisResponse = {
   auth_files_composition: [],
   ai_provider_composition: [],
   cost_breakdown: {
-    input_cost_usd: 0,
+    uncached_input_cost_usd: 0,
     output_cost_usd: 0,
-    cached_cost_usd: 0,
+    cache_read_cost_usd: 0,
+    cache_write_cost_usd: 0,
     total_cost_usd: 0,
     cost_available: true,
   },
@@ -137,16 +138,6 @@ const emptyAnalysis: AnalysisResponse = {
     api_key_labels: {},
     models: [],
     cells: [],
-  },
-  latency_diagnostics: {
-    points: [],
-    density: [],
-    total_points: 0,
-    sampled: false,
-    p95_ttft_ms: 0,
-    p95_latency_ms: 0,
-    max_ttft_ms: 0,
-    max_latency_ms: 0,
   },
 };
 
@@ -168,14 +159,15 @@ describe('AnalysisPanel token chart data', () => {
     vi.unstubAllGlobals();
   });
 
-  it('subtracts cached and reasoning tokens from displayed token series while keeping total tooltip values', () => {
+  it('splits cache read and write from input while keeping total tooltip values', () => {
     const analysis: AnalysisResponse = {
       ...emptyAnalysis,
       token_usage: [{
         bucket: '2026-05-28T01:00:00Z',
         input_tokens: 1000,
         output_tokens: 100,
-        cached_tokens: 600,
+        cache_read_tokens: 600,
+        cache_creation_tokens: 100,
         reasoning_tokens: 50,
         total_tokens: 1150,
         requests: 3,
@@ -187,8 +179,9 @@ describe('AnalysisPanel token chart data', () => {
     renderToStaticMarkup(<AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />);
 
     const datasets = chartCapture.barData?.datasets ?? [];
-    expect(datasets.find((dataset) => dataset.label === 'usage_stats.input_tokens')?.data).toEqual([400]);
-    expect(datasets.find((dataset) => dataset.label === 'usage_stats.cached_tokens')?.data).toEqual([600]);
+    expect(datasets.find((dataset) => dataset.label === 'usage_stats.input_tokens')?.data).toEqual([300]);
+    expect(datasets.find((dataset) => dataset.label === 'usage_stats.cache_read_tokens')?.data).toEqual([600]);
+    expect(datasets.find((dataset) => dataset.label === 'usage_stats.cache_creation_tokens')?.data).toEqual([100]);
     expect(datasets.find((dataset) => dataset.label === 'usage_stats.output_tokens')?.data).toEqual([50]);
     expect(datasets.find((dataset) => dataset.label === 'usage_stats.reasoning_tokens')?.data).toEqual([50]);
     expect(datasets.find((dataset) => dataset.label === 'usage_stats.total_cost')?.data).toEqual([0.0123]);
@@ -201,7 +194,7 @@ describe('AnalysisPanel token chart data', () => {
     expect(tooltipLabel?.({
       dataset: { label: 'usage_stats.input_tokens', tooltipData: [1000] },
       dataIndex: 0,
-      parsed: { y: 400 },
+      parsed: { y: 300 },
     } as never)).toBe('usage_stats.input_tokens: 1.00K');
     expect(tooltipLabel?.({
       dataset: { label: 'usage_stats.output_tokens', tooltipData: [100] },
@@ -227,7 +220,8 @@ describe('AnalysisPanel token chart data', () => {
           bucket: '2026-05-28T01:00:00Z',
           input_tokens: 100,
           output_tokens: 0,
-          cached_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
           reasoning_tokens: 0,
           total_tokens: 100,
           requests: 1,
@@ -238,7 +232,8 @@ describe('AnalysisPanel token chart data', () => {
           bucket: '2026-05-28T02:00:00Z',
           input_tokens: 0,
           output_tokens: 0,
-          cached_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
           reasoning_tokens: 0,
           total_tokens: 0,
           requests: 0,
@@ -249,7 +244,8 @@ describe('AnalysisPanel token chart data', () => {
           bucket: '2026-05-28T03:00:00Z',
           input_tokens: 400,
           output_tokens: 100,
-          cached_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
           reasoning_tokens: 0,
           total_tokens: 500,
           requests: 2,
@@ -287,7 +283,8 @@ describe('AnalysisPanel token chart data', () => {
         percent: 100,
         input_tokens: 700,
         output_tokens: 200,
-        cached_tokens: 50,
+        cache_read_tokens: 50,
+        cache_creation_tokens: 0,
         reasoning_tokens: 50,
         cost_usd: 0.42,
         cost_available: true,
@@ -300,7 +297,8 @@ describe('AnalysisPanel token chart data', () => {
         percent: 100,
         input_tokens: 700,
         output_tokens: 200,
-        cached_tokens: 50,
+        cache_read_tokens: 50,
+        cache_creation_tokens: 0,
         reasoning_tokens: 50,
         cost_usd: 0.42,
         cost_available: true,
@@ -363,7 +361,8 @@ describe('AnalysisPanel token chart data', () => {
         percent: 100,
         input_tokens: 700,
         output_tokens: 200,
-        cached_tokens: 50,
+        cache_read_tokens: 50,
+        cache_creation_tokens: 0,
         reasoning_tokens: 50,
         cost_usd: 0.42,
         cost_available: true,
@@ -401,7 +400,8 @@ describe('AnalysisPanel token chart data', () => {
         percent: 100,
         input_tokens: 700,
         output_tokens: 200,
-        cached_tokens: 50,
+        cache_read_tokens: 50,
+        cache_creation_tokens: 0,
         reasoning_tokens: 50,
         cost_usd: 0.42,
         cost_available: true,
@@ -427,7 +427,8 @@ describe('AnalysisPanel token chart data', () => {
           percent: 99.9,
           input_tokens: 700,
           output_tokens: 200,
-          cached_tokens: 50,
+          cache_read_tokens: 50,
+          cache_creation_tokens: 0,
           reasoning_tokens: 49,
           cost_usd: 0.42,
           cost_available: true,
@@ -440,7 +441,8 @@ describe('AnalysisPanel token chart data', () => {
           percent: 0.1,
           input_tokens: 1,
           output_tokens: 0,
-          cached_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
           reasoning_tokens: 0,
           cost_usd: 0,
           cost_available: true,
@@ -478,7 +480,8 @@ describe('AnalysisPanel token chart data', () => {
         percent: 100,
         input_tokens: 700,
         output_tokens: 200,
-        cached_tokens: 50,
+        cache_read_tokens: 50,
+        cache_creation_tokens: 0,
         reasoning_tokens: 50,
         cost_usd: 0.42,
         cost_available: true,
@@ -526,7 +529,8 @@ describe('AnalysisPanel token chart data', () => {
         percent: 100,
         input_tokens: 700,
         output_tokens: 200,
-        cached_tokens: 50,
+        cache_read_tokens: 50,
+        cache_creation_tokens: 0,
         reasoning_tokens: 50,
         cost_usd: 0.42,
         cost_available: true,
@@ -584,7 +588,8 @@ describe('AnalysisPanel token chart data', () => {
         percent: 100,
         input_tokens: 700,
         output_tokens: 200,
-        cached_tokens: 50,
+        cache_read_tokens: 50,
+        cache_creation_tokens: 0,
         reasoning_tokens: 50,
         cost_usd: 0.42,
         cost_available: true,
@@ -621,7 +626,8 @@ describe('AnalysisPanel token chart data', () => {
           percent: 75,
           input_tokens: 500,
           output_tokens: 200,
-          cached_tokens: 50,
+          cache_read_tokens: 50,
+          cache_creation_tokens: 0,
           reasoning_tokens: 0,
           cost_usd: 0.3,
           cost_available: true,
@@ -634,7 +640,8 @@ describe('AnalysisPanel token chart data', () => {
           percent: 25,
           input_tokens: 200,
           output_tokens: 50,
-          cached_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
           reasoning_tokens: 0,
           cost_usd: 0.1,
           cost_available: true,
@@ -665,7 +672,8 @@ describe('AnalysisPanel token chart data', () => {
         percent: 120,
         input_tokens: 900,
         output_tokens: 300,
-        cached_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         reasoning_tokens: 0,
         cost_usd: 0.3,
         cost_available: true,
@@ -689,7 +697,8 @@ describe('AnalysisPanel token chart data', () => {
         percent: 0,
         input_tokens: 0,
         output_tokens: 0,
-        cached_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         reasoning_tokens: 0,
         cost_usd: 0,
         cost_available: true,
@@ -727,32 +736,29 @@ describe('AnalysisPanel token chart data', () => {
   });
 
   it('renders latency diagnostics scatter before usage distribution', () => {
-    const analysis: AnalysisResponse = {
-      ...emptyAnalysis,
-      latency_diagnostics: {
-        total_points: 3,
-        sampled: false,
-        p95_ttft_ms: 300,
-        p95_latency_ms: 1400,
-        max_ttft_ms: 900,
-        max_latency_ms: 3600,
-        points: [
-          { ttft_ms: 120, latency_ms: 800 },
-          { ttft_ms: 300, latency_ms: 1400 },
-          { ttft_ms: 900, latency_ms: 3600 },
-        ],
-        density: [{
-          ttft_min_ms: 0,
-          ttft_max_ms: 400,
-          latency_min_ms: 0,
-          latency_max_ms: 1800,
-          count: 2,
-          intensity: 1,
-        }],
-      },
+    const latencyDiagnostics: AnalysisLatencyDiagnostics = {
+      total_points: 3,
+      sampled: false,
+      p95_ttft_ms: 300,
+      p95_latency_ms: 1400,
+      max_ttft_ms: 900,
+      max_latency_ms: 3600,
+      points: [
+        { ttft_ms: 120, latency_ms: 800 },
+        { ttft_ms: 300, latency_ms: 1400 },
+        { ttft_ms: 900, latency_ms: 3600 },
+      ],
+      density: [{
+        ttft_min_ms: 0,
+        ttft_max_ms: 400,
+        latency_min_ms: 0,
+        latency_max_ms: 1800,
+        count: 2,
+        intensity: 1,
+      }],
     };
 
-    const markup = renderToStaticMarkup(<AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />);
+    const markup = renderToStaticMarkup(<AnalysisPanel analysis={emptyAnalysis} loading={false} latencyDiagnostics={latencyDiagnostics} isDark={false} isMobile={false} />);
 
     expect(markup).toContain('usage_stats.analysis_latency_title');
     expect(markup.indexOf('usage_stats.analysis_latency_title')).toBeLessThan(markup.indexOf('usage_stats.analysis_composition_title'));
@@ -930,21 +936,18 @@ describe('AnalysisPanel token chart data', () => {
       ttft_ms: index + 1,
       latency_ms: (index + 1) * 2,
     }));
-    const analysis: AnalysisResponse = {
-      ...emptyAnalysis,
-      latency_diagnostics: {
-        total_points: points.length,
-        sampled: true,
-        p95_ttft_ms: 142_500,
-        p95_latency_ms: 285_000,
-        max_ttft_ms: 150_000,
-        max_latency_ms: 300_000,
-        points,
-        density: [],
-      },
+    const latencyDiagnostics: AnalysisLatencyDiagnostics = {
+      total_points: points.length,
+      sampled: true,
+      p95_ttft_ms: 142_500,
+      p95_latency_ms: 285_000,
+      max_ttft_ms: 150_000,
+      max_latency_ms: 300_000,
+      points,
+      density: [],
     };
 
-    expect(() => renderToStaticMarkup(<AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />)).not.toThrow();
+    expect(() => renderToStaticMarkup(<AnalysisPanel analysis={emptyAnalysis} loading={false} latencyDiagnostics={latencyDiagnostics} isDark={false} isMobile={false} />)).not.toThrow();
     const latencyScatterIndex = chartCapture.scatterData.findIndex((data) => data.datasets[0]?.label === 'usage_stats.analysis_latency_samples');
     expect(latencyScatterIndex).toBeGreaterThanOrEqual(0);
     const latencyScatterOptions = chartCapture.scatterOptions[latencyScatterIndex];
@@ -953,28 +956,25 @@ describe('AnalysisPanel token chart data', () => {
   });
 
   it('uses theme-aware lighter colors for latency diagnostics', () => {
-    const analysis: AnalysisResponse = {
-      ...emptyAnalysis,
-      latency_diagnostics: {
-        total_points: 1,
-        sampled: false,
-        p95_ttft_ms: 240,
-        p95_latency_ms: 1200,
-        max_ttft_ms: 240,
-        max_latency_ms: 1200,
-        points: [{ ttft_ms: 240, latency_ms: 1200 }],
-        density: [{
-          ttft_min_ms: 100,
-          ttft_max_ms: 300,
-          latency_min_ms: 800,
-          latency_max_ms: 1400,
-          count: 1,
-          intensity: 1,
-        }],
-      },
+    const latencyDiagnostics: AnalysisLatencyDiagnostics = {
+      total_points: 1,
+      sampled: false,
+      p95_ttft_ms: 240,
+      p95_latency_ms: 1200,
+      max_ttft_ms: 240,
+      max_latency_ms: 1200,
+      points: [{ ttft_ms: 240, latency_ms: 1200 }],
+      density: [{
+        ttft_min_ms: 100,
+        ttft_max_ms: 300,
+        latency_min_ms: 800,
+        latency_max_ms: 1400,
+        count: 1,
+        intensity: 1,
+      }],
     };
 
-    renderToStaticMarkup(<AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />);
+    renderToStaticMarkup(<AnalysisPanel analysis={emptyAnalysis} loading={false} latencyDiagnostics={latencyDiagnostics} isDark={false} isMobile={false} />);
     const lightScatterIndex = chartCapture.scatterData.findIndex((data) => data.datasets[0]?.label === 'usage_stats.analysis_latency_samples');
     const lightData = chartCapture.scatterData[lightScatterIndex];
     const lightOptions = chartCapture.scatterOptions[lightScatterIndex];
@@ -982,7 +982,7 @@ describe('AnalysisPanel token chart data', () => {
     chartCapture.scatterData = [];
     chartCapture.scatterOptions = [];
     chartCapture.scatterPlugins = [];
-    renderToStaticMarkup(<AnalysisPanel analysis={analysis} loading={false} isDark isMobile={false} />);
+    renderToStaticMarkup(<AnalysisPanel analysis={emptyAnalysis} loading={false} latencyDiagnostics={latencyDiagnostics} isDark isMobile={false} />);
     const darkScatterIndex = chartCapture.scatterData.findIndex((data) => data.datasets[0]?.label === 'usage_stats.analysis_latency_samples');
     const darkData = chartCapture.scatterData[darkScatterIndex];
     const darkOptions = chartCapture.scatterOptions[darkScatterIndex];
@@ -1013,7 +1013,7 @@ describe('AnalysisPanel token chart data', () => {
     expect(darkPluginColors).not.toHaveProperty('guideText');
   });
 
-  it('renders cost breakdown with total beside blended rate, segment percentages and sparkline', () => {
+  it('renders cost breakdown with total tokens, total cost, blended rate and segment percentages', () => {
     const analysis: AnalysisResponse = {
       ...emptyAnalysis,
       timezone: 'Asia/Shanghai',
@@ -1021,7 +1021,8 @@ describe('AnalysisPanel token chart data', () => {
         bucket: '2026-05-28T01:00:00Z',
         input_tokens: 1_000_000,
         output_tokens: 1_000_000,
-        cached_tokens: 500_000,
+        cache_read_tokens: 500_000,
+        cache_creation_tokens: 100_000,
         reasoning_tokens: 100_000,
         total_tokens: 3_000_000,
         requests: 10,
@@ -1029,9 +1030,10 @@ describe('AnalysisPanel token chart data', () => {
         cost_available: true,
       }],
       cost_breakdown: {
-        input_cost_usd: 1,
+        uncached_input_cost_usd: 1,
         output_cost_usd: 3,
-        cached_cost_usd: 2,
+        cache_read_cost_usd: 1.5,
+        cache_write_cost_usd: 0.5,
         total_cost_usd: 6,
         cost_available: true,
       },
@@ -1040,35 +1042,30 @@ describe('AnalysisPanel token chart data', () => {
     const markup = renderToStaticMarkup(<AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />);
 
     expect(markup).not.toContain('costHeaderTotal');
-    expect(markup).toContain('costRateMetric');
     expect(markup).toContain('usage_stats.analysis_cost_per_million_tokens');
     expect(markup).toContain('usage_stats.analysis_blended_rate');
-    expect(markup.indexOf('usage_stats.total_cost')).toBeLessThan(markup.indexOf('usage_stats.analysis_cost_per_million_tokens'));
     expect(markup).toContain('--cost-segment-color:#2563eb');
     expect(markup).toContain('--cost-segment-color:#16a34a');
     expect(markup).toContain('--cost-segment-color:#d97706');
+    expect(markup).toContain('--cost-segment-color:#e11d48');
     expect(markup).toContain('background-color:#2563eb');
     expect(markup).toContain('background-color:#16a34a');
     expect(markup).toContain('background-color:#d97706');
+    expect(markup).toContain('background-color:#e11d48');
     expect(markup).not.toContain('filter:saturate');
     expect(markup).toContain('usage_stats.analysis_cost_share: 16.67%');
     expect(markup).toContain('usage_stats.input_tokens · usage_stats.analysis_cost_share');
     expect(markup).not.toContain('title="usage_stats.input_tokens · usage_stats.analysis_cost_share');
-    expect(markup).toContain('usage_stats.analysis_cost_per_million_tokens: $4.00');
-    expect(markup).toContain('usage_stats.total_tokens: 500.00K');
-    expect(markup).toContain('usage_stats.analysis_cost_rate_sparkline_hint');
-    expect(markup).toContain('usage_stats.analysis_cost_per_million_tokens: $2.00');
-    expect(markup).toContain('usage_stats.total_cost: $6.00');
-    expect(markup).toContain('usage_stats.total_tokens: 3.00M');
+    expect(markup).toContain('usage_stats.analysis_cost_per_million_tokens: $2.50');
+    expect(markup).toContain('usage_stats.total_tokens: 400.00K');
+    expect(markup).toContain('<span>usage_stats.total_tokens</span><strong>3.00M</strong>');
     expect(chartCapture.barData?.labels).toEqual(['10:00']);
-    expect(markup).toContain('aria-label="10:00, usage_stats.analysis_cost_per_million_tokens: $2.00, usage_stats.total_cost: $6.00, usage_stats.total_tokens: 3.00M"');
-    expect(markup).toContain('class="_costRateSparkBar_');
-    expect(markup).toContain('tabindex="0"');
     expect(markup).toContain('$6.00');
     expect(markup).toContain('$2.00');
     expect(markup).toContain('16.67%');
     expect(markup).toContain('50.00%');
-    expect(markup).toContain('33.33%');
+    expect(markup).toContain('25.00%');
+    expect(markup).toContain('8.33%');
   });
 
   it('renders model efficiency as cost per million total tokens against total tokens', () => {
@@ -1080,42 +1077,45 @@ describe('AnalysisPanel token chart data', () => {
           requests: 4,
           input_tokens: 1000,
           output_tokens: 300,
-          cached_tokens: 100,
+          cache_read_tokens: 100,
+          cache_creation_tokens: 0,
           reasoning_tokens: 20,
           total_tokens: 2_000_000,
           cost_usd: 2,
           cost_available: true,
           cost_per_request_usd: 0.5,
           output_tokens_per_request: 80,
-          cache_rate: 0.1,
+          cache_read_rate: 0.1,
         },
         {
           model: 'claude-sonnet',
           requests: 100,
           input_tokens: 1200,
           output_tokens: 500,
-          cached_tokens: 200,
+          cache_read_tokens: 200,
+          cache_creation_tokens: 0,
           reasoning_tokens: 50,
           total_tokens: 3_000_000,
           cost_usd: 4.5,
           cost_available: true,
           cost_per_request_usd: 0.5,
           output_tokens_per_request: 55,
-          cache_rate: 0.1,
+          cache_read_rate: 0.1,
         },
         {
           model: 'gemini-pro',
           requests: 10000,
           input_tokens: 1500,
           output_tokens: 650,
-          cached_tokens: 300,
+          cache_read_tokens: 300,
+          cache_creation_tokens: 0,
           reasoning_tokens: 60,
           total_tokens: 4_000_000,
           cost_usd: 8,
           cost_available: true,
           cost_per_request_usd: 0.5,
           output_tokens_per_request: 40,
-          cache_rate: 0.1,
+          cache_read_rate: 0.1,
         },
       ],
     };
@@ -1179,28 +1179,30 @@ describe('AnalysisPanel token chart data', () => {
           requests: 4,
           input_tokens: 1000,
           output_tokens: 300,
-          cached_tokens: 100,
+          cache_read_tokens: 100,
+          cache_creation_tokens: 0,
           reasoning_tokens: 20,
           total_tokens: 2_000_000,
           cost_usd: 2,
           cost_available: true,
           cost_per_request_usd: 0.5,
           output_tokens_per_request: 80,
-          cache_rate: 0.1,
+          cache_read_rate: 0.1,
         },
         {
           model: 'claude-sonnet',
           requests: 6,
           input_tokens: 1100,
           output_tokens: 400,
-          cached_tokens: 120,
+          cache_read_tokens: 120,
+          cache_creation_tokens: 0,
           reasoning_tokens: 30,
           total_tokens: 2_000_000,
           cost_usd: 2,
           cost_available: true,
           cost_per_request_usd: 0.333,
           output_tokens_per_request: 72,
-          cache_rate: 0.12,
+          cache_read_rate: 0.12,
         },
       ],
     };
@@ -1261,14 +1263,15 @@ describe('AnalysisPanel token chart data', () => {
           requests: 4,
           input_tokens: 1000,
           output_tokens: 300,
-          cached_tokens: 100,
+          cache_read_tokens: 100,
+          cache_creation_tokens: 0,
           reasoning_tokens: 20,
           total_tokens: 2_000_000,
           cost_usd: 2,
           cost_available: true,
           cost_per_request_usd: 0.5,
           output_tokens_per_request: 80,
-          cache_rate: 0.1,
+          cache_read_rate: 0.1,
         },
       ],
     };
@@ -1322,14 +1325,15 @@ describe('AnalysisPanel token chart data', () => {
           requests: 4,
           input_tokens: 1000,
           output_tokens: 300,
-          cached_tokens: 100,
+          cache_read_tokens: 100,
+          cache_creation_tokens: 0,
           reasoning_tokens: 20,
           total_tokens: 2_000_000,
           cost_usd: 2,
           cost_available: true,
           cost_per_request_usd: 0.5,
           output_tokens_per_request: 80,
-          cache_rate: 0.1,
+          cache_read_rate: 0.1,
         },
       ],
     };
@@ -1381,7 +1385,8 @@ describe('AnalysisPanel token chart data', () => {
         bucket: '2026-05-28T01:00:00Z',
         input_tokens: 1000,
         output_tokens: 100,
-        cached_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         reasoning_tokens: 0,
         total_tokens: 1100,
         requests: 3,
@@ -1394,7 +1399,8 @@ describe('AnalysisPanel token chart data', () => {
         requests: 3,
         input_tokens: 1000,
         output_tokens: 100,
-        cached_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         reasoning_tokens: 0,
         total_tokens: 1100,
         percent: 100,
@@ -1406,19 +1412,21 @@ describe('AnalysisPanel token chart data', () => {
         requests: 3,
         input_tokens: 1000,
         output_tokens: 100,
-        cached_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         reasoning_tokens: 0,
         total_tokens: 1_000_000,
         cost_usd: 0,
         cost_available: false,
         cost_per_request_usd: 0,
         output_tokens_per_request: 33.33,
-        cache_rate: 0,
+        cache_read_rate: 0,
       }],
       cost_breakdown: {
-        input_cost_usd: 0,
+        uncached_input_cost_usd: 0,
         output_cost_usd: 0,
-        cached_cost_usd: 0,
+        cache_read_cost_usd: 0,
+        cache_write_cost_usd: 0,
         total_cost_usd: 0,
         cost_available: false,
       },
@@ -1431,7 +1439,8 @@ describe('AnalysisPanel token chart data', () => {
           model: 'unpriced-model',
           input_tokens: 1000,
           output_tokens: 100,
-          cached_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
           reasoning_tokens: 0,
           total_tokens: 1100,
           requests: 3,
@@ -1466,7 +1475,8 @@ describe('AnalysisPanel token chart data', () => {
         bucket: '2026-05-28T01:00:00Z',
         input_tokens: 1000,
         output_tokens: 100,
-        cached_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         reasoning_tokens: 0,
         total_tokens: 1100,
         requests: 3,
@@ -1474,9 +1484,10 @@ describe('AnalysisPanel token chart data', () => {
         cost_available: false,
       }],
       cost_breakdown: {
-        input_cost_usd: 9,
+        uncached_input_cost_usd: 9,
         output_cost_usd: 0,
-        cached_cost_usd: 0,
+        cache_read_cost_usd: 0,
+        cache_write_cost_usd: 0,
         total_cost_usd: 9,
         cost_available: false,
       },
@@ -1510,7 +1521,8 @@ describe('AnalysisPanel token chart data', () => {
           input_tokens: 1000,
           output_tokens: 200,
           reasoning_tokens: 30,
-          cached_tokens: 100,
+          cache_read_tokens: 100,
+          cache_creation_tokens: 0,
           total_tokens: 1330,
           requests: 3,
           cost_usd: 0.1234,
@@ -1555,7 +1567,8 @@ describe('AnalysisPanel token chart data', () => {
             input_tokens: 0,
             output_tokens: 0,
             reasoning_tokens: 0,
-            cached_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
             total_tokens: 0,
             requests: 0,
             cost_usd: 0,
@@ -1568,7 +1581,8 @@ describe('AnalysisPanel token chart data', () => {
             input_tokens: 1000,
             output_tokens: 0,
             reasoning_tokens: 0,
-            cached_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
             total_tokens: 1000,
             requests: 1,
             cost_usd: 0,

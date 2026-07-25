@@ -40,36 +40,36 @@ type usageEventFilterOptionsResponse struct {
 }
 
 type usageEventPayload struct {
-	ID              string                 `json:"id,omitempty"`
-	Timestamp       string                 `json:"timestamp"`
-	APIKey          string                 `json:"api_key,omitempty"`
-	Model           string                 `json:"model"`
-	ModelAlias      string                 `json:"model_alias,omitempty"`
-	ReasoningEffort string                 `json:"reasoning_effort,omitempty"`
-	ServiceTier     string                 `json:"service_tier,omitempty"`
-	ExecutorType    string                 `json:"executor_type,omitempty"`
-	Endpoint        string                 `json:"endpoint,omitempty"`
-	Source          string                 `json:"source"`
-	SourceRaw       string                 `json:"source_raw,omitempty"`
-	SourceType      string                 `json:"source_type,omitempty"`
-	AuthIndex       string                 `json:"auth_index,omitempty"`
-	RequestID       string                 `json:"request_id,omitempty"`
-	IsDelete        bool                   `json:"isDelete,omitempty"`
-	Failed          bool                   `json:"failed"`
-	LatencyMS       int64                  `json:"latency_ms"`
-	TTFTMS          *int64                 `json:"ttft_ms,omitempty"`
-	SpeedTPS        *float64               `json:"speed_tps,omitempty"`
-	Tokens          usageEventTokenPayload `json:"tokens"`
-	CostUSD         float64                `json:"cost_usd"`
-	CostAvailable   bool                   `json:"cost_available"`
-	PricingStyle    string                 `json:"pricing_style,omitempty"`
+	ID                  string                 `json:"id,omitempty"`
+	Timestamp           string                 `json:"timestamp"`
+	APIKey              string                 `json:"api_key,omitempty"`
+	Model               string                 `json:"model"`
+	ModelAlias          string                 `json:"model_alias,omitempty"`
+	ReasoningEffort     string                 `json:"reasoning_effort,omitempty"`
+	ServiceTier         string                 `json:"service_tier,omitempty"`
+	ResponseServiceTier string                 `json:"response_service_tier,omitempty"`
+	ExecutorType        string                 `json:"executor_type,omitempty"`
+	Endpoint            string                 `json:"endpoint,omitempty"`
+	Source              string                 `json:"source"`
+	SourceRaw           string                 `json:"source_raw,omitempty"`
+	SourceType          string                 `json:"source_type,omitempty"`
+	AuthIndex           string                 `json:"auth_index,omitempty"`
+	RequestID           string                 `json:"request_id,omitempty"`
+	IsDelete            bool                   `json:"isDelete,omitempty"`
+	Failed              bool                   `json:"failed"`
+	LatencyMS           int64                  `json:"latency_ms"`
+	TTFTMS              *int64                 `json:"ttft_ms,omitempty"`
+	SpeedTPS            *float64               `json:"speed_tps,omitempty"`
+	Tokens              usageEventTokenPayload `json:"tokens"`
+	CostUSD             float64                `json:"cost_usd"`
+	CostAvailable       bool                   `json:"cost_available"`
+	PricingStyle        string                 `json:"pricing_style,omitempty"`
 }
 
 type usageEventTokenPayload struct {
 	InputTokens         int64 `json:"input_tokens"`
 	OutputTokens        int64 `json:"output_tokens"`
 	ReasoningTokens     int64 `json:"reasoning_tokens"`
-	CachedTokens        int64 `json:"cached_tokens"`
 	CacheReadTokens     int64 `json:"cache_read_tokens"`
 	CacheCreationTokens int64 `json:"cache_creation_tokens"`
 	TotalTokens         int64 `json:"total_tokens"`
@@ -108,6 +108,7 @@ type usageEventExportPayload struct {
 	ModelAlias          string   `json:"model_alias"`
 	ReasoningEffort     string   `json:"reasoning_effort"`
 	ServiceTier         string   `json:"service_tier"`
+	ResponseServiceTier string   `json:"response_service_tier"`
 	ExecutorType        string   `json:"executor_type"`
 	Result              string   `json:"result"`
 	Endpoint            string   `json:"endpoint"`
@@ -117,15 +118,16 @@ type usageEventExportPayload struct {
 	InputTokens         int64    `json:"input_tokens"`
 	OutputTokens        int64    `json:"output_tokens"`
 	ReasoningTokens     int64    `json:"reasoning_tokens"`
-	CachedTokens        int64    `json:"cached_tokens"`
 	CacheReadTokens     int64    `json:"cache_read_tokens"`
 	CacheCreationTokens int64    `json:"cache_creation_tokens"`
-	CacheRate           *float64 `json:"cache_rate"`
+	CacheReadRate       *float64 `json:"cache_read_rate"`
 	TotalTokens         int64    `json:"total_tokens"`
 	CostUSD             float64  `json:"cost_usd"`
 }
 
 type usageEventStreamFunc func(func(servicedto.UsageEventRecord) error) error
+
+const usageEventsExportMaxConcurrency = 2
 
 func registerUsageEventsRoute(
 	router gin.IRoutes,
@@ -136,6 +138,8 @@ func registerUsageEventsRoute(
 	requestLogDownloadTokens *requestLogDownloadTokenStore,
 	requestLogAccessEnabled bool,
 ) {
+	exportSlots := make(chan struct{}, usageEventsExportMaxConcurrency)
+
 	router.GET("/usage/events/filters/models", func(c *gin.Context) {
 		models, err := loadUsageEventModelFilterOptions(c, usageProvider, servicedto.UsageFilter{})
 		if err != nil {
@@ -162,7 +166,7 @@ func registerUsageEventsRoute(
 
 		filter, err := parseUsageFilterQuery(c.Request, timeutil.NormalizeStorageTime(time.Now()))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeUsageFilterParseError(c, err)
 			return
 		}
 		if err := applyUsageEventsSourceFilter(&filter); err != nil {
@@ -256,11 +260,18 @@ func registerUsageEventsRoute(
 
 		filter, err := parseUsageFilterQuery(c.Request, timeutil.NormalizeStorageTime(time.Now()))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeUsageFilterParseError(c, err)
 			return
 		}
 		if err := applyUsageEventsSourceFilter(&filter); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		select {
+		case exportSlots <- struct{}{}:
+			defer func() { <-exportSlots }()
+		default:
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "usage events export capacity is full"})
 			return
 		}
 		filter.Limit = 0
@@ -400,32 +411,32 @@ func buildUsageEventsPayload(rows []servicedto.UsageEventRecord, resolver usageI
 			id = strconv.FormatInt(row.ID, 10)
 		}
 		payload = append(payload, usageEventPayload{
-			ID:              id,
-			Timestamp:       timeutil.FormatStorageTime(row.Timestamp),
-			APIKey:          usageEventAPIKeyLabel(row.APIGroupKey, apiKeyInfos),
-			Model:           row.Model,
-			ModelAlias:      strings.TrimSpace(row.ModelAlias),
-			ReasoningEffort: strings.TrimSpace(row.ReasoningEffort),
-			ServiceTier:     strings.TrimSpace(row.ServiceTier),
-			ExecutorType:    strings.TrimSpace(row.ExecutorType),
-			Endpoint:        strings.TrimSpace(row.Endpoint),
-			Source:          source,
-			SourceType:      identity.Type,
-			AuthIndex:       row.AuthIndex,
-			RequestID:       strings.TrimSpace(row.RequestID),
-			IsDelete:        isDelete,
-			Failed:          row.Failed,
-			LatencyMS:       row.LatencyMS,
-			TTFTMS:          row.TTFTMS,
-			SpeedTPS:        usageEventSpeedTPS(row),
-			CostUSD:         row.CostUSD,
-			CostAvailable:   row.CostAvailable,
-			PricingStyle:    strings.TrimSpace(row.PricingStyle),
+			ID:                  id,
+			Timestamp:           timeutil.FormatStorageTime(row.Timestamp),
+			APIKey:              usageEventAPIKeyLabel(row.APIGroupKey, apiKeyInfos),
+			Model:               row.Model,
+			ModelAlias:          strings.TrimSpace(row.ModelAlias),
+			ReasoningEffort:     strings.TrimSpace(row.ReasoningEffort),
+			ServiceTier:         strings.TrimSpace(row.ServiceTier),
+			ResponseServiceTier: strings.TrimSpace(row.ResponseServiceTier),
+			ExecutorType:        strings.TrimSpace(row.ExecutorType),
+			Endpoint:            strings.TrimSpace(row.Endpoint),
+			Source:              source,
+			SourceType:          identity.Type,
+			AuthIndex:           row.AuthIndex,
+			RequestID:           strings.TrimSpace(row.RequestID),
+			IsDelete:            isDelete,
+			Failed:              row.Failed,
+			LatencyMS:           row.LatencyMS,
+			TTFTMS:              row.TTFTMS,
+			SpeedTPS:            usageEventSpeedTPS(row),
+			CostUSD:             row.CostUSD,
+			CostAvailable:       row.CostAvailable,
+			PricingStyle:        strings.TrimSpace(row.PricingStyle),
 			Tokens: usageEventTokenPayload{
 				InputTokens:         row.InputTokens,
 				OutputTokens:        row.OutputTokens,
 				ReasoningTokens:     row.ReasoningTokens,
-				CachedTokens:        row.CachedTokens,
 				CacheReadTokens:     row.CacheReadTokens,
 				CacheCreationTokens: row.CacheCreationTokens,
 				TotalTokens:         row.TotalTokens,
@@ -496,6 +507,7 @@ func buildUsageEventExportPayload(row servicedto.UsageEventRecord, resolver usag
 		ModelAlias:          strings.TrimSpace(row.ModelAlias),
 		ReasoningEffort:     strings.TrimSpace(row.ReasoningEffort),
 		ServiceTier:         strings.TrimSpace(row.ServiceTier),
+		ResponseServiceTier: strings.TrimSpace(row.ResponseServiceTier),
 		ExecutorType:        strings.TrimSpace(row.ExecutorType),
 		Result:              result,
 		Endpoint:            strings.TrimSpace(row.Endpoint),
@@ -505,33 +517,28 @@ func buildUsageEventExportPayload(row servicedto.UsageEventRecord, resolver usag
 		InputTokens:         row.InputTokens,
 		OutputTokens:        row.OutputTokens,
 		ReasoningTokens:     row.ReasoningTokens,
-		CachedTokens:        row.CachedTokens,
 		CacheReadTokens:     row.CacheReadTokens,
 		CacheCreationTokens: row.CacheCreationTokens,
-		CacheRate:           usageEventCacheRate(row),
+		CacheReadRate:       usageEventCacheReadRate(row),
 		TotalTokens:         row.TotalTokens,
 		CostUSD:             row.CostUSD,
 	}
 }
 
 func usageEventSpeedTPS(row servicedto.UsageEventRecord) *float64 {
-	visibleOutputTokens := row.OutputTokens - row.ReasoningTokens
-	if visibleOutputTokens < 0 {
-		visibleOutputTokens = 0
-	}
-	if row.TTFTMS == nil || *row.TTFTMS <= 0 || row.LatencyMS <= *row.TTFTMS || visibleOutputTokens <= 1 {
+	if row.TTFTMS == nil || *row.TTFTMS <= 0 || row.LatencyMS <= *row.TTFTMS || row.OutputTokens <= 0 {
 		return nil
 	}
-	// Speed 只衡量首字后可见输出 token 的平均生成速度，避免把等待首字的时间重复计入。
-	speed := float64(visibleOutputTokens-1) / (float64(row.LatencyMS-*row.TTFTMS) / 1000)
+	// Speed 使用完整 output_tokens 除以首字后的耗时，保持请求事件口径简单一致。
+	speed := float64(row.OutputTokens) / (float64(row.LatencyMS-*row.TTFTMS) / 1000)
 	return &speed
 }
 
-func usageEventCacheRate(row servicedto.UsageEventRecord) *float64 {
+func usageEventCacheReadRate(row servicedto.UsageEventRecord) *float64 {
 	if row.InputTokens <= 0 {
 		return nil
 	}
-	rate := float64(row.CachedTokens) / float64(row.InputTokens) * 100
+	rate := float64(row.CacheReadTokens) / float64(row.InputTokens) * 100
 	return &rate
 }
 
@@ -548,6 +555,7 @@ var usageEventsExportCSVHeader = []string{
 	"model_alias",
 	"reasoning_effort",
 	"service_tier",
+	"response_service_tier",
 	"executor_type",
 	"result",
 	"endpoint",
@@ -557,10 +565,9 @@ var usageEventsExportCSVHeader = []string{
 	"input_tokens",
 	"output_tokens",
 	"reasoning_tokens",
-	"cached_tokens",
 	"cache_read_tokens",
 	"cache_creation_tokens",
-	"cache_rate",
+	"cache_read_rate",
 	"total_tokens",
 	"cost_usd",
 }
@@ -742,6 +749,7 @@ func usageEventExportCSVRecord(event usageEventExportPayload) []string {
 		event.ModelAlias,
 		event.ReasoningEffort,
 		event.ServiceTier,
+		event.ResponseServiceTier,
 		event.ExecutorType,
 		event.Result,
 		event.Endpoint,
@@ -751,10 +759,9 @@ func usageEventExportCSVRecord(event usageEventExportPayload) []string {
 		strconv.FormatInt(event.InputTokens, 10),
 		strconv.FormatInt(event.OutputTokens, 10),
 		strconv.FormatInt(event.ReasoningTokens, 10),
-		strconv.FormatInt(event.CachedTokens, 10),
 		strconv.FormatInt(event.CacheReadTokens, 10),
 		strconv.FormatInt(event.CacheCreationTokens, 10),
-		formatOptionalFloat64(event.CacheRate),
+		formatOptionalFloat64(event.CacheReadRate),
 		strconv.FormatInt(event.TotalTokens, 10),
 		strconv.FormatFloat(event.CostUSD, 'f', -1, 64),
 	}

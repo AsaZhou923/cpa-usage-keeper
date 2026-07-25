@@ -10,25 +10,27 @@ import {
   fetchKeyOverviewUsageEvents,
   fetchKeyOverviewUsageIdentitiesPage,
   fetchKeyOverviewUsageQuotaCache,
+  isUsageRangeBoundsConflict,
   logout,
   type UsageEventsExportFormat,
 } from '@/lib/api';
-import type { AuthSessionAPIKeySummary, KeyOverviewTimeRange, OverviewRealtimeBlock, OverviewRealtimeWindow, UsageEvent, UsageOverviewResponse, UsageSourceFilterOption } from '@/lib/types';
+import type { AuthSessionAPIKeySummary, OverviewRealtimeBlock, OverviewRealtimeWindow, UsageCustomRange, UsageEvent, UsageOverviewResponse, UsageSourceFilterOption, UsageTimeRange } from '@/lib/types';
 import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
-import { Select } from '@/components/ui/Select';
 import { IconRefreshCw } from '@/components/ui/icons';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
-import { useThemeStore } from '@/stores';
+import { buildUsageStatsQueryKey, useThemeStore } from '@/stores';
 import {
-  DailyAveragePanel,
   OverviewRealtimePanel,
-  ServiceHealthCard,
+  RecentActivityPanel,
   StatCards,
   AuthFileCredentialsSection,
   CredentialProviderFilterBar,
+  TimeRangeControl,
   useCredentialsTabData,
+  useRecentActivityWindow,
   useSparklines,
+  useUsageActivityData,
 } from '@/components/usage';
 import {
   RequestEventsDetailsCard,
@@ -38,15 +40,17 @@ import {
 } from '@/components/usage/RequestEventsDetailsCard';
 import type { UsageOverviewPayload } from '@/components/usage/hooks/useUsageData';
 import { BrandLink } from '@/components/BrandLink';
-import { getCurrentOverviewUsage, getDailyAveragePanelUsage, getOverviewDisplayLoading, isDailyAverageRange } from '@/utils/usage/overview';
+import { getCurrentOverviewUsage, getDailyAverageCardUsage, getOverviewDisplayLoading, isDailyAverageRange } from '@/utils/usage/overview';
+import { clampStoredUsageRangeStateToCurrentBounds, parseStoredUsageRangeState, resolveUsageRangeRecoveryTimeZone, serializeUsageRangeState, type StoredUsageRangeState } from '@/utils/usage/customRange';
+import { buildUsageRangeQuery } from '@/utils/usage/rangeQuery';
 import type { Theme } from '@/types';
-import { formatTokyoClock } from '@/utils/time';
+import { MONITORING_TIME_ZONE } from '@/utils/time';
 import styles from './KeyOverviewPage.module.scss';
 
 const KEY_OVERVIEW_RANGE_STORAGE_KEY = 'cli-proxy-key-overview-range-v1';
 const KEY_OVERVIEW_TAB_STORAGE_KEY = 'cli-proxy-key-overview-tab-v1';
 const OVERVIEW_REALTIME_WINDOW_STORAGE_KEY = 'cli-proxy-usage-overview-realtime-window-v1';
-const DEFAULT_TIME_RANGE: KeyOverviewTimeRange = '8h';
+const DEFAULT_TIME_RANGE: UsageTimeRange = 'today';
 const DEFAULT_REALTIME_WINDOW: OverviewRealtimeWindow = '15m';
 const KEY_OVERVIEW_REALTIME_VISIBLE_DIMENSIONS = ['models'] as const;
 const REFRESH_THROTTLE_MS = 1_000;
@@ -64,34 +68,18 @@ const REQUEST_EVENTS_DEFAULT_PAGE_SIZE = 100;
 const ALL_REQUEST_EVENTS_FILTER = '__all__';
 const KEY_REQUEST_EVENT_COLUMN_IDS = REQUEST_EVENT_COLUMN_IDS.filter((columnId) => columnId !== 'api_key');
 
-const TIME_RANGE_OPTIONS: ReadonlyArray<{ value: KeyOverviewTimeRange; labelKey: string }> = [
-  { value: '4h', labelKey: 'usage_stats.range_4h' },
-  { value: '8h', labelKey: 'usage_stats.range_8h' },
-  { value: '12h', labelKey: 'usage_stats.range_12h' },
-  { value: '24h', labelKey: 'usage_stats.range_24h' },
-  { value: 'today', labelKey: 'usage_stats.range_today' },
-  { value: 'yesterday', labelKey: 'usage_stats.range_yesterday' },
-  { value: '7d', labelKey: 'usage_stats.range_7d' },
-  { value: '30d', labelKey: 'usage_stats.range_30d' },
-];
-
 const THEME_OPTIONS: ReadonlyArray<{ value: Theme; labelKey: string }> = [
   { value: 'white', labelKey: 'usage_stats.theme_light' },
   { value: 'dark', labelKey: 'usage_stats.theme_dark' },
   { value: 'auto', labelKey: 'usage_stats.theme_auto' },
 ];
 
-const isKeyOverviewTimeRange = (value: unknown): value is KeyOverviewTimeRange => (
-  value === '4h' || value === '8h' || value === '12h' || value === '24h' || value === 'today' || value === 'yesterday' || value === '7d' || value === '30d'
-);
-
-const loadTimeRange = (): KeyOverviewTimeRange => {
+const loadTimeRange = (): StoredUsageRangeState => {
   try {
-    if (typeof localStorage === 'undefined') return DEFAULT_TIME_RANGE;
-    const raw = localStorage.getItem(KEY_OVERVIEW_RANGE_STORAGE_KEY);
-    return isKeyOverviewTimeRange(raw) ? raw : DEFAULT_TIME_RANGE;
+    if (typeof localStorage === 'undefined') return { range: DEFAULT_TIME_RANGE };
+    return parseStoredUsageRangeState(localStorage.getItem(KEY_OVERVIEW_RANGE_STORAGE_KEY), { nowMs: Date.now() });
   } catch {
-    return DEFAULT_TIME_RANGE;
+    return { range: DEFAULT_TIME_RANGE };
   }
 };
 
@@ -243,16 +231,16 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
   const isDark = resolvedTheme === 'dark';
   const setTheme = useThemeStore((state) => state.setTheme);
   const [activeTab, setActiveTab] = useState<KeyOverviewTab>(loadKeyOverviewTab);
-  const [timeRange, setTimeRange] = useState<KeyOverviewTimeRange>(loadTimeRange);
+  const [timeRangeState, setTimeRangeState] = useState<StoredUsageRangeState>(loadTimeRange);
+  const { range: timeRange, customRange } = timeRangeState;
   const [realtimeWindow, setRealtimeWindow] = useState<OverviewRealtimeWindow>(loadRealtimeWindow);
   const [usage, setUsage] = useState<UsageOverviewPayload | null>(null);
-  const [loadedUsageRange, setLoadedUsageRange] = useState<KeyOverviewTimeRange | null>(null);
+  const [loadedUsageRange, setLoadedUsageRange] = useState<string | null>(null);
   const [realtime, setRealtime] = useState<OverviewRealtimeBlock | null>(null);
   const [loading, setLoading] = useState(false);
   const [realtimeLoading, setRealtimeLoading] = useState(false);
   const [error, setError] = useState('');
   const [realtimeError, setRealtimeError] = useState('');
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [manualRefreshLoading, setManualRefreshLoading] = useState(false);
   const [refreshThrottled, setRefreshThrottled] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -285,10 +273,54 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
     fetchUsageQuotaCache: fetchKeyOverviewUsageQuotaCache,
   });
 
-  const rangeOptions = useMemo(() => TIME_RANGE_OPTIONS.map((option) => ({
-    value: option.value,
-    label: t(option.labelKey),
-  })), [t]);
+  const usageRangeQuery = useMemo(() => buildUsageRangeQuery({
+    range: timeRange,
+    customUnit: customRange?.unit,
+    customStart: customRange?.start,
+    customEnd: customRange?.end,
+  }), [customRange?.end, customRange?.start, customRange?.unit, timeRange]);
+  const usageRangeQueryKey = usageRangeQuery.valid ? buildUsageStatsQueryKey(usageRangeQuery) : null;
+  const {
+    request: activityRangeRequest,
+    manualWindow: manualActivityWindow,
+    setWindow: setActivityWindow,
+  } = useRecentActivityWindow(usageRangeQuery);
+  const {
+    activity,
+    activityMatchesRequest,
+    loading: activityLoading,
+    error: activityError,
+    requestIdentity: activityRequestIdentity,
+    loadActivity,
+  } = useUsageActivityData({
+    viewer: 'key',
+    request: activityRangeRequest,
+    enabled: usageRangeQuery.valid,
+    onAuthRequired,
+  });
+  const activityWindow = manualActivityWindow ?? activity?.window ?? null;
+  const activityWindowIsCurrent = manualActivityWindow !== null || activityMatchesRequest;
+  const rangeTimeZone = MONITORING_TIME_ZONE;
+  const rangeRecoveryTimeZone = resolveUsageRangeRecoveryTimeZone(timeRangeState, usage?.timezone);
+  const recoverRangeBoundsConflict = useCallback((error: unknown) => {
+    if (!isUsageRangeBoundsConflict(error)) return false;
+    const timeZone = rangeRecoveryTimeZone?.trim();
+    if (!timeZone) return false;
+    const nextState = clampStoredUsageRangeStateToCurrentBounds(timeRangeState, {
+      nowMs: Date.now(),
+      timeZone,
+    });
+    if (nextState === timeRangeState) return false;
+    setTimeRangeState(nextState);
+    return true;
+  }, [rangeRecoveryTimeZone, timeRangeState]);
+  const handleTimeRangeChange = useCallback((range: UsageTimeRange, nextCustomRange?: UsageCustomRange) => {
+    if (range === 'custom' && nextCustomRange) {
+      setTimeRangeState({ range, customRange: nextCustomRange, timeZone: rangeTimeZone });
+      return;
+    }
+    setTimeRangeState((current) => ({ ...current, range }));
+  }, [rangeTimeZone]);
 
   const themeOptions = useMemo(
     () => THEME_OPTIONS.map((option) => ({ ...option, label: t(option.labelKey) })),
@@ -296,23 +328,23 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
   );
 
   const loadOverview = useCallback(async (options: KeyOverviewLoadOptions = {}) => {
+    if (!usageRangeQuery.valid) return;
     const { controller, skipped } = startKeyOverviewRequest({
       currentController: overviewRequestControllerRef.current,
       skipIfInFlight: options.skipIfInFlight,
     });
     if (skipped || !controller) return;
     overviewRequestControllerRef.current = controller;
-    const requestRange = timeRange;
     setLoading(true);
     setError('');
     try {
-      const overview = await fetchKeyOverview(requestRange, controller.signal);
+      const overview = await fetchKeyOverview(usageRangeQuery, controller.signal);
       if (overviewRequestControllerRef.current !== controller) return;
       setUsage(overview as UsageOverviewResponse as UsageOverviewPayload);
-      setLoadedUsageRange(requestRange);
-      setLastRefreshedAt(new Date());
+      setLoadedUsageRange(usageRangeQueryKey);
     } catch (nextError) {
       if (controller.signal.aborted) return;
+      if (recoverRangeBoundsConflict(nextError)) return;
       if (nextError instanceof ApiError && nextError.status === 401) {
         onAuthRequired?.();
         return;
@@ -328,7 +360,7 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
         overviewRequestControllerRef.current = null;
       }
     }
-  }, [onAuthRequired, timeRange]);
+  }, [onAuthRequired, recoverRangeBoundsConflict, usageRangeQuery, usageRangeQueryKey]);
 
   const loadRealtime = useCallback(async (options: KeyOverviewLoadOptions = {}) => {
     const { controller, skipped } = startKeyOverviewRequest({
@@ -401,7 +433,7 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
     setEventsLoading(true);
     setEventsError('');
     try {
-      const response = await fetchKeyOverviewUsageEvents(timeRange, undefined, undefined, controller.signal, {
+      const response = await fetchKeyOverviewUsageEvents(usageRangeQuery, controller.signal, {
         page: eventsPage,
         pageSize: eventsPageSize,
         model: eventsFilters.model === ALL_REQUEST_EVENTS_FILTER ? undefined : eventsFilters.model,
@@ -416,7 +448,6 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
       setEventsData(response.events ?? []);
       setEventsTotalCount(response.total_count ?? 0);
       setEventsTotalPages(response.total_pages ?? 0);
-      setLastRefreshedAt(new Date());
     } catch (nextError) {
       if (controller.signal.aborted) return;
       if (eventsRequestControllerRef.current === controller) {
@@ -439,7 +470,7 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
         eventsRequestControllerRef.current = null;
       }
     }
-  }, [eventsFilters.model, eventsFilters.result, eventsFilters.source, eventsPage, eventsPageSize, onAuthRequired, timeRange]);
+  }, [eventsFilters.model, eventsFilters.result, eventsFilters.source, eventsPage, eventsPageSize, onAuthRequired, usageRangeQuery]);
 
   const resetEventsPage = useCallback(() => {
     setEventsPage(1);
@@ -469,7 +500,7 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
     setEventsExportingFormat(format);
     setEventsError('');
     try {
-      const file = await exportKeyOverviewUsageEvents(timeRange, undefined, undefined, format, {
+      const file = await exportKeyOverviewUsageEvents(usageRangeQuery, format, {
         model: eventsFilters.model === ALL_REQUEST_EVENTS_FILTER ? undefined : eventsFilters.model,
         source: eventsFilters.source === ALL_REQUEST_EVENTS_FILTER ? undefined : eventsFilters.source,
         result: eventsFilters.result === ALL_REQUEST_EVENTS_FILTER ? undefined : eventsFilters.result,
@@ -488,7 +519,7 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
     } finally {
       setEventsExportingFormat(null);
     }
-  }, [eventsFilters.model, eventsFilters.result, eventsFilters.source, onAuthRequired, timeRange]);
+  }, [eventsFilters.model, eventsFilters.result, eventsFilters.source, onAuthRequired, usageRangeQuery]);
 
   useEffect(() => {
     void loadOverview();
@@ -541,8 +572,8 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
   }, []);
 
   const refreshKeyOverview = useCallback(async (options: KeyOverviewLoadOptions = {}) => {
-    await Promise.all([loadOverview(options), loadRealtime(options)]);
-  }, [loadOverview, loadRealtime]);
+    await Promise.all([loadOverview(options), loadActivity(options), loadRealtime(options)]);
+  }, [loadActivity, loadOverview, loadRealtime]);
 
   const refreshCredentials = credentialsData.refresh;
   const refreshActiveTab = useCallback(async (options: KeyOverviewLoadOptions = {}) => {
@@ -597,11 +628,11 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
 
   useEffect(() => {
     try {
-      localStorage.setItem(KEY_OVERVIEW_RANGE_STORAGE_KEY, timeRange);
+      localStorage.setItem(KEY_OVERVIEW_RANGE_STORAGE_KEY, serializeUsageRangeState(timeRangeState));
     } catch {
       // ignore storage failures
     }
-  }, [timeRange]);
+  }, [timeRangeState]);
 
   useEffect(() => {
     try {
@@ -612,15 +643,20 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
   }, [realtimeWindow]);
 
   const overviewDisplayLoading = getOverviewDisplayLoading({ loading, hasUsage: Boolean(usage) });
-  const currentOverviewUsage = getCurrentOverviewUsage(usage, timeRange, loadedUsageRange);
-  const reserveDailyAveragePanel = isDailyAverageRange({ range: timeRange });
-  const dailyAveragePanelUsage = getDailyAveragePanelUsage(currentOverviewUsage, usage, reserveDailyAveragePanel, loading);
+  const currentOverviewUsage = getCurrentOverviewUsage(usage, usageRangeQueryKey, loadedUsageRange);
+  const reserveDailyAverageCard = isDailyAverageRange({
+    range: timeRange,
+    customUnit: customRange?.unit,
+    customStart: customRange?.start,
+    customEnd: customRange?.end,
+  });
+  const dailyAverageCardUsage = getDailyAverageCardUsage(currentOverviewUsage, usage, reserveDailyAverageCard, loading);
   const {
     requestsSparkline,
     tokensSparkline,
     rpmSparkline,
     tpmSparkline,
-    cachedRateSparkline,
+    cacheReadRateSparkline,
     costSparkline,
   } = useSparklines({ usage, loading });
 
@@ -726,14 +762,6 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
               </div>
             )}
 
-            {lastRefreshedAt && (
-              <div className={styles.toolbarMetaRow}>
-                <span className={styles.lastRefreshed}>
-                  {t('usage_stats.last_updated')}: {formatTokyoClock(lastRefreshedAt, true)}
-                </span>
-              </div>
-            )}
-
             <div className={styles.toolbarRow}>
               <div className={styles.tabBar} role="tablist" aria-label={t('key_overview.tabs_aria_label')}>
                 {KEY_OVERVIEW_TAB_OPTIONS.map((tab) => {
@@ -756,19 +784,13 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
               <div className={styles.toolbarActionsRight}>
                 {activeTab !== 'auth-files' && (
                   <div className={styles.usageFilterBar}>
-                    <div className={styles.timeRangeGroup}>
-                      <label className={`${styles.usageFilterField} ${styles.rangeFilterField}`.trim()}>
-                        <span className={styles.usageFilterLabel}>{t('usage_stats.range_filter')}</span>
-                        <Select
-                          value={timeRange}
-                          options={rangeOptions}
-                          onChange={(value) => setTimeRange(value as KeyOverviewTimeRange)}
-                          className={styles.rangeSelectControl}
-                          ariaLabel={t('usage_stats.range_filter')}
-                          fullWidth
-                        />
-                      </label>
-                    </div>
+                    <TimeRangeControl
+                      value={timeRange}
+                      customRange={customRange}
+                      timeZone={rangeTimeZone}
+                      onChange={handleTimeRangeChange}
+                      ariaLabel={t('usage_stats.range_filter')}
+                    />
                   </div>
                 )}
                 <div className={styles.usageRefreshSlot}>
@@ -803,22 +825,30 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
               <>
                 {displayError && <div className={styles.errorBox}>{displayError}</div>}
 
-                <DailyAveragePanel usage={dailyAveragePanelUsage} loading={overviewDisplayLoading} reserveVisible={reserveDailyAveragePanel} />
-
                 <StatCards
                   usage={usage}
                   loading={overviewDisplayLoading}
+                  dailyAverageUsage={dailyAverageCardUsage}
+                  reserveDailyAverage={reserveDailyAverageCard}
                   sparklines={{
                     requests: requestsSparkline,
                     tokens: tokensSparkline,
                     rpm: rpmSparkline,
                     tpm: tpmSparkline,
-                    cachedRate: cachedRateSparkline,
+                    cacheReadRate: cacheReadRateSparkline,
                     cost: costSparkline,
                   }}
                 />
 
-                <ServiceHealthCard usage={usage} loading={overviewDisplayLoading} />
+                <RecentActivityPanel
+                  activity={activity}
+                  loading={activityLoading}
+                  error={activityError}
+                  window={activityWindow}
+                  windowIsCurrent={activityWindowIsCurrent}
+                  requestIdentity={activityRequestIdentity}
+                  onWindowChange={setActivityWindow}
+                />
 
                 <OverviewRealtimePanel
                   realtime={realtime?.window === realtimeWindow ? realtime : undefined}

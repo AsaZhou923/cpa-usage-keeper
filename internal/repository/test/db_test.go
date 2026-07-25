@@ -5,14 +5,18 @@ import (
 	"context"
 	"cpa-usage-keeper/internal/repository"
 	"cpa-usage-keeper/internal/repository/dto"
+	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
+	"cpa-usage-keeper/internal/pricing"
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 )
@@ -21,6 +25,10 @@ const (
 	testRedisInboxSource               = "redis_pull:usage"
 	usageOverviewAggregationCheckpoint = "overview"
 )
+
+func emptyPricingResolverForTest() pricing.Resolver {
+	return pricing.NewCatalog(pricing.EmptySnapshot()).NewResolver()
+}
 
 func TestOpenDatabaseAutoMigratesCoreTables(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "app.db")
@@ -59,7 +67,7 @@ func TestOpenDatabaseCreatesFreshDatabaseFromCurrentSchemaWithoutRunningMigratio
 	closeTestDatabase(t, db)
 
 	var latestMigrationCount int64
-	if err := db.Table("schema_migrations").Where("version = ?", "20260702_model_price_multiplier").Count(&latestMigrationCount).Error; err != nil {
+	if err := db.Table("schema_migrations").Where("version = ?", "20260723_usage_overview_five_dimensions").Count(&latestMigrationCount).Error; err != nil {
 		t.Fatalf("count latest schema migration: %v", err)
 	}
 	if latestMigrationCount != 1 {
@@ -102,24 +110,35 @@ func TestOpenDatabaseCreatesFreshDatabaseFromCurrentSchemaWithoutRunningMigratio
 	if !db.Migrator().HasTable(&entities.AppSetting{}) {
 		t.Fatal("expected app_settings table to exist")
 	}
+	if db.Migrator().HasTable("usage_overview_health_stats") {
+		t.Fatal("expected fresh schema not to create legacy usage_overview_health_stats")
+	}
+	for _, table := range []string{"usage_overview_hourly_stats", "usage_overview_daily_stats"} {
+		for _, column := range []string{"service_tier", "response_service_tier", "reasoning_effort", "endpoint", "executor_type"} {
+			if !db.Migrator().HasColumn(table, column) {
+				t.Fatalf("expected fresh schema to create %s.%s", table, column)
+			}
+		}
+	}
 	for _, indexName := range []string{
 		"idx_usage_events_api_group_key",
 		"idx_usage_events_auth_index",
 		"idx_usage_events_model",
 		"idx_usage_events_auth_type_auth_index_id",
 		"idx_usage_events_auth_index_timestamp_id",
-		"uniq_usage_overview_hourly_stats_bucket_api_model_auth_alias",
+		"uniq_usage_overview_hourly_stats_dimensions",
 		"idx_usage_overview_hourly_stats_api_bucket",
 		"idx_usage_overview_hourly_stats_api_model_bucket",
 		"idx_usage_overview_hourly_stats_auth_bucket",
 		"idx_usage_overview_hourly_stats_model_alias_bucket",
-		"uniq_usage_overview_daily_stats_bucket_api_model_auth_alias",
+		"uniq_usage_overview_daily_stats_dimensions",
 		"idx_usage_overview_daily_stats_api_bucket",
 		"idx_usage_overview_daily_stats_api_model_bucket",
 		"idx_usage_overview_daily_stats_auth_bucket",
 		"idx_usage_overview_daily_stats_model_alias_bucket",
-		"uniq_usage_overview_health_stats_bucket_span_api",
-		"idx_usage_overview_health_stats_api_bucket_span",
+		"uniq_usage_activity_stats_grain_start_api",
+		"idx_usage_activity_stats_api_grain_start",
+		"idx_usage_activity_stats_grain_end",
 	} {
 		assertSQLiteIndexExists(t, db, indexName)
 	}
@@ -182,6 +201,238 @@ func TestOpenDatabaseConfiguresSQLiteRuntime(t *testing.T) {
 	}
 	if stats := sqlDB.Stats(); stats.MaxOpenConnections != 1 {
 		t.Fatalf("expected sqlite max open connections to be 1, got %+v", stats)
+	}
+}
+
+func TestOpenDatabaseRejectsFileWhenVFSDoesNotEnableWAL(t *testing.T) {
+	// unix-none 不提供 WAL 所需的共享锁语义，用它稳定复现 PRAGMA 返回非 wal 或失败的启动环境。
+	if runtime.GOOS == "windows" {
+		t.Skip("unix-none VFS is only available on Unix builds")
+	}
+	dbPath := filepath.Join(t.TempDir(), "wal-required.db")
+	dsn := "file:" + filepath.ToSlash(dbPath) + "?vfs=unix-none&_busy_timeout=5000&_foreign_keys=on"
+
+	// 文件库的独立 reader 依赖 WAL；未真正进入 wal 时 writer 初始化必须拒绝继续启动。
+	db, err := repository.OpenDatabase(config.Config{SQLitePath: dsn})
+	if db != nil {
+		closeTestDatabase(t, db)
+	}
+	if err == nil {
+		t.Fatal("expected OpenDatabase to reject a file database without WAL")
+	}
+}
+
+func TestOpenDatabaseClosesPoolWhenMigrationInitializationFails(t *testing.T) {
+	// 准备：构造一个 schema_migrations 结构损坏的旧库，让 writer 在成功打开并取得独占锁后稳定进入迁移失败分支。
+	dbPath := filepath.Join(t.TempDir(), "migration-failure.db")
+	seedDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open migration failure seed database: %v", err)
+	}
+	if _, err := seedDB.Exec("CREATE TABLE schema_migrations (applied_at DATETIME NOT NULL)"); err != nil {
+		_ = seedDB.Close()
+		t.Fatalf("create malformed schema migrations table: %v", err)
+	}
+	if err := seedDB.Close(); err != nil {
+		t.Fatalf("close migration failure seed database: %v", err)
+	}
+
+	// 执行：EXCLUSIVE 模式使未关闭的物理连接持续占有文件锁，可以直接观测初始化失败后是否遗留连接池。
+	dsn := dbPath + "?_locking_mode=EXCLUSIVE&_busy_timeout=50&_foreign_keys=on"
+	db, err := repository.OpenDatabase(config.Config{SQLitePath: dsn})
+	if db != nil {
+		closeTestDatabase(t, db)
+	}
+	if err == nil {
+		t.Fatal("expected malformed schema migrations table to fail database initialization")
+	}
+
+	// 断言：失败 writer 必须已经关闭，新连接才能立即修复表结构；如果池泄漏，这里会返回 database is locked。
+	verificationDB, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=50")
+	if err != nil {
+		t.Fatalf("open database after failed initialization: %v", err)
+	}
+	defer verificationDB.Close()
+	if _, err := verificationDB.Exec("DROP TABLE schema_migrations"); err != nil {
+		t.Fatalf("expected failed initialization to release database lock: %v", err)
+	}
+}
+
+func TestOpenReadDatabaseConfiguresBoundedReadOnlyPool(t *testing.T) {
+	// 准备：先用 writer 创建真实文件、启用 WAL 并完成当前 schema 初始化。
+	dbPath := filepath.Join(t.TempDir(), "app.db")
+	writer, err := repository.OpenDatabase(config.Config{SQLitePath: dbPath})
+	if err != nil {
+		t.Fatalf("OpenDatabase returned error: %v", err)
+	}
+	closeTestDatabase(t, writer)
+
+	// 执行：为同一个 SQLite 文件打开独立 reader，并取得底层 database/sql 池。
+	reader, err := repository.OpenReadDatabase(config.Config{SQLitePath: dbPath})
+	if err != nil {
+		t.Fatalf("OpenReadDatabase returned error: %v", err)
+	}
+	closeTestDatabase(t, reader)
+	readerSQL, err := reader.DB()
+	if err != nil {
+		t.Fatalf("load read sql db: %v", err)
+	}
+	// 断言：reader 的硬上限固定为四条，不继承 writer 的单连接限制。
+	if stats := readerSQL.Stats(); stats.MaxOpenConnections != 4 {
+		t.Fatalf("expected sqlite read max open connections to be 4, got %+v", stats)
+	}
+
+	// 执行：同时持有四条连接，强制 database/sql 真正创建池上限数量的物理连接。
+	connections := make([]*sql.Conn, 0, 4)
+	for index := 0; index < 4; index++ {
+		connection, err := readerSQL.Conn(context.Background())
+		if err != nil {
+			t.Fatalf("open read connection %d: %v", index, err)
+		}
+		connections = append(connections, connection)
+	}
+	// 断言：_query_only 必须通过 DSN 应用到每条物理连接，而不是只配置第一条连接。
+	for index, connection := range connections {
+		var queryOnly int
+		if err := connection.QueryRowContext(context.Background(), "PRAGMA query_only").Scan(&queryOnly); err != nil {
+			t.Fatalf("read query_only from connection %d: %v", index, err)
+		}
+		if queryOnly != 1 {
+			t.Fatalf("expected connection %d to be query-only, got %d", index, queryOnly)
+		}
+	}
+	// 执行：归还全部连接，让 MaxIdleConns 保留已经预热的 reader。
+	for index, connection := range connections {
+		if err := connection.Close(); err != nil {
+			t.Fatalf("close read connection %d: %v", index, err)
+		}
+	}
+	// 断言：峰值结束后四条连接继续空闲常驻，下一轮读取无需重新打开 SQLite 连接。
+	if stats := readerSQL.Stats(); stats.OpenConnections != 4 || stats.Idle != 4 {
+		t.Fatalf("expected sqlite read pool to retain 4 idle connections, got %+v", stats)
+	}
+}
+
+func TestOpenReadDatabaseReadsWriterCommitsAndRejectsWrites(t *testing.T) {
+	// 准备：writer 与 reader 指向同一个 WAL 数据库文件，并保持两个池同时打开。
+	dbPath := filepath.Join(t.TempDir(), "app #reader.db")
+	writer, err := repository.OpenDatabase(config.Config{SQLitePath: dbPath})
+	if err != nil {
+		t.Fatalf("OpenDatabase returned error: %v", err)
+	}
+	closeTestDatabase(t, writer)
+	reader, err := repository.OpenReadDatabase(config.Config{SQLitePath: dbPath})
+	if err != nil {
+		t.Fatalf("OpenReadDatabase returned error: %v", err)
+	}
+	closeTestDatabase(t, reader)
+
+	// 执行：只通过 writer 提交一条 usage event，模拟真实入库链路。
+	event := entities.UsageEvent{EventKey: "read-pool-event", Model: "model-a", Timestamp: time.Now()}
+	if err := writer.Create(&event).Error; err != nil {
+		t.Fatalf("write usage event: %v", err)
+	}
+	// 断言：writer 提交后新 reader 查询能从同一个 WAL 数据库看到最新记录。
+	var count int64
+	if err := reader.Model(&entities.UsageEvent{}).Where("event_key = ?", event.EventKey).Count(&count).Error; err != nil {
+		t.Fatalf("read writer commit: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected reader to observe writer commit, got %d rows", count)
+	}
+	// 准备：固定使用同一条 reader 物理连接，主动关闭 query_only 以验证底层打开模式。
+	readerSQL, err := reader.DB()
+	if err != nil {
+		t.Fatalf("load read sql db: %v", err)
+	}
+	connection, err := readerSQL.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("open read connection: %v", err)
+	}
+	defer connection.Close()
+	// 执行：query_only 只是第二层保护，测试主动关闭它，不能依靠 PRAGMA 制造只读假象。
+	if _, err := connection.ExecContext(context.Background(), "PRAGMA query_only=OFF"); err != nil {
+		t.Fatalf("disable query_only on read connection: %v", err)
+	}
+	// 断言：mode=ro 必须让底层 SQLite 连接继续拒绝写入同一个数据库文件。
+	if _, err := connection.ExecContext(context.Background(), "INSERT INTO usage_events (event_key, model, timestamp) VALUES (?, ?, ?)", "forbidden-read-write", "model-b", time.Now()); err == nil {
+		t.Fatal("expected hard read-only database to reject writes after query_only is disabled")
+	}
+}
+
+func TestOpenReadDatabaseOverridesConflictingDSNProtection(t *testing.T) {
+	// 准备：writer 先创建真实数据库，reader 输入故意携带可写模式和关闭 query_only 的冲突参数。
+	dbPath := filepath.Join(t.TempDir(), "app.db")
+	writer, err := repository.OpenDatabase(config.Config{SQLitePath: dbPath})
+	if err != nil {
+		t.Fatalf("OpenDatabase returned error: %v", err)
+	}
+	closeTestDatabase(t, writer)
+	readerPath := dbPath + "?mode=rwc&_query_only=off&_busy_timeout=2500&_foreign_keys=on"
+
+	// 执行：reader 必须解析并覆盖安全参数，不能把强制参数简单追加在调用方参数之后。
+	reader, err := repository.OpenReadDatabase(config.Config{SQLitePath: readerPath})
+	if err != nil {
+		t.Fatalf("OpenReadDatabase returned error: %v", err)
+	}
+	closeTestDatabase(t, reader)
+	readerSQL, err := reader.DB()
+	if err != nil {
+		t.Fatalf("load read sql db: %v", err)
+	}
+	connection, err := readerSQL.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("open read connection: %v", err)
+	}
+	defer connection.Close()
+
+	// 断言：冲突的 _query_only=off 必须被唯一的强制值覆盖。
+	var queryOnly int
+	if err := connection.QueryRowContext(context.Background(), "PRAGMA query_only").Scan(&queryOnly); err != nil {
+		t.Fatalf("read query_only: %v", err)
+	}
+	if queryOnly != 1 {
+		t.Fatalf("expected forced query_only=1, got %d", queryOnly)
+	}
+	// 执行：再次主动关闭第二层保护，单独验证冲突 mode=rwc 已被底层 mode=ro 覆盖。
+	if _, err := connection.ExecContext(context.Background(), "PRAGMA query_only=OFF"); err != nil {
+		t.Fatalf("disable query_only on read connection: %v", err)
+	}
+	// 断言：同一条物理连接仍然不能写入，证明 reader 不是依靠参数顺序偶然只读。
+	if _, err := connection.ExecContext(context.Background(), "INSERT INTO usage_events (event_key, model, timestamp) VALUES (?, ?, ?)", "conflicting-dsn-write", "model-c", time.Now()); err == nil {
+		t.Fatal("expected conflicting DSN reader to remain hard read-only")
+	}
+}
+
+func TestOpenReadDatabaseDoesNotCreateMissingFile(t *testing.T) {
+	// 准备：使用尚不存在的文件路径，reader 不能像 writer 一样隐式创建数据库。
+	dbPath := filepath.Join(t.TempDir(), "missing.db")
+
+	// 执行：真正的 mode=ro 应在打开阶段拒绝不存在的文件。
+	reader, err := repository.OpenReadDatabase(config.Config{SQLitePath: dbPath})
+	if reader != nil {
+		closeTestDatabase(t, reader)
+	}
+	// 断言：返回明确错误，并且文件仍然不存在。
+	if err == nil {
+		t.Fatal("expected read database open to reject a missing file")
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected missing database not to be created, stat error=%v", statErr)
+	}
+}
+
+func TestBuildSQLiteFileURIKeepsWindowsDriveInsideURIPath(t *testing.T) {
+	// 准备：传入 filepath.ToSlash 在 Windows 上产生的盘符路径，并包含必须转义的特殊字符。
+	filename := "C:/data/app #reader.db"
+
+	// 执行：统一 URI helper 必须把盘符保留在 path，而不能让 net/url 把 C: 解释成 authority。
+	got := repository.BuildSQLiteFileURI(filename)
+
+	// 断言：SQLite 官方支持的本地盘符形式固定为 file:///C:/...，且文件名经过 URI 转义。
+	const want = "file:///C:/data/app%20%23reader.db"
+	if got != want {
+		t.Fatalf("expected Windows drive URI %q, got %q", want, got)
 	}
 }
 
@@ -471,11 +722,12 @@ func TestCleanupStorageCleansRedisInboxAndVacuums(t *testing.T) {
 	if err := db.Model(&entities.RedisUsageInbox{}).Where("id = ?", inboxRows[0].ID).Updates(map[string]any{"status": repository.RedisUsageInboxStatusProcessed, "processed_at": time.Date(2026, 4, 26, 15, 59, 59, 0, time.UTC)}).Error; err != nil {
 		t.Fatalf("seed processed inbox row: %v", err)
 	}
-	if err := db.Create(&[]entities.UsageOverviewHealthStat{
-		{BucketStart: now.Add(-9 * 24 * time.Hour), SpanSeconds: 900, APIGroupKey: "old", SuccessCount: 1},
-		{BucketStart: now.Add(-7 * 24 * time.Hour), SpanSeconds: 900, APIGroupKey: "fresh", SuccessCount: 1},
+	// medium Activity 使用 8 天 retention，构造一条过期和一条保留行。
+	if err := db.Create(&[]entities.UsageActivityStat{
+		{Grain: entities.UsageActivityGrainMedium, BucketStart: now.Add(-9 * 24 * time.Hour), BucketEnd: now.Add(-9*24*time.Hour + time.Minute), APIGroupKey: "old", SuccessCount: 1},
+		{Grain: entities.UsageActivityGrainMedium, BucketStart: now.Add(-7 * 24 * time.Hour), BucketEnd: now.Add(-7*24*time.Hour + time.Minute), APIGroupKey: "fresh", SuccessCount: 1},
 	}).Error; err != nil {
-		t.Fatalf("seed health stats: %v", err)
+		t.Fatalf("seed activity stats: %v", err)
 	}
 
 	result, err := repository.CleanupStorage(db, now)
@@ -493,16 +745,17 @@ func TestCleanupStorageCleansRedisInboxAndVacuums(t *testing.T) {
 	if len(inboxRemaining) != 1 || inboxRemaining[0].ID != inboxRows[1].ID {
 		t.Fatalf("expected only pending inbox row to remain, got %+v", inboxRemaining)
 	}
-	var healthRemaining []entities.UsageOverviewHealthStat
-	if err := db.Order("api_group_key asc").Find(&healthRemaining).Error; err != nil {
-		t.Fatalf("load remaining health stats: %v", err)
+	// Storage cleanup 必须调用 Activity retention，而不是已经删除的旧 Health cleanup。
+	var activityRemaining []entities.UsageActivityStat
+	if err := db.Order("api_group_key asc").Find(&activityRemaining).Error; err != nil {
+		t.Fatalf("load remaining activity stats: %v", err)
 	}
-	if len(healthRemaining) != 1 || healthRemaining[0].APIGroupKey != "fresh" {
-		t.Fatalf("expected only fresh health stat row to remain, got %+v", healthRemaining)
+	if len(activityRemaining) != 1 || activityRemaining[0].APIGroupKey != "fresh" {
+		t.Fatalf("expected only fresh activity stat row to remain, got %+v", activityRemaining)
 	}
 }
 
-func TestCleanupStorageCleansUsageEventsBeforePreviousMonthStart(t *testing.T) {
+func TestCleanupStorageRetainsNinetyLocalDays(t *testing.T) {
 	previousLocal := time.Local
 	location, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
@@ -511,15 +764,26 @@ func TestCleanupStorageCleansUsageEventsBeforePreviousMonthStart(t *testing.T) {
 	time.Local = location
 	t.Cleanup(func() { time.Local = previousLocal })
 	db := openTestDatabase(t)
-	now := time.Date(2026, 6, 16, 9, 0, 0, 0, time.Local)
+	now := time.Date(2026, 6, 16, 15, 0, 0, 0, time.Local)
+	cutoff := time.Date(2026, 3, 18, 0, 0, 0, 0, time.Local)
 
 	if _, _, err := repository.InsertUsageEvents(db, []entities.UsageEvent{
-		{EventKey: "old", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 30, 23, 59, 59, 0, time.Local), TotalTokens: 1},
-		{EventKey: "boundary", Model: "claude-sonnet", Timestamp: time.Date(2026, 5, 1, 0, 0, 0, 0, time.Local), TotalTokens: 2},
-		{EventKey: "recent", Model: "claude-sonnet", Timestamp: time.Date(2026, 6, 16, 8, 0, 0, 0, time.Local), TotalTokens: 3},
+		{EventKey: "before-cutoff", Model: "claude-sonnet", Timestamp: cutoff.Add(-time.Nanosecond), TotalTokens: 1},
+		{EventKey: "at-cutoff", Model: "claude-sonnet", Timestamp: cutoff, TotalTokens: 2},
+		{EventKey: "after-cutoff", Model: "claude-sonnet", Timestamp: cutoff.Add(time.Nanosecond), TotalTokens: 3},
+		{EventKey: "current-day", Model: "claude-sonnet", Timestamp: time.Date(2026, 6, 16, 9, 0, 0, 0, time.Local), TotalTokens: 4},
 	}); err != nil {
 		t.Fatalf("InsertUsageEvents returned error: %v", err)
 	}
+	// 准备：只有 Overview 与 Activity 都追平后，旧 raw events 才具备删除安全水位。
+	if err := repository.AggregateUsageOverviewStats(context.Background(), db, now); err != nil {
+		t.Fatalf("aggregate overview before cleanup: %v", err)
+	}
+	if err := repository.AggregateUsageActivityStats(context.Background(), db, now); err != nil {
+		t.Fatalf("aggregate activity before cleanup: %v", err)
+	}
+
+	// 执行：在两个全局 checkpoint 已追平且没有 identity delta 时运行清理。
 	result, err := repository.CleanupStorage(db, now, repository.CleanupStorageOptions{CleanupUsageEvents: true})
 	if err != nil {
 		t.Fatalf("CleanupStorage returned error: %v", err)
@@ -532,54 +796,99 @@ func TestCleanupStorageCleansUsageEventsBeforePreviousMonthStart(t *testing.T) {
 	if err := db.Model(&entities.UsageEvent{}).Order("event_key asc").Pluck("event_key", &remainingKeys).Error; err != nil {
 		t.Fatalf("load remaining usage events: %v", err)
 	}
-	expectedKeys := []string{"boundary", "recent"}
+	expectedKeys := []string{"after-cutoff", "at-cutoff", "current-day"}
 	if fmt.Sprint(remainingKeys) != fmt.Sprint(expectedKeys) {
 		t.Fatalf("expected remaining usage events %v, got %v", expectedKeys, remainingKeys)
 	}
 }
 
-func TestCleanupStorageCleansUsageEventsWithoutOverviewCheckpointGuard(t *testing.T) {
+func TestCleanupStorageUsesLocalCalendarDaysAcrossDST(t *testing.T) {
+	previousLocal := time.Local
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	time.Local = location
+	t.Cleanup(func() { time.Local = previousLocal })
 	db := openTestDatabase(t)
-	now := time.Date(2026, 6, 16, 9, 0, 0, 0, time.Local)
+	now := time.Date(2026, 5, 15, 15, 0, 0, 0, time.Local)
+	localDayStart := time.Date(2026, 5, 15, 0, 0, 0, 0, time.Local)
+	cutoff := localDayStart.AddDate(0, 0, -90)
+	if elapsed := localDayStart.Sub(cutoff); elapsed != 90*24*time.Hour-time.Hour {
+		t.Fatalf("expected fixture to cross spring DST in 2159 hours, got %s", elapsed)
+	}
 
 	if _, _, err := repository.InsertUsageEvents(db, []entities.UsageEvent{
-		{EventKey: "old-without-checkpoint", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 29, 10, 0, 0, 0, time.Local), TotalTokens: 1},
-		{EventKey: "old-beyond-checkpoint", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 30, 10, 0, 0, 0, time.Local), TotalTokens: 2},
+		{EventKey: "before-dst-cutoff", Model: "claude-sonnet", Timestamp: cutoff.Add(-time.Nanosecond), TotalTokens: 1},
+		{EventKey: "at-dst-cutoff", Model: "claude-sonnet", Timestamp: cutoff, TotalTokens: 2},
+		{EventKey: "after-dst-cutoff", Model: "claude-sonnet", Timestamp: cutoff.Add(time.Nanosecond), TotalTokens: 3},
 	}); err != nil {
 		t.Fatalf("InsertUsageEvents returned error: %v", err)
 	}
-	var first entities.UsageEvent
-	if err := db.Where("event_key = ?", "old-without-checkpoint").First(&first).Error; err != nil {
-		t.Fatalf("load first event: %v", err)
+	if err := repository.AggregateUsageOverviewStats(context.Background(), db, now); err != nil {
+		t.Fatalf("aggregate overview before cleanup: %v", err)
 	}
-	if err := db.Create(&entities.UsageOverviewAggregationCheckpoint{Name: usageOverviewAggregationCheckpoint, LastAggregatedUsageEventID: first.ID, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
-		t.Fatalf("seed overview checkpoint: %v", err)
+	if err := repository.AggregateUsageActivityStats(context.Background(), db, now); err != nil {
+		t.Fatalf("aggregate activity before cleanup: %v", err)
 	}
 
 	result, err := repository.CleanupStorage(db, now, repository.CleanupStorageOptions{CleanupUsageEvents: true})
 	if err != nil {
 		t.Fatalf("CleanupStorage returned error: %v", err)
 	}
-	if result.UsageEventsDeleted != 2 {
-		t.Fatalf("expected all expired usage events to be deleted, got %+v", result)
+	if result.UsageEventsDeleted != 1 {
+		t.Fatalf("expected only the event before the local calendar cutoff to be deleted, got %+v", result)
+	}
+
+	var remainingKeys []string
+	if err := db.Model(&entities.UsageEvent{}).Order("event_key asc").Pluck("event_key", &remainingKeys).Error; err != nil {
+		t.Fatalf("load remaining usage events: %v", err)
+	}
+	expectedKeys := []string{"after-dst-cutoff", "at-dst-cutoff"}
+	if fmt.Sprint(remainingKeys) != fmt.Sprint(expectedKeys) {
+		t.Fatalf("expected remaining usage events %v, got %v", expectedKeys, remainingKeys)
+	}
+}
+
+func TestCleanupStorageDefersUsageEventsUntilOverviewAndActivityCatchUp(t *testing.T) {
+	// 准备：写入两条已过时间保留线、但尚未进入 Overview 与 Activity 的事件。
+	db := openTestDatabase(t)
+	now := time.Date(2026, 6, 16, 9, 0, 0, 0, time.Local)
+
+	if _, _, err := repository.InsertUsageEvents(db, []entities.UsageEvent{
+		{EventKey: "old-without-checkpoint", Model: "claude-sonnet", Timestamp: now.AddDate(0, 0, -92), TotalTokens: 1},
+		{EventKey: "old-beyond-checkpoint", Model: "claude-sonnet", Timestamp: now.AddDate(0, 0, -91), TotalTokens: 2},
+	}); err != nil {
+		t.Fatalf("InsertUsageEvents returned error: %v", err)
+	}
+
+	// 执行：全局 checkpoint 尚未创建时尝试清理 raw events。
+	result, err := repository.CleanupStorage(db, now, repository.CleanupStorageOptions{CleanupUsageEvents: true})
+	if err != nil {
+		t.Fatalf("CleanupStorage returned error: %v", err)
+	}
+	// 断言：清理必须让路，避免异步聚合再也读取不到两条事件。
+	if result.UsageEventsDeleted != 0 {
+		t.Fatalf("expected pending overview/activity events to remain, got %+v", result)
 	}
 
 	var remainingCount int64
 	if err := db.Model(&entities.UsageEvent{}).Count(&remainingCount).Error; err != nil {
 		t.Fatalf("count remaining usage events: %v", err)
 	}
-	if remainingCount != 0 {
-		t.Fatalf("expected no remaining expired usage events, got %d", remainingCount)
+	if remainingCount != 2 {
+		t.Fatalf("expected both pending events to remain, got %d", remainingCount)
 	}
 }
 
-func TestCleanupStorageCleansUsageEventsWithoutIdentityCheckpointGuard(t *testing.T) {
+func TestCleanupStorageDefersUsageEventsUntilIdentityCatchUp(t *testing.T) {
+	// 准备：全局 rollup 已追平，但现有 identity 仍落后一条已过保留线的事件。
 	db := openTestDatabase(t)
 	now := time.Date(2026, 6, 16, 9, 0, 0, 0, time.Local)
 
 	if _, _, err := repository.InsertUsageEvents(db, []entities.UsageEvent{
-		{EventKey: "identity-aggregated-old", AuthType: "oauth", AuthIndex: "auth-1", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 29, 10, 0, 0, 0, time.Local), TotalTokens: 1},
-		{EventKey: "identity-pending-old", AuthType: "oauth", AuthIndex: "auth-1", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 30, 10, 0, 0, 0, time.Local), TotalTokens: 2},
+		{EventKey: "identity-aggregated-old", AuthType: "oauth", AuthIndex: "auth-1", Model: "claude-sonnet", Timestamp: now.AddDate(0, 0, -92), TotalTokens: 1},
+		{EventKey: "identity-pending-old", AuthType: "oauth", AuthIndex: "auth-1", Model: "claude-sonnet", Timestamp: now.AddDate(0, 0, -91), TotalTokens: 2},
 	}); err != nil {
 		t.Fatalf("InsertUsageEvents returned error: %v", err)
 	}
@@ -589,6 +898,9 @@ func TestCleanupStorageCleansUsageEventsWithoutIdentityCheckpointGuard(t *testin
 	}
 	if err := db.Create(&entities.UsageOverviewAggregationCheckpoint{Name: usageOverviewAggregationCheckpoint, LastAggregatedUsageEventID: events[1].ID, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatalf("seed overview checkpoint: %v", err)
+	}
+	if err := db.Create(&entities.UsageActivityAggregationCheckpoint{Name: "activity", LastAggregatedUsageEventID: events[1].ID, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatalf("seed activity checkpoint: %v", err)
 	}
 	if err := db.Create(&entities.UsageIdentity{
 		Name:                       "Auth 1",
@@ -601,20 +913,22 @@ func TestCleanupStorageCleansUsageEventsWithoutIdentityCheckpointGuard(t *testin
 		t.Fatalf("seed usage identity: %v", err)
 	}
 
+	// 执行：identity cursor 尚未越过第二条匹配事件时运行清理。
 	result, err := repository.CleanupStorage(db, now, repository.CleanupStorageOptions{CleanupUsageEvents: true})
 	if err != nil {
 		t.Fatalf("CleanupStorage returned error: %v", err)
 	}
-	if result.UsageEventsDeleted != 2 {
-		t.Fatalf("expected all expired usage events to be deleted, got %+v", result)
+	// 断言：两条 raw events 都必须保留，等待 Identity 下一批安全累计。
+	if result.UsageEventsDeleted != 0 {
+		t.Fatalf("expected pending identity events to remain, got %+v", result)
 	}
 
 	var remainingCount int64
 	if err := db.Model(&entities.UsageEvent{}).Count(&remainingCount).Error; err != nil {
 		t.Fatalf("count remaining usage events: %v", err)
 	}
-	if remainingCount != 0 {
-		t.Fatalf("expected no remaining expired usage events, got %d", remainingCount)
+	if remainingCount != 2 {
+		t.Fatalf("expected identity events to remain, got %d", remainingCount)
 	}
 }
 

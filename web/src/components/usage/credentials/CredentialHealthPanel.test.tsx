@@ -12,8 +12,8 @@ vi.mock('react-i18next', () => ({
       if (key === 'usage_stats.credentials_health_bucket_aria') {
         return `${params?.timeRange} ${params?.status} ${params?.successCount} ${params?.failureCount} ${params?.rate} ${key}`
       }
-      if (key === 'usage_stats.credentials_health_last_failure') {
-        return `last failure ${params?.timeRange}`
+      if (key === 'usage_stats.credentials_health_failures_5h') {
+        return `Failed requests in 5h: ${params?.count} · latest ${params?.timeRange}`
       }
       if (key === 'usage_stats.credentials_health_time_summary') {
         return `used ${params?.lastUsed} updated ${params?.statsUpdated}`
@@ -99,6 +99,6 @@ describe('CredentialHealthPanel', () => {
     expect(html).toContain('11:10 - 11:20 usage_stats.credentials_health_status_warning 2 1 66.7% usage_stats.credentials_health_bucket_aria')
     expect(html).toContain('66.7%')
     expect(html).toContain('usage_stats.credentials_health_summary_degraded')
-    expect(html).toContain('last failure 11:10 - 11:20')
+    expect(html).toContain('Failed requests in 5h: 1 · latest 11:10 - 11:20')
   })
 })

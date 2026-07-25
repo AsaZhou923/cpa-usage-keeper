@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"cpa-usage-keeper/internal/auth"
+	"cpa-usage-keeper/internal/logging"
 	"cpa-usage-keeper/internal/poller"
 	"cpa-usage-keeper/internal/quota"
 	"cpa-usage-keeper/internal/service"
-	"cpa-usage-keeper/internal/timeutil"
 	"cpa-usage-keeper/internal/updatecheck"
 	"cpa-usage-keeper/internal/version"
 	"github.com/gin-gonic/gin"
@@ -36,6 +36,7 @@ type QuotaProvider interface {
 	StartInspection(context.Context) (quota.InspectionStatus, error)
 	GetAutoRefreshSettings(context.Context) (quota.AutoRefreshSettings, error)
 	UpdateAutoRefreshSettings(context.Context, quota.AutoRefreshSettings) (quota.AutoRefreshSettings, error)
+	GetResetCredits(context.Context, quota.ResetCreditsRequest) (quota.ResetCreditsResponse, error)
 	Reset(context.Context, quota.ResetRequest) (quota.ResetResponse, error)
 }
 
@@ -65,7 +66,7 @@ func NewRouter(
 ) *gin.Engine {
 	router := gin.New()
 	_ = router.SetTrustedProxies(nil)
-	router.Use(gin.Recovery())
+	router.Use(logging.NewGinRecovery())
 
 	appGroup := router.Group(basePath)
 	registerHealthRoutes(appGroup)
@@ -110,6 +111,7 @@ func NewRouter(
 	registerStatusRoutes(adminProtected, statusProvider, statusConfig)
 	registerUpdateRoutes(adminProtected, nil)
 	registerUsageOverviewRoute(adminProtected, usageProvider, cpaAPIKeyProvider)
+	registerUsageActivityRoute(adminProtected, usageProvider)
 	registerUsageAnalysisRoute(adminProtected, usageProvider, cpaAPIKeyProvider)
 	registerUsageEventsRoute(adminProtected, usageProvider, usageIdentityProvider, cpaAPIKeyProvider, requestLogProvider, requestLogDownloadTokens, statusConfig.CPARequestLogAccessEnabled)
 	registerUsageIdentityRoutes(adminProtected, usageIdentityProvider)
@@ -125,6 +127,7 @@ func NewRouter(
 	registerKeyUsageEventsRoute(keyViewerProtected, usageProvider, usageIdentityProvider, cpaAPIKeyProvider, authHandler)
 	registerKeyUsageIdentityRoutes(keyViewerProtected, usageIdentityProvider, cpaAPIKeyProvider, authHandler)
 	registerKeyQuotaRoutes(keyViewerProtected, quotaProvider, usageIdentityProvider, cpaAPIKeyProvider, authHandler)
+	registerKeyActivityRoute(keyViewerProtected, usageProvider, cpaAPIKeyProvider, authHandler)
 
 	if staticFS != nil {
 		if indexFile, err := staticFS.Open("index.html"); err == nil {
@@ -283,15 +286,14 @@ func stripBasePath(basePath, requestPath string) (string, bool) {
 }
 
 type statusResponse struct {
-	Running                    bool       `json:"running"`
-	SyncRunning                bool       `json:"sync_running"`
-	Timezone                   string     `json:"timezone"`
-	CPAPublicURL               string     `json:"cpa_public_url,omitempty"`
-	CPARequestLogAccessEnabled bool       `json:"cpa_request_log_access_enabled"`
-	LastRunAt                  *time.Time `json:"last_run_at,omitempty"`
-	LastError                  string     `json:"last_error,omitempty"`
-	LastWarning                string     `json:"last_warning,omitempty"`
-	LastStatus                 string     `json:"last_status,omitempty"`
+	Running                    bool   `json:"running"`
+	SyncRunning                bool   `json:"sync_running"`
+	Timezone                   string `json:"timezone"`
+	CPAPublicURL               string `json:"cpa_public_url,omitempty"`
+	CPARequestLogAccessEnabled bool   `json:"cpa_request_log_access_enabled"`
+	LastError                  string `json:"last_error,omitempty"`
+	LastWarning                string `json:"last_warning,omitempty"`
+	LastStatus                 string `json:"last_status,omitempty"`
 }
 
 type versionResponse struct {
@@ -334,10 +336,6 @@ func buildStatusResponse(status poller.Status, config StatusRouteConfig) statusR
 		LastError:                  status.LastError,
 		LastWarning:                status.LastWarning,
 		LastStatus:                 status.LastStatus,
-	}
-	if !status.LastRunAt.IsZero() {
-		lastRunAt := timeutil.NormalizeStorageTime(status.LastRunAt)
-		response.LastRunAt = &lastRunAt
 	}
 	return response
 }

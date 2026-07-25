@@ -32,7 +32,7 @@ func TestListUsageEventsWithFilterPreservesEventFields(t *testing.T) {
 		t.Fatalf("InsertUsageEvents returned error: %v", err)
 	}
 
-	page, err := ListUsageEventsWithFilter(db, repodto.UsageQueryFilter{Page: 1, PageSize: 10, Limit: 10})
+	page, err := ListUsageEventsWithFilter(db, repodto.UsageQueryFilter{Page: 1, PageSize: 10, Limit: 10}, emptyPricingResolverForTest())
 	if err != nil {
 		t.Fatalf("ListUsageEventsWithFilter returned error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestBuildUsageOverviewWithFilterFiltersByAPIGroupKey(t *testing.T) {
 	}
 	start := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 20, 11, 0, 0, 0, time.UTC)
-	overview, err := BuildUsageOverviewWithFilter(db, repodto.UsageQueryFilter{APIGroupKey: "sk-target-key", Range: "custom", StartTime: &start, EndTime: &end})
+	overview, err := BuildUsageOverviewWithFilter(db, repodto.UsageQueryFilter{APIGroupKey: "sk-target-key", Range: "custom", StartTime: &start, EndTime: &end}, emptyPricingResolverForTest())
 	if err != nil {
 		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestBuildAnalysisWithFilterUsesOverviewStatsWithoutUsageEvents(t *testing.T
 	start := bucket
 	end := bucket.Add(time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end})
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error after dropping usage_events: %v", err)
 	}
@@ -123,12 +123,9 @@ func TestBuildAnalysisWithFilterUsesOverviewStatsWithoutUsageEvents(t *testing.T
 	if len(analysis.APIKeyComposition) != 1 || analysis.APIKeyComposition[0].Key != "sk-target-key" {
 		t.Fatalf("expected API composition from overview stats, got %+v", analysis.APIKeyComposition)
 	}
-	if analysis.LatencyDiagnostics.TotalPoints != 0 || len(analysis.LatencyDiagnostics.Points) != 0 {
-		t.Fatalf("expected empty latency diagnostics when usage_events is unavailable, got %+v", analysis.LatencyDiagnostics)
-	}
 }
 
-func TestBuildAnalysisWithFilterBuildsLatencyDiagnosticsFromUsageEvents(t *testing.T) {
+func TestBuildAnalysisLatencyDiagnosticsWithFilterBuildsFromUsageEvents(t *testing.T) {
 	db := openUsageTestDatabase(t)
 	start := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
@@ -160,12 +157,10 @@ func TestBuildAnalysisWithFilterBuildsLatencyDiagnosticsFromUsageEvents(t *testi
 		t.Fatalf("InsertUsageEvents returned error: %v", err)
 	}
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end, APIGroupKey: "sk-target-key"})
+	diagnostics, err := BuildAnalysisLatencyDiagnosticsWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end, APIGroupKey: "sk-target-key"})
 	if err != nil {
-		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
+		t.Fatalf("BuildAnalysisLatencyDiagnosticsWithFilter returned error: %v", err)
 	}
-
-	diagnostics := analysis.LatencyDiagnostics
 	if diagnostics.TotalPoints != 4 || diagnostics.Sampled {
 		t.Fatalf("expected four unsampled latency points, got %+v", diagnostics)
 	}
@@ -193,7 +188,7 @@ func TestBuildAnalysisLatencyDiagnosticsSamplesDisplayPointsFromFullValues(t *te
 		latencyValues = append(latencyValues, value*10)
 	}
 
-	diagnostics := buildAnalysisLatencyDiagnostics(ttftValues, latencyValues)
+	diagnostics := buildAnalysisLatencyDiagnostics(ttftValues, latencyValues, int64(count), int64(count*10))
 
 	if diagnostics.TotalPoints != int64(count) || !diagnostics.Sampled {
 		t.Fatalf("expected full count with sampled display points, got %+v", diagnostics)
@@ -222,17 +217,17 @@ func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testi
 		Model:                "gpt-4o",
 		PromptPricePer1M:     3,
 		CompletionPricePer1M: 15,
-		CachePricePer1M:      0.3,
+		CacheReadPricePer1M:  0.3,
 	}); err != nil {
 		t.Fatalf("upsert gpt price: %v", err)
 	}
 	if _, err := UpsertModelPriceSetting(db, repodto.ModelPriceSettingInput{
-		Model:                   "claude-sonnet",
-		PricingStyle:            entities.ModelPricingStyleClaude,
-		PromptPricePer1M:        10,
-		CompletionPricePer1M:    20,
-		CachePricePer1M:         1,
-		CacheCreationPricePer1M: 12.5,
+		Model:                "claude-sonnet",
+		PricingStyle:         entities.ModelPricingStyleClaude,
+		PromptPricePer1M:     10,
+		CompletionPricePer1M: 20,
+		CacheReadPricePer1M:  1,
+		CacheWritePricePer1M: 12.5,
 	}); err != nil {
 		t.Fatalf("upsert claude price: %v", err)
 	}
@@ -246,6 +241,7 @@ func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testi
 			OutputTokens:    500_000,
 			ReasoningTokens: 50_000,
 			CachedTokens:    200_000,
+			CacheReadTokens: 200_000,
 			TotalTokens:     1_750_000,
 		},
 		{
@@ -269,7 +265,7 @@ func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testi
 	start := bucket
 	end := bucket.Add(2 * time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end})
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -282,9 +278,10 @@ func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testi
 	if !analysis.TokenUsage[0].CostAvailable || !analysis.TokenUsage[1].CostAvailable {
 		t.Fatalf("expected bucket cost to be available, got %+v", analysis.TokenUsage)
 	}
-	assertAnalysisCostClose(t, analysis.CostBreakdown.InputCostUSD, 12.4)
+	assertAnalysisCostClose(t, analysis.CostBreakdown.UncachedInputCostUSD, 12.4)
+	assertAnalysisCostClose(t, analysis.CostBreakdown.CacheReadCostUSD, 0.26)
+	assertAnalysisCostClose(t, analysis.CostBreakdown.CacheWriteCostUSD, 1.25)
 	assertAnalysisCostClose(t, analysis.CostBreakdown.OutputCostUSD, 17.5)
-	assertAnalysisCostClose(t, analysis.CostBreakdown.CachedCostUSD, 1.51)
 	assertAnalysisCostClose(t, analysis.CostBreakdown.TotalCostUSD, 31.41)
 	if !analysis.CostBreakdown.CostAvailable {
 		t.Fatalf("expected aggregate cost to be available, got %+v", analysis.CostBreakdown)
@@ -299,7 +296,7 @@ func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testi
 	if len(analysis.Heatmap) != 2 {
 		t.Fatalf("expected two heatmap cells, got %+v", analysis.Heatmap)
 	}
-	if analysis.Heatmap[0].Model != "claude-sonnet" || analysis.Heatmap[0].InputTokens != 1_300_000 || analysis.Heatmap[0].OutputTokens != 500_000 || analysis.Heatmap[0].CachedTokens != 200_000 {
+	if analysis.Heatmap[0].Model != "claude-sonnet" || analysis.Heatmap[0].InputTokens != 1_300_000 || analysis.Heatmap[0].OutputTokens != 500_000 || analysis.Heatmap[0].CacheReadTokens != 200_000 || analysis.Heatmap[0].CacheCreationTokens != 100_000 {
 		t.Fatalf("expected heatmap token detail for claude, got %+v", analysis.Heatmap[0])
 	}
 	assertAnalysisCostClose(t, analysis.Heatmap[0].CostUSD, 21.45)
@@ -311,12 +308,12 @@ func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testi
 	}
 	assertAnalysisCostClose(t, analysis.ModelEfficiency[0].CostPerRequestUSD, 21.45)
 	assertAnalysisCostClose(t, analysis.ModelEfficiency[0].OutputTokensPerRequest, 500_000)
-	assertAnalysisCostClose(t, analysis.ModelEfficiency[0].CacheRate, 200_000.0/1_300_000.0)
+	assertAnalysisCostClose(t, analysis.ModelEfficiency[0].CacheReadRate, 200_000.0/1_300_000.0)
 	if analysis.ModelEfficiency[1].Model != "gpt-4o" {
 		t.Fatalf("expected second model efficiency row for gpt-4o, got %+v", analysis.ModelEfficiency)
 	}
 	assertAnalysisCostClose(t, analysis.ModelEfficiency[1].OutputTokensPerRequest, 250_000)
-	if analysis.ModelEfficiency[0].OutputTokensPerRequest == 0 || analysis.ModelEfficiency[0].CacheRate == 0 {
+	if analysis.ModelEfficiency[0].OutputTokensPerRequest == 0 || analysis.ModelEfficiency[0].CacheReadRate == 0 {
 		t.Fatalf("unexpected model efficiency metrics: %+v", analysis.ModelEfficiency[0])
 	}
 }
@@ -341,7 +338,7 @@ func TestBuildAnalysisWithFilterMarksCostUnavailableForUnpricedStats(t *testing.
 	start := bucket
 	end := bucket.Add(time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end})
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -374,7 +371,7 @@ func TestBuildAnalysisWithFilterExcludesMissingAndDeletedCPAAPIKeys(t *testing.T
 	start := bucket
 	end := bucket.Add(time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end})
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -428,7 +425,7 @@ func TestBuildAnalysisWithFilterBuildsIdentityCompositionsFromActiveUsageIdentit
 	start := bucket
 	end := bucket.Add(time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end})
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -471,7 +468,7 @@ func TestBuildAnalysisWithFilterKeepsHeatmapPairsSeparateWhenValuesContainDelimi
 	start := bucket
 	end := bucket.Add(time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end})
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -483,7 +480,7 @@ func TestBuildAnalysisWithFilterKeepsHeatmapPairsSeparateWhenValuesContainDelimi
 func TestBuildAnalysisWithFilterIncludesCurrentHourStatsInRollingHourlyRanges(t *testing.T) {
 	withRepositoryTestLocation(t, "Asia/Shanghai")
 	db := openUsageTestDatabase(t)
-	start := time.Date(2026, 5, 21, 5, 14, 21, 0, time.Local)
+	start := time.Date(2026, 5, 21, 4, 14, 21, 0, time.Local)
 	end := time.Date(2026, 5, 21, 9, 14, 21, 0, time.Local)
 	currentHour := time.Date(2026, 5, 21, 9, 0, 0, 0, time.Local)
 	if err := db.Create(&entities.CPAAPIKey{APIKey: "sk-target-key", DisplayKey: "sk-*********target"}).Error; err != nil {
@@ -504,7 +501,7 @@ func TestBuildAnalysisWithFilterIncludesCurrentHourStatsInRollingHourlyRanges(t 
 		t.Fatalf("drop usage_events: %v", err)
 	}
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: "4h", StartTime: &start, EndTime: &end})
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: "5h", StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -549,7 +546,7 @@ func TestBuildAnalysisWithFilterFillsTodayAndYesterdayHourlyBucketsFromStats(t *
 		t.Fatalf("drop usage_events: %v", err)
 	}
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: "yesterday", StartTime: &start, EndTime: &end})
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: "yesterday", StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -622,7 +619,7 @@ func TestBuildAnalysisWithFilterIncludesPartialCurrentDayInDailyRanges(t *testin
 
 	for _, rangeValue := range []string{"7d", "30d"} {
 		t.Run(rangeValue, func(t *testing.T) {
-			analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: rangeValue, StartTime: &start, EndTime: &end})
+			analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: rangeValue, StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
 			if err != nil {
 				t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 			}
@@ -650,7 +647,7 @@ func TestListUsageEventsWithFilterFiltersByAPIGroupKey(t *testing.T) {
 	db := openUsageTestDatabase(t)
 	insertAPIKeyFilterEvents(t, db)
 
-	page, err := ListUsageEventsWithFilter(db, repodto.UsageQueryFilter{APIGroupKey: "sk-target-key", Page: 1, PageSize: 100, Limit: 100})
+	page, err := ListUsageEventsWithFilter(db, repodto.UsageQueryFilter{APIGroupKey: "sk-target-key", Page: 1, PageSize: 100, Limit: 100}, emptyPricingResolverForTest())
 	if err != nil {
 		t.Fatalf("ListUsageEventsWithFilter returned error: %v", err)
 	}

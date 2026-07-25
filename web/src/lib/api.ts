@@ -1,5 +1,6 @@
-import { type AnalysisResponse, type AuthFilesManagementResponse, type AuthManagedSessionsResponse, type AuthSessionResponse, type CpaApiKeyDisplayItem, type CpaApiKeyOptionsResponse, type CpaApiKeySettingsResponse, type CpaApiKeysResponse, type KeyOverviewTimeRange, type OverviewRealtimeBlock, type OverviewRealtimeWindow, type PricingEntry, type PricingResponse, type PricingSyncPreviewResponse, type QuotaAutoRefreshSettings, type StatusResponse, type UpdateCheckResponse, type UsageEventModelFilterOptionsResponse, type UsageEventRequestLogResponse, type UsageEventSourceFilterOptionsResponse, type UsedModelsResponse, type UsageIdentitiesPageResponse, type UsageIdentitiesResponse, type UsageEventsResponse, type UsageIdentity, type UsageIdentityAuthType, type UsageOverviewResponse, type UsageQuotaCacheResponse, type UsageQuotaInspectionStatusResponse, type UsageQuotaRefreshResponse, type UsageQuotaRefreshTaskResponse, type UsageQuotaResetResponse, type VersionResponse } from './types'
+import { type AnalysisLatencyDiagnostics, type AnalysisResponse, type AuthFilesManagementResponse, type AuthManagedSessionsResponse, type AuthSessionResponse, type CpaApiKeyDisplayItem, type CpaApiKeyOptionsResponse, type CpaApiKeySettingsResponse, type CpaApiKeysResponse, type OverviewRealtimeBlock, type OverviewRealtimeWindow, type PricingEntry, type PricingResponse, type PricingRulesResponse, type PricingSyncPreviewResponse, type QuotaAutoRefreshSettings, type ReplacePricingRulesRequest, type StatusResponse, type UpdateCheckResponse, type UsageActivityRequest, type UsageActivityResponse, type UsageEventModelFilterOptionsResponse, type UsageEventRequestLogResponse, type UsageEventSourceFilterOptionsResponse, type UsageRangeRequest, type UsedModelsResponse, type UsageIdentitiesPageResponse, type UsageIdentitiesResponse, type UsageEventsResponse, type UsageIdentity, type UsageIdentityAuthType, type UsageOverviewResponse, type UsageQuotaCacheResponse, type UsageQuotaInspectionStatusResponse, type UsageQuotaRefreshResponse, type UsageQuotaRefreshTaskResponse, type UsageQuotaResetCreditsResponse, type UsageQuotaResetResponse, type VersionResponse } from './types'
 import { isCPAMCEmbed } from '@/embed/cpamcEmbed'
+import { resolveUsageRequestRange } from '@/utils/usage/rangeQuery'
 
 export class ApiError extends Error {
   status: number
@@ -10,6 +11,10 @@ export class ApiError extends Error {
     this.status = status
   }
 }
+
+export const isUsageRangeBoundsConflict = (error: unknown): error is ApiError => (
+  error instanceof ApiError && error.status === 409
+)
 
 const APP_BASE_PATH_PLACEHOLDER = '__APP_BASE_PATH__'
 const EMBED_SESSION_STORAGE_KEY = 'cpa_usage_keeper_embed_session'
@@ -285,12 +290,51 @@ export async function revokeAuthSession(id: string): Promise<void> {
   }
 }
 
-export async function fetchKeyOverview(range: KeyOverviewTimeRange, signal?: AbortSignal): Promise<UsageOverviewResponse> {
+const buildUsageRangeParams = (request: UsageRangeRequest): URLSearchParams => {
   const params = new URLSearchParams()
-  params.set('range', range)
+  params.set('range', resolveUsageRequestRange(request.range))
+  if (request.unit) {
+    params.set('unit', request.unit)
+  }
+  if (request.start) {
+    params.set('start', request.start)
+  }
+  if (request.end) {
+    params.set('end', request.end)
+  }
+  return params
+}
+
+export async function fetchKeyOverview(request: UsageRangeRequest, signal?: AbortSignal): Promise<UsageOverviewResponse> {
+  const params = buildUsageRangeParams(request)
   const response = await apiFetch(`${apiPath('/key-overview')}?${params.toString()}`, { signal })
   if (!response.ok) {
     await parseApiError(response, `Failed to load key overview: ${response.status}`)
+  }
+  return response.json()
+}
+
+export interface FetchUsageActivityOptions {
+  request: UsageActivityRequest
+  apiKeyId?: string
+  signal?: AbortSignal
+}
+
+const buildUsageActivityParams = (request: UsageActivityRequest): URLSearchParams => {
+  // 显式 Activity window 使用 window 参数；其余选择复用 Overview 的 range 参数。
+  if ('window' in request) {
+    const params = new URLSearchParams()
+    params.set('window', request.window)
+    return params
+  }
+  return buildUsageRangeParams(request)
+}
+
+export async function fetchKeyActivity({ request, signal }: FetchUsageActivityOptions): Promise<UsageActivityResponse> {
+  const params = buildUsageActivityParams(request)
+  const response = await apiFetch(`${apiPath('/key-activity')}?${params.toString()}`, { signal })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to load key activity: ${response.status}`)
   }
   return response.json()
 }
@@ -312,15 +356,8 @@ export async function fetchKeyOverviewRealtime(options: FetchKeyOverviewRealtime
   return normalizeOverviewRealtimeBlock(payload, window)
 }
 
-export async function fetchUsageOverview(range: string, start?: string, end?: string, signal?: AbortSignal, apiKeyId?: string): Promise<UsageOverviewResponse> {
-  const params = new URLSearchParams()
-  params.set('range', range)
-  if (start) {
-    params.set('start', start)
-  }
-  if (end) {
-    params.set('end', end)
-  }
+export async function fetchUsageOverview(request: UsageRangeRequest, signal?: AbortSignal, apiKeyId?: string): Promise<UsageOverviewResponse> {
+  const params = buildUsageRangeParams(request)
   const selectedAPIKeyId = apiKeyId?.trim()
   if (selectedAPIKeyId) {
     params.set('api_key_id', selectedAPIKeyId)
@@ -329,6 +366,19 @@ export async function fetchUsageOverview(range: string, start?: string, end?: st
   const response = await apiFetch(`${apiPath('/usage/overview')}${query ? `?${query}` : ''}`, { signal })
   if (!response.ok) {
     await parseApiError(response, `Failed to load usage overview: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchUsageActivity({ request, apiKeyId, signal }: FetchUsageActivityOptions): Promise<UsageActivityResponse> {
+  const params = buildUsageActivityParams(request)
+  const selectedAPIKeyId = apiKeyId?.trim()
+  if (selectedAPIKeyId) {
+    params.set('api_key_id', selectedAPIKeyId)
+  }
+  const response = await apiFetch(`${apiPath('/usage/activity')}?${params.toString()}`, { signal })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to load usage activity: ${response.status}`)
   }
   return response.json()
 }
@@ -375,15 +425,8 @@ interface UsageEventRequestLogDownloadURLResponse {
   download_url?: string
 }
 
-function buildUsageEventsParams(range: string, start?: string, end?: string, options?: FetchUsageEventsOptions, includePagination = true): URLSearchParams {
-  const params = new URLSearchParams()
-  params.set('range', range)
-  if (start) {
-    params.set('start', start)
-  }
-  if (end) {
-    params.set('end', end)
-  }
+function buildUsageEventsParams(request: UsageRangeRequest, options?: FetchUsageEventsOptions, includePagination = true): URLSearchParams {
+  const params = buildUsageRangeParams(request)
   if (includePagination && typeof options?.page === 'number' && Number.isFinite(options.page) && options.page > 0) {
     params.set('page', String(Math.floor(options.page)))
   }
@@ -447,8 +490,8 @@ export async function fetchKeyOverviewUsageEventSourceFilterOptions(signal?: Abo
   return response.json()
 }
 
-export async function fetchUsageEvents(range: string, start?: string, end?: string, signal?: AbortSignal, options?: FetchUsageEventsOptions): Promise<UsageEventsResponse> {
-  const params = buildUsageEventsParams(range, start, end, options)
+export async function fetchUsageEvents(request: UsageRangeRequest, signal?: AbortSignal, options?: FetchUsageEventsOptions): Promise<UsageEventsResponse> {
+  const params = buildUsageEventsParams(request, options)
   const query = params.toString()
   const response = await apiFetch(`${apiPath('/usage/events')}${query ? `?${query}` : ''}`, { signal })
   if (!response.ok) {
@@ -457,8 +500,8 @@ export async function fetchUsageEvents(range: string, start?: string, end?: stri
   return response.json()
 }
 
-export async function fetchKeyOverviewUsageEvents(range: string, start?: string, end?: string, signal?: AbortSignal, options?: FetchUsageEventsOptions): Promise<UsageEventsResponse> {
-  const params = buildUsageEventsParams(range, start, end, options)
+export async function fetchKeyOverviewUsageEvents(request: UsageRangeRequest, signal?: AbortSignal, options?: FetchUsageEventsOptions): Promise<UsageEventsResponse> {
+  const params = buildUsageEventsParams(request, options)
   const query = params.toString()
   const response = await apiFetch(`${apiPath('/key-overview/events')}${query ? `?${query}` : ''}`, { signal })
   if (!response.ok) {
@@ -488,8 +531,8 @@ export async function createUsageEventRequestLogDownloadURL(eventId: string): Pr
   return downloadURL
 }
 
-export async function exportUsageEvents(range: string, start: string | undefined, end: string | undefined, format: UsageEventsExportFormat, options?: FetchUsageEventsOptions): Promise<UsageEventsExportFile> {
-  const params = buildUsageEventsParams(range, start, end, options, false)
+export async function exportUsageEvents(request: UsageRangeRequest, format: UsageEventsExportFormat, options?: FetchUsageEventsOptions): Promise<UsageEventsExportFile> {
+  const params = buildUsageEventsParams(request, options, false)
   params.set('format', format)
   const query = params.toString()
   const response = await apiFetch(`${apiPath('/usage/events/export')}${query ? `?${query}` : ''}`)
@@ -502,8 +545,8 @@ export async function exportUsageEvents(range: string, start: string | undefined
   }
 }
 
-export async function exportKeyOverviewUsageEvents(range: string, start: string | undefined, end: string | undefined, format: UsageEventsExportFormat, options?: FetchUsageEventsOptions): Promise<UsageEventsExportFile> {
-  const params = buildUsageEventsParams(range, start, end, options, false)
+export async function exportKeyOverviewUsageEvents(request: UsageRangeRequest, format: UsageEventsExportFormat, options?: FetchUsageEventsOptions): Promise<UsageEventsExportFile> {
+  const params = buildUsageEventsParams(request, options, false)
   params.set('format', format)
   const query = params.toString()
   const response = await apiFetch(`${apiPath('/key-overview/events/export')}${query ? `?${query}` : ''}`)
@@ -692,6 +735,14 @@ export async function resetUsageQuota(authIndex: string, signal?: AbortSignal): 
   return response.json()
 }
 
+export async function fetchUsageQuotaResetCredits(authIndex: string, signal?: AbortSignal): Promise<UsageQuotaResetCreditsResponse> {
+  const response = await apiFetch(apiPath(`/quota/reset-credits/${encodeURIComponent(authIndex)}`), { signal })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to load quota reset credits: ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function fetchUsageQuotaRefreshTask(authIndex: string, signal?: AbortSignal): Promise<UsageQuotaRefreshTaskResponse> {
   const response = await apiFetch(apiPath(`/quota/refresh/${encodeURIComponent(authIndex)}`), { signal })
   if (!response.ok) {
@@ -728,15 +779,8 @@ export async function deleteAuthFiles(names: string[]): Promise<AuthFilesManagem
   return response.json()
 }
 
-export async function fetchAnalysis(range: string, start?: string, end?: string, signal?: AbortSignal, apiKeyId?: string): Promise<AnalysisResponse> {
-  const params = new URLSearchParams()
-  params.set('range', range)
-  if (start) {
-    params.set('start', start)
-  }
-  if (end) {
-    params.set('end', end)
-  }
+export async function fetchAnalysis(request: UsageRangeRequest, signal?: AbortSignal, apiKeyId?: string): Promise<AnalysisResponse> {
+  const params = buildUsageRangeParams(request)
   const selectedAPIKeyId = apiKeyId?.trim()
   if (selectedAPIKeyId) {
     params.set('api_key_id', selectedAPIKeyId)
@@ -749,6 +793,19 @@ export async function fetchAnalysis(range: string, start?: string, end?: string,
   return response.json()
 }
 
+export async function fetchAnalysisLatency(request: UsageRangeRequest, signal?: AbortSignal, apiKeyId?: string): Promise<AnalysisLatencyDiagnostics> {
+  const params = buildUsageRangeParams(request)
+  const selectedAPIKeyId = apiKeyId?.trim()
+  if (selectedAPIKeyId) {
+    params.set('api_key_id', selectedAPIKeyId)
+  }
+  const query = params.toString()
+  const response = await apiFetch(`${apiPath('/usage/analysis/latency')}${query ? `?${query}` : ''}`, { signal })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to load analysis latency: ${response.status}`)
+  }
+  return response.json()
+}
 
 export async function fetchCpaApiKeyOptions(signal?: AbortSignal): Promise<CpaApiKeyOptionsResponse> {
   const response = await apiFetch(apiPath('/usage/api-keys/options'), { signal, cache: 'no-store' })
@@ -850,6 +907,36 @@ export async function fetchPricing(signal?: AbortSignal): Promise<PricingRespons
   return response.json()
 }
 
+export async function fetchPricingRules(model: string, signal?: AbortSignal): Promise<PricingRulesResponse> {
+  const params = new URLSearchParams({ model })
+  const response = await apiFetch(`${apiPath('/pricing/rules')}?${params.toString()}`, {
+    signal,
+    cache: 'no-store',
+  })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to load pricing rules: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function replacePricingRules(
+  request: ReplacePricingRulesRequest,
+  signal?: AbortSignal,
+): Promise<PricingRulesResponse> {
+  const response = await apiFetch(apiPath('/pricing/rules'), {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+    signal,
+  })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to update pricing rules: ${response.status}`)
+  }
+  return response.json()
+}
+
 export async function fetchPricingSyncPreview(signal?: AbortSignal): Promise<PricingSyncPreviewResponse> {
   const response = await apiFetch(apiPath('/pricing/sync/preview'), { signal, cache: 'no-store' })
   if (!response.ok) {
@@ -865,6 +952,20 @@ export async function updatePricing(model: string, pricing: Omit<PricingEntry, '
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ model, ...pricing }),
+  })
+  if (!response.ok) {
+    await parseApiError(response, `Failed to update pricing: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function updatePricingBatch(pricing: PricingEntry[]): Promise<PricingResponse> {
+  const response = await apiFetch(apiPath('/pricing/batch'), {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ pricing }),
   })
   if (!response.ok) {
     await parseApiError(response, `Failed to update pricing: ${response.status}`)

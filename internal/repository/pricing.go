@@ -10,6 +10,7 @@ import (
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/repository/dto"
 	"gorm.io/gorm"
+	"gorm.io/plugin/dbresolver"
 )
 
 var modelPriceSettingColumns = []string{
@@ -18,7 +19,7 @@ var modelPriceSettingColumns = []string{
 	"pricing_style",
 	"prompt_price_per1_m",
 	"completion_price_per1_m",
-	"cache_price_per1_m",
+	"cache_read_price_per1_m",
 	"cache_creation_price_per1_m",
 	"price_multiplier",
 	"created_at",
@@ -84,7 +85,8 @@ func UpsertModelPriceSetting(db *gorm.DB, input dto.ModelPriceSettingInput) (*en
 	}
 
 	setting := &entities.ModelPriceSetting{}
-	if err := db.Select(modelPriceSettingColumns).Where("model = ?", modelName).First(setting).Error; err != nil {
+	// upsert 的存在性查询属于写命令，使用官方 Write clause 避免被自动分流到 reader。
+	if err := db.Clauses(dbresolver.Write).Select(modelPriceSettingColumns).Where("model = ?", modelName).First(setting).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			setting = &entities.ModelPriceSetting{Model: modelName}
 		} else {
@@ -96,8 +98,8 @@ func UpsertModelPriceSetting(db *gorm.DB, input dto.ModelPriceSettingInput) (*en
 	setting.PricingStyle = pricingStyle
 	setting.PromptPricePer1M = input.PromptPricePer1M
 	setting.CompletionPricePer1M = input.CompletionPricePer1M
-	setting.CachePricePer1M = input.CachePricePer1M
-	setting.CacheCreationPricePer1M = input.CacheCreationPricePer1M
+	setting.CacheReadPricePer1M = input.CacheReadPricePer1M
+	setting.CacheWritePricePer1M = input.CacheWritePricePer1M
 	multiplier, err := modelPriceMultiplierInputValue(input.PriceMultiplier)
 	if err != nil {
 		return nil, err

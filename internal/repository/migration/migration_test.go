@@ -63,6 +63,15 @@ func TestOrderedMigrationsPreservesExecutionOrder(t *testing.T) {
 		"20260701_add_auth_session_source",
 		"20260702_model_price_multiplier",
 		"20260702_create_app_settings",
+		"20260710_backfill_cache_read_tokens",
+		"20260711_add_usage_identity_xai_user_id",
+		"20260715_add_usage_event_response_service_tier",
+		"20260715_add_usage_event_generate",
+		// Activity 必须在所有 usage_events 字段规范化 migration 之后回填。
+		"20260719_usage_activity_stats",
+		"20260722_align_usage_activity_short",
+		"20260723_usage_overview_five_dimensions",
+		"20260723_model_price_rules",
 	}
 	assertStringSlicesEqual(t, want, got)
 }
@@ -222,7 +231,6 @@ func TestOpenDatabaseLogsSchemaMigrations(t *testing.T) {
 		"level=info",
 		"msg=\"schema migration started\"",
 		"msg=\"schema migration applied\"",
-		"msg=\"schema migration skipped\"",
 		"version=20260503_add_usage_event_redis_fields",
 		"version=20260504_migrate_usage_identities_metadata",
 		"version=20260504_drop_legacy_metadata_tables",
@@ -230,6 +238,19 @@ func TestOpenDatabaseLogsSchemaMigrations(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected migration logs to contain %q, got:\n%s", want, content)
 		}
+	}
+	if strings.Contains(content, "msg=\"schema migration skipped\"") {
+		t.Fatalf("expected info logs to hide skipped migrations, got:\n%s", content)
+	}
+
+	logrus.SetLevel(logrus.DebugLevel)
+	db = openMigratedDatabase(t, dbPath)
+	closeOpenedDatabase(t, db)
+
+	content = logs.String()
+	want := "level=debug msg=\"schema migration skipped\" version=20260503_add_usage_event_redis_fields"
+	if !strings.Contains(content, want) {
+		t.Fatalf("expected debug migration logs to contain %q, got:\n%s", want, content)
 	}
 }
 
