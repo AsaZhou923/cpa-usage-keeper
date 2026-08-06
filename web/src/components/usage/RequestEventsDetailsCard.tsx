@@ -7,13 +7,14 @@ import React, {
   useState,
   type ReactNode,
 } from 'react';
-import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { MainActionButton } from '@/components/ui/MainActionButton';
 import { Modal } from '@/components/ui/Modal';
+import { PortalTooltip, usePortalTooltip } from '@/components/ui/PortalTooltip';
 import { Select } from '@/components/ui/Select';
 import { IconCheck, IconChevronDown, IconCopy, IconDownload, IconScrollText, IconSettings } from '@/components/ui/icons';
 import type { UsageEvent, UsageEventRequestLogResponse, UsageSourceFilterOption } from '@/lib/types';
@@ -50,10 +51,9 @@ const REQUEST_LOG_VIRTUAL_PADDING_Y = 12;
 const REQUEST_LOG_VIRTUAL_CHUNK_CHARS = 2048;
 const REQUEST_LOG_VIRTUAL_BREAK_LOOKBACK = 256;
 const REQUEST_LOG_GRAPHEME_CONTEXT_CHARS = 64;
-const REQUEST_EVENTS_SPEED_MODE_TOOLTIP_MAX_WIDTH = 280;
-const REQUEST_EVENTS_SPEED_MODE_TOOLTIP_ESTIMATED_HEIGHT = 72;
-const REQUEST_EVENTS_SPEED_MODE_TOOLTIP_OFFSET = 10;
-const REQUEST_EVENTS_SPEED_MODE_TOOLTIP_VIEWPORT_PADDING = 8;
+const REQUEST_EVENT_CLIENT_IP_DISPLAY_LENGTH = 39;
+const REQUEST_EVENT_X_FORWARDED_FOR_DISPLAY_LENGTH = 48;
+const REQUEST_EVENT_USER_AGENT_DISPLAY_LENGTH = 48;
 const REQUEST_LOG_GRAPHEME_SEGMENTER = typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
   ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
   : null;
@@ -109,6 +109,9 @@ type RequestEventRow = {
   latencyMs: number | null;
   ttftMs: number | null;
   speedTPS: number | null;
+  clientIP: string;
+  xForwardedFor: string;
+  userAgent: string;
   inputTokens: number;
   outputTokens: number;
   reasoningTokens: number;
@@ -118,18 +121,6 @@ type RequestEventRow = {
   cacheReadRate: string;
   cost: number | null;
   costAvailable: boolean;
-};
-
-type RequestEventSpeedModeTooltipState = {
-  lines: string[];
-  x: number;
-  y: number;
-  placement: 'above' | 'below';
-};
-
-type RequestEventSpeedModeTooltipTarget = {
-  row: RequestEventRow;
-  anchor: HTMLTableCellElement;
 };
 
 type RequestEventColumnDefinition = {
@@ -319,6 +310,13 @@ const formatSpeedTPS = (speedTPS: number | null): string => {
   return `${speedTPS.toFixed(1)} t/s`;
 };
 
+const truncateRequestEventMetadata = (value: string, maxLength: number): string => {
+  const characters = Array.from(value);
+  return characters.length <= maxLength
+    ? value
+    : `${characters.slice(0, maxLength).join('')}...`;
+};
+
 const REQUEST_SPEED_MODE_LABEL_KEYS: Record<string, string> = {
   auto: 'usage_stats.speed_mode_auto',
   default: 'usage_stats.speed_mode_standard',
@@ -372,18 +370,6 @@ const parseRequestEndpoint = (rawEndpoint: unknown): { requestType: string; endp
   const normalizedPath = path.startsWith('/v1/') ? path.slice(3) : path === '/v1' ? '/' : path;
   return { requestType, endpoint: normalizedPath || '-' };
 };
-
-function RequestEventsTitle({ title, subtitle, totalLabel }: { title: string; subtitle: string; totalLabel: string }) {
-  return (
-    <div className={styles.sectionTitleBlock}>
-      <div className={styles.requestEventsTitleRow}>
-        <h3 className={styles.sectionTitle}>{title}</h3>
-        <span className={styles.requestEventsCountBadge}>{totalLabel}</span>
-      </div>
-      <p className={styles.sectionSubtitle}>{subtitle}</p>
-    </div>
-  );
-}
 
 const copyRequestLogSectionContent = async (content: string) => {
   const clipboard = globalThis.navigator?.clipboard;
@@ -596,23 +582,18 @@ function RequestEventsExportMenu({
       onKeyDown={handleKeyDown}
       onBlur={handleBlur}
     >
-      <Button
+      <MainActionButton
         type="button"
-        variant="secondary"
-        size="sm"
-        className={styles.requestEventsExportButton}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
         loading={exportingFormat !== null}
         onClick={handleTriggerClick}
       >
-        <span className={styles.requestEventsExportButtonInner}>
-          <IconDownload size={12} aria-hidden="true" />
-          <span>{label}</span>
-          <IconChevronDown size={12} aria-hidden="true" />
-        </span>
-      </Button>
+        <IconDownload size={12} aria-hidden="true" />
+        <span>{label}</span>
+        <IconChevronDown size={12} aria-hidden="true" />
+      </MainActionButton>
       {open && !disabled && (
         <div className={styles.requestEventsExportDropdown} role="menu" aria-label={label}>
           <button type="button" role="menuitem" onClick={() => handleSelect('csv')}>
@@ -663,11 +644,15 @@ export function RequestEventsDetailsCard({
   requestLogDownloading = false,
 }: RequestEventsDetailsCardProps) {
   const { t } = useTranslation();
-  const [speedModeTooltip, setSpeedModeTooltip] = useState<RequestEventSpeedModeTooltipState | null>(null);
+  const {
+    tooltip: requestEventsTooltip,
+    showOnMouseEnter: handleRequestEventsTooltipMouseEnter,
+    hideOnMouseLeave: handleRequestEventsTooltipMouseLeave,
+    showOnFocus: handleRequestEventsTooltipFocus,
+    hideOnBlur: handleRequestEventsTooltipBlur,
+  } = usePortalTooltip();
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
   const [columnSettingsSession, setColumnSettingsSession] = useState(0);
-  const speedModeHoverTargetRef = useRef<RequestEventSpeedModeTooltipTarget | null>(null);
-  const speedModeFocusTargetRef = useRef<RequestEventSpeedModeTooltipTarget | null>(null);
   const requestEventsTableWrapperRef = useRef<HTMLDivElement | null>(null);
   const resultLocale = t('usage_stats.success') === 'Success' ? 'en' : 'zh';
   const latencyHint = t('usage_stats.latency_unit_hint', {
@@ -676,88 +661,6 @@ export function RequestEventsDetailsCard({
   });
   const ttftHint = t('usage_stats.ttft_hint');
   const speedHint = t('usage_stats.speed_hint');
-
-  const positionSpeedModeTooltip = useCallback((target: RequestEventSpeedModeTooltipTarget | null) => {
-    if (!target) {
-      setSpeedModeTooltip(null);
-      return;
-    }
-
-    // 浮层挂到 body 后不受表格滚动容器裁剪，并随当前 hover/focus 锚点保持在视口内。
-    const viewportWidth = typeof window === 'undefined' ? 1024 : window.innerWidth;
-    const viewportHeight = typeof window === 'undefined' ? 768 : window.innerHeight;
-    const rect = target.anchor.getBoundingClientRect();
-    const tooltipWidth = Math.min(
-      REQUEST_EVENTS_SPEED_MODE_TOOLTIP_MAX_WIDTH,
-      Math.max(viewportWidth - REQUEST_EVENTS_SPEED_MODE_TOOLTIP_VIEWPORT_PADDING * 2, 0),
-    );
-    const halfTooltipWidth = tooltipWidth / 2;
-    const minX = REQUEST_EVENTS_SPEED_MODE_TOOLTIP_VIEWPORT_PADDING + halfTooltipWidth;
-    const maxX = viewportWidth - REQUEST_EVENTS_SPEED_MODE_TOOLTIP_VIEWPORT_PADDING - halfTooltipWidth;
-    const anchorX = rect.left + rect.width / 2;
-    const x = maxX >= minX ? Math.max(minX, Math.min(anchorX, maxX)) : viewportWidth / 2;
-    const spaceBelow = viewportHeight
-      - rect.bottom
-      - REQUEST_EVENTS_SPEED_MODE_TOOLTIP_OFFSET
-      - REQUEST_EVENTS_SPEED_MODE_TOOLTIP_VIEWPORT_PADDING;
-    const spaceAbove = rect.top
-      - REQUEST_EVENTS_SPEED_MODE_TOOLTIP_OFFSET
-      - REQUEST_EVENTS_SPEED_MODE_TOOLTIP_VIEWPORT_PADDING;
-    const placement = spaceBelow >= REQUEST_EVENTS_SPEED_MODE_TOOLTIP_ESTIMATED_HEIGHT || spaceBelow >= spaceAbove
-      ? 'below'
-      : 'above';
-    const y = placement === 'above'
-      ? rect.top - REQUEST_EVENTS_SPEED_MODE_TOOLTIP_OFFSET
-      : rect.bottom + REQUEST_EVENTS_SPEED_MODE_TOOLTIP_OFFSET;
-    const lines = buildSpeedModeTooltipLines(target.row, t);
-
-    setSpeedModeTooltip({ lines, x, y, placement });
-  }, [t]);
-
-  const syncSpeedModeTooltip = useCallback(() => {
-    if (speedModeHoverTargetRef.current && !speedModeHoverTargetRef.current.anchor.isConnected) {
-      speedModeHoverTargetRef.current = null;
-    }
-    if (speedModeFocusTargetRef.current && !speedModeFocusTargetRef.current.anchor.isConnected) {
-      speedModeFocusTargetRef.current = null;
-    }
-    positionSpeedModeTooltip(speedModeHoverTargetRef.current ?? speedModeFocusTargetRef.current);
-  }, [positionSpeedModeTooltip]);
-
-  const handleSpeedModeMouseEnter = useCallback((row: RequestEventRow, anchor: HTMLTableCellElement) => {
-    speedModeHoverTargetRef.current = { row, anchor };
-    syncSpeedModeTooltip();
-  }, [syncSpeedModeTooltip]);
-  const handleSpeedModeMouseLeave = useCallback((anchor: HTMLTableCellElement) => {
-    if (speedModeHoverTargetRef.current?.anchor === anchor) {
-      speedModeHoverTargetRef.current = null;
-    }
-    syncSpeedModeTooltip();
-  }, [syncSpeedModeTooltip]);
-  const handleSpeedModeFocus = useCallback((row: RequestEventRow, anchor: HTMLTableCellElement) => {
-    speedModeFocusTargetRef.current = { row, anchor };
-    syncSpeedModeTooltip();
-  }, [syncSpeedModeTooltip]);
-  const handleSpeedModeBlur = useCallback((anchor: HTMLTableCellElement) => {
-    if (speedModeFocusTargetRef.current?.anchor === anchor) {
-      speedModeFocusTargetRef.current = null;
-    }
-    syncSpeedModeTooltip();
-  }, [syncSpeedModeTooltip]);
-
-  useEffect(() => {
-    const repositionSpeedModeTooltip = () => {
-      if (speedModeHoverTargetRef.current || speedModeFocusTargetRef.current) {
-        syncSpeedModeTooltip();
-      }
-    };
-    window.addEventListener('resize', repositionSpeedModeTooltip);
-    window.addEventListener('scroll', repositionSpeedModeTooltip, true);
-    return () => {
-      window.removeEventListener('resize', repositionSpeedModeTooltip);
-      window.removeEventListener('scroll', repositionSpeedModeTooltip, true);
-    };
-  }, [syncSpeedModeTooltip]);
 
   const rows = useMemo<RequestEventRow[]>(() => {
     return events.map((event, index) => {
@@ -791,6 +694,9 @@ export function RequestEventsDetailsCard({
       const latencyMs = Number.isFinite(event.latency_ms) ? event.latency_ms : null;
       const ttftMs = Number.isFinite(event.ttft_ms) ? event.ttft_ms as number : null;
       const speedTPS = Number.isFinite(event.speed_tps) ? event.speed_tps as number : null;
+      const clientIP = String(event.client_ip ?? '').trim() || '-';
+      const xForwardedFor = String(event.x_forwarded_for ?? '').trim() || '-';
+      const userAgent = String(event.user_agent ?? '').trim() || '-';
       // 费用由后端按当前价格配置运行时计算，前端只负责展示可用/不可用状态。
       const costAvailable = event.cost_available === true;
       const cost = costAvailable ? Math.max(toNumber(event.cost_usd), 0) : null;
@@ -821,6 +727,9 @@ export function RequestEventsDetailsCard({
         latencyMs,
         ttftMs,
         speedTPS,
+        clientIP,
+        xForwardedFor,
+        userAgent,
         inputTokens,
         outputTokens,
         reasoningTokens,
@@ -886,6 +795,37 @@ export function RequestEventsDetailsCard({
       onRequestLogDownload(eventId);
     }
   }, [onRequestLogDownload, requestLogResponse?.event_id]);
+
+  const renderClientMetadataCell = useCallback((value: string, maxLength: number) => {
+    const hasValue = value !== '-';
+    const tooltipLines = [value];
+    return (
+      <td
+        className={`${styles.requestEventsNoWrapCell} ${styles.requestEventsSpeedModeCell}`}
+        tabIndex={hasValue ? 0 : undefined}
+        aria-label={hasValue ? value : undefined}
+        onMouseEnter={hasValue
+          ? (event) => handleRequestEventsTooltipMouseEnter(tooltipLines, event.currentTarget)
+          : undefined}
+        onMouseLeave={hasValue
+          ? (event) => handleRequestEventsTooltipMouseLeave(event.currentTarget)
+          : undefined}
+        onFocus={hasValue
+          ? (event) => handleRequestEventsTooltipFocus(tooltipLines, event.currentTarget)
+          : undefined}
+        onBlur={hasValue
+          ? (event) => handleRequestEventsTooltipBlur(event.currentTarget)
+          : undefined}
+      >
+        {truncateRequestEventMetadata(value, maxLength)}
+      </td>
+    );
+  }, [
+    handleRequestEventsTooltipBlur,
+    handleRequestEventsTooltipFocus,
+    handleRequestEventsTooltipMouseEnter,
+    handleRequestEventsTooltipMouseLeave,
+  ]);
 
   const modelOptions = useMemo(() => {
     const options = [
@@ -1000,10 +940,10 @@ export function RequestEventsDetailsCard({
               className={`${styles.requestEventsNoWrapCell} ${styles.requestEventsSpeedModeCell}`}
               tabIndex={0}
               aria-label={tooltipLines.join('; ')}
-              onMouseEnter={(event) => handleSpeedModeMouseEnter(row, event.currentTarget)}
-              onMouseLeave={(event) => handleSpeedModeMouseLeave(event.currentTarget)}
-              onFocus={(event) => handleSpeedModeFocus(row, event.currentTarget)}
-              onBlur={(event) => handleSpeedModeBlur(event.currentTarget)}
+              onMouseEnter={(event) => handleRequestEventsTooltipMouseEnter(tooltipLines, event.currentTarget)}
+              onMouseLeave={(event) => handleRequestEventsTooltipMouseLeave(event.currentTarget)}
+              onFocus={(event) => handleRequestEventsTooltipFocus(tooltipLines, event.currentTarget)}
+              onBlur={(event) => handleRequestEventsTooltipBlur(event.currentTarget)}
             >
               {`${row.speedMode} / ${row.responseSpeedMode}`}
             </td>
@@ -1077,6 +1017,33 @@ export function RequestEventsDetailsCard({
         renderCell: (row) => <td className={styles.requestEventsNoWrapCell}>{formatSpeedTPS(row.speedTPS)}</td>,
       },
       {
+        id: 'client_ip',
+        label: t('usage_stats.client_ip'),
+        header: <th className={styles.requestEventsNoWrapCell}>{t('usage_stats.client_ip')}</th>,
+        renderCell: (row) => renderClientMetadataCell(
+          row.clientIP,
+          REQUEST_EVENT_CLIENT_IP_DISPLAY_LENGTH,
+        ),
+      },
+      {
+        id: 'x_forwarded_for',
+        label: t('usage_stats.x_forwarded_for'),
+        header: <th className={styles.requestEventsNoWrapCell}>{t('usage_stats.x_forwarded_for')}</th>,
+        renderCell: (row) => renderClientMetadataCell(
+          row.xForwardedFor,
+          REQUEST_EVENT_X_FORWARDED_FOR_DISPLAY_LENGTH,
+        ),
+      },
+      {
+        id: 'user_agent',
+        label: t('usage_stats.user_agent'),
+        header: <th className={styles.requestEventsNoWrapCell}>{t('usage_stats.user_agent')}</th>,
+        renderCell: (row) => renderClientMetadataCell(
+          row.userAgent,
+          REQUEST_EVENT_USER_AGENT_DISPLAY_LENGTH,
+        ),
+      },
+      {
         id: 'input_tokens',
         label: t('usage_stats.input_tokens'),
         header: <th className={styles.requestEventsNoWrapCell}>{t('usage_stats.input_tokens')}</th>,
@@ -1132,14 +1099,15 @@ export function RequestEventsDetailsCard({
 
     return definitions;
   }, [
-    handleSpeedModeBlur,
-    handleSpeedModeFocus,
-    handleSpeedModeMouseEnter,
-    handleSpeedModeMouseLeave,
+    handleRequestEventsTooltipBlur,
+    handleRequestEventsTooltipFocus,
+    handleRequestEventsTooltipMouseEnter,
+    handleRequestEventsTooltipMouseLeave,
     latencyHint,
     onRequestLogOpen,
     requestLogAccessEnabled,
     requestLogLoadingEventId,
+    renderClientMetadataCell,
     resultLocale,
     speedHint,
     t,
@@ -1178,35 +1146,29 @@ export function RequestEventsDetailsCard({
     <>
       <Card
         className={styles.requestEventsCard}
-        title={
-          <RequestEventsTitle
-            title={t('usage_stats.request_events_title')}
-            subtitle={t('usage_stats.request_events_subtitle')}
-            totalLabel={t('usage_stats.request_events_total_count', { count: totalCount })}
-          />
+        variant="flush"
+        title={t('usage_stats.request_events_title')}
+        subtitle={t('usage_stats.request_events_subtitle')}
+        titleMeta={
+          <span className={styles.requestEventsCountBadge}>
+            {t('usage_stats.request_events_total_count', { count: totalCount })}
+          </span>
         }
         extra={
           <div className={styles.requestEventsActions}>
-            <div className={styles.requestEventsColumnSettingsShell}>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className={styles.requestEventsColumnSettingsButton}
-                data-request-events-column-settings-trigger="true"
-                aria-label={t('usage_stats.request_events_columns')}
-                onClick={() => {
-                  // 新会话重新挂载草稿状态，取消或关闭后不会复用上一次未提交修改。
-                  setColumnSettingsSession((currentSession) => currentSession + 1);
-                  setColumnSettingsOpen(true);
-                }}
-              >
-                <span className={styles.requestEventsColumnSettingsButtonInner}>
-                  <IconSettings size={12} aria-hidden="true" />
-                  <span>{t('usage_stats.request_events_columns')}</span>
-                </span>
-              </Button>
-            </div>
+            <MainActionButton
+              type="button"
+              data-request-events-column-settings-trigger="true"
+              aria-label={t('usage_stats.request_events_columns')}
+              onClick={() => {
+                // 新会话重新挂载草稿状态，取消或关闭后不会复用上一次未提交修改。
+                setColumnSettingsSession((currentSession) => currentSession + 1);
+                setColumnSettingsOpen(true);
+              }}
+            >
+              <IconSettings size={12} aria-hidden="true" />
+              <span>{t('usage_stats.request_events_columns')}</span>
+            </MainActionButton>
             <RequestEventsExportMenu
               label={t('usage_stats.export')}
               csvLabel={t('usage_stats.export_csv')}
@@ -1262,7 +1224,7 @@ export function RequestEventsDetailsCard({
               <Button
                 variant="ghost"
                 size="sm"
-                className={`${styles.usagePillAction} ${styles.requestEventsClearFiltersButton}`.trim()}
+                appearance="action"
                 onClick={handleClearFilters}
                 disabled={!hasActiveFilters}
               >
@@ -1331,24 +1293,7 @@ export function RequestEventsDetailsCard({
         onApply={handleColumnSettingsApply}
         onClose={() => setColumnSettingsOpen(false)}
       />
-      {speedModeTooltip && typeof document !== 'undefined'
-        ? createPortal(
-            <div
-              className={styles.requestEventsSpeedModeTooltip}
-              role="tooltip"
-              style={{
-                left: speedModeTooltip.x,
-                top: speedModeTooltip.y,
-                transform: speedModeTooltip.placement === 'above'
-                  ? 'translate(-50%, -100%)'
-                  : 'translateX(-50%)',
-              }}
-            >
-              {speedModeTooltip.lines.map((line) => <span key={line}>{line}</span>)}
-            </div>,
-            document.body,
-          )
-        : null}
+      <PortalTooltip tooltip={requestEventsTooltip} />
       <Modal
         open={requestLogOpen}
         title={requestLogTitle}
@@ -1358,15 +1303,15 @@ export function RequestEventsDetailsCard({
         footer={
           requestLogTooLarge ? (
             <>
-              <Button variant="secondary" size="sm" className={styles.usagePillAction} onClick={onRequestLogClose ?? (() => undefined)}>
+              <Button variant="secondary" size="sm" appearance="action" onClick={onRequestLogClose ?? (() => undefined)}>
                 {t('common.cancel')}
               </Button>
-              <Button variant="primary" size="sm" className={styles.usagePillAction} onClick={handleRequestLogDownloadAction} loading={requestLogDownloading} disabled={!requestLogDownloadable}>
+              <Button variant="primary" size="sm" appearance="action" onClick={handleRequestLogDownloadAction} loading={requestLogDownloading} disabled={!requestLogDownloadable}>
                 {requestLogDownloading ? t('common.loading') : t('usage_stats.request_events_log_download')}
               </Button>
             </>
           ) : requestLogDownloadable ? (
-            <Button variant="secondary" size="sm" className={styles.usagePillAction} onClick={handleRequestLogDownloadAction} loading={requestLogDownloading}>
+            <Button variant="secondary" size="sm" appearance="action" onClick={handleRequestLogDownloadAction} loading={requestLogDownloading}>
               {requestLogDownloading ? t('common.loading') : t('usage_stats.request_events_log_download')}
             </Button>
           ) : undefined

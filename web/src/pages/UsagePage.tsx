@@ -6,6 +6,7 @@ import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
 import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
+import { MainActionButton } from '@/components/ui/MainActionButton';
 import { Modal } from '@/components/ui/Modal';
 import { IconRefreshCw } from '@/components/ui/icons';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
@@ -44,6 +45,13 @@ import type { Theme } from '@/types';
 import { BrandLink } from '@/components/BrandLink';
 import { isCPAMCEmbed } from '@/embed/cpamcEmbed';
 import { MONITORING_TIME_ZONE } from '@/utils/time';
+import { RankingPage } from '@/features/ranking/RankingPage';
+import { RankingScopeSwitch } from '@/features/ranking/components/RankingScopeSwitch';
+import { useRankingData } from '@/features/ranking/hooks/useRankingData';
+import { useLocalRankingData } from '@/features/ranking/hooks/useLocalRankingData';
+import { resolveLocalRankingPreviewAPI, resolveRankingPreviewAPI } from '@/features/ranking/previewMock';
+import { loadRankingScope, persistRankingScope } from '@/features/ranking/scope';
+import type { LocalRankingProfileRequest, RankingScope } from '@/features/ranking/types';
 import styles from './UsagePage.module.scss';
 
 const TIME_RANGE_STORAGE_KEY = 'cli-proxy-usage-time-range-v1';
@@ -57,12 +65,15 @@ const THEME_OPTIONS: ReadonlyArray<{ value: Theme; labelKey: string }> = [
   { value: 'dark', labelKey: 'usage_stats.theme_dark' },
   { value: 'auto', labelKey: 'usage_stats.theme_auto' }
 ];
-const USAGE_TAB_OPTIONS = ['overview', 'analysis', 'events', 'auth-files', 'ai-provider', 'settings'] as const;
+const USAGE_TAB_OPTIONS = ['overview', 'analysis', 'ranking', 'events', 'auth-files', 'ai-provider', 'settings'] as const;
+const RANKING_PREVIEW_API = resolveRankingPreviewAPI(import.meta.env.VITE_RANKING_PREVIEW_MOCK);
+const LOCAL_RANKING_PREVIEW_API = resolveLocalRankingPreviewAPI(import.meta.env.VITE_RANKING_PREVIEW_MOCK);
 type UsageTab = (typeof USAGE_TAB_OPTIONS)[number];
 type Translate = (key: string) => string;
 const USAGE_TAB_LABEL_KEYS: Record<UsageTab, string> = {
   overview: 'usage_stats.tab_overview',
   analysis: 'usage_stats.tab_analysis',
+  ranking: 'usage_stats.tab_ranking',
   events: 'usage_stats.tab_events',
   'auth-files': 'usage_stats.tab_auth_files',
   'ai-provider': 'usage_stats.tab_ai_provider',
@@ -71,9 +82,9 @@ const USAGE_TAB_LABEL_KEYS: Record<UsageTab, string> = {
 const DEFAULT_USAGE_TAB: UsageTab = 'overview';
 const USAGE_TAB_STORAGE_KEY = 'cli-proxy-usage-tab-v1';
 const REQUEST_EVENTS_PAGE_SIZES = [20, 50, 100, 500, 1000] as const;
-const REQUEST_EVENTS_DEFAULT_PAGE_SIZE = 100;
-// v6 曾用于拆分 Speed Mode 列的历史偏好，新的完整列顺序格式从 v7 开始，避免误判旧数据。
-const REQUEST_EVENTS_PREFERENCES_VERSION = 7;
+const REQUEST_EVENTS_DEFAULT_PAGE_SIZE = 50;
+// v7 是完整列顺序格式；v8 加入客户端请求元数据列，并保留历史自定义顺序。
+const REQUEST_EVENTS_PREFERENCES_VERSION = 8;
 const ALL_REQUEST_EVENTS_FILTER = '__all__';
 const OVERVIEW_AUTO_REFRESH_INTERVAL_MS = 10_000;
 const CPA_MANAGEMENT_PAGE = 'management.html';
@@ -110,7 +121,7 @@ export const getCredentialSectionVisibility = (tab: UsageTab) => ({
   showAiProvider: tab === 'ai-provider',
 });
 
-export const shouldShowRangeControls = (tab: UsageTab) => tab !== 'settings' && !getCredentialSectionVisibility(tab).enabled;
+export const shouldShowRangeControls = (tab: UsageTab) => tab !== 'ranking' && tab !== 'settings' && !getCredentialSectionVisibility(tab).enabled;
 
 export const shouldShowApiKeyFilter = (tab: UsageTab) => shouldShowRangeControls(tab);
 
@@ -262,6 +273,57 @@ const LEGACY_REQUEST_EVENT_COLUMN_IDS_V4 = [
   'total_cost',
 ] as const;
 
+const LEGACY_REQUEST_EVENT_COLUMN_IDS_V7 = [
+  'timestamp',
+  'api_key',
+  'source',
+  'model',
+  'model_alias',
+  'reasoning_effort',
+  'service_tier',
+  'result',
+  'request_type',
+  'endpoint',
+  'ttft',
+  'latency',
+  'speed',
+  'input_tokens',
+  'output_tokens',
+  'reasoning_tokens',
+  'cache_read_tokens',
+  'cache_creation_tokens',
+  'cache_read_rate',
+  'total_tokens',
+  'total_cost',
+] as const;
+
+const LEGACY_REQUEST_EVENT_COLUMN_IDS_V5 = LEGACY_REQUEST_EVENT_COLUMN_IDS_V7;
+
+const LEGACY_REQUEST_EVENT_COLUMN_IDS_V6 = [
+  'timestamp',
+  'api_key',
+  'source',
+  'model',
+  'model_alias',
+  'reasoning_effort',
+  'service_tier',
+  'response_service_tier',
+  'result',
+  'request_type',
+  'endpoint',
+  'ttft',
+  'latency',
+  'speed',
+  'input_tokens',
+  'output_tokens',
+  'reasoning_tokens',
+  'cache_read_tokens',
+  'cache_creation_tokens',
+  'cache_read_rate',
+  'total_tokens',
+  'total_cost',
+] as const;
+
 const LEGACY_REQUEST_EVENT_COLUMN_IDS_V2 = [
   'timestamp',
   'api_key',
@@ -375,6 +437,9 @@ const normalizeRequestEventPreferenceColumnIds = (value: unknown, version: unkno
 
   const rawColumnIds = value.filter((columnId): columnId is string => typeof columnId === 'string');
   const legacyFullSelection = version !== REQUEST_EVENTS_PREFERENCES_VERSION && (
+    (version === 7 && hasSameRequestEventColumnOrder(rawColumnIds, LEGACY_REQUEST_EVENT_COLUMN_IDS_V7)) ||
+    (version === 6 && hasSameRequestEventColumnOrder(rawColumnIds, LEGACY_REQUEST_EVENT_COLUMN_IDS_V6)) ||
+    (version === 5 && hasSameRequestEventColumnOrder(rawColumnIds, LEGACY_REQUEST_EVENT_COLUMN_IDS_V5)) ||
     (version === 4 && hasSameRequestEventColumnOrder(rawColumnIds, LEGACY_REQUEST_EVENT_COLUMN_IDS_V4)) ||
     (version === 3 && hasSameRequestEventColumnOrder(rawColumnIds, LEGACY_REQUEST_EVENT_COLUMN_IDS_V3)) ||
     (version === 2 && hasSameRequestEventColumnOrder(rawColumnIds, LEGACY_REQUEST_EVENT_COLUMN_IDS_V2)) ||
@@ -398,6 +463,17 @@ const normalizeRequestEventPreferenceColumnIds = (value: unknown, version: unkno
   return normalized.length > 0 ? normalized : [...REQUEST_EVENT_COLUMN_IDS];
 };
 
+const normalizeRequestEventPreferenceColumnOrder = (value: unknown, version: unknown): RequestEventColumnId[] => {
+  if (!Array.isArray(value)) {
+    return [...REQUEST_EVENT_COLUMN_IDS];
+  }
+  const rawColumnIds = value.filter((columnId): columnId is string => typeof columnId === 'string');
+  if (version === 7 && hasSameRequestEventColumnOrder(rawColumnIds, LEGACY_REQUEST_EVENT_COLUMN_IDS_V7)) {
+    return [...REQUEST_EVENT_COLUMN_IDS];
+  }
+  return normalizeRequestEventColumnOrder(rawColumnIds.filter(isRequestEventColumnId));
+};
+
 export const normalizeRequestEventsPreferences = (value: unknown): RequestEventsPreferences => {
   const preferences = isRecord(value) ? value : {};
   return {
@@ -405,11 +481,7 @@ export const normalizeRequestEventsPreferences = (value: unknown): RequestEvents
     pageSize: isRequestEventPageSize(preferences.pageSize) ? preferences.pageSize : REQUEST_EVENTS_DEFAULT_PAGE_SIZE,
     filters: normalizeRequestEventPreferenceFilters(preferences.filters),
     visibleColumnIds: normalizeRequestEventPreferenceColumnIds(preferences.visibleColumnIds, preferences.version),
-    columnOrder: normalizeRequestEventColumnOrder(
-      Array.isArray(preferences.columnOrder)
-        ? preferences.columnOrder.filter(isRequestEventColumnId)
-        : REQUEST_EVENT_COLUMN_IDS
-    ),
+    columnOrder: normalizeRequestEventPreferenceColumnOrder(preferences.columnOrder, preferences.version),
   };
 };
 
@@ -697,8 +769,11 @@ export const normalizeUsageTabValue = (value: unknown): UsageTab | null => {
   return isUsageTab(value) ? value : null;
 };
 
-export const getUsageTabOptions = (translate: Translate): Array<{ value: UsageTab; label: string }> =>
-  USAGE_TAB_OPTIONS.map((value) => ({
+export const getUsageTabOptions = (
+  translate: Translate,
+  { includeRanking = true }: { includeRanking?: boolean } = {},
+): Array<{ value: UsageTab; label: string }> =>
+  USAGE_TAB_OPTIONS.filter((value) => includeRanking || value !== 'ranking').map((value) => ({
     value,
     label: translate(USAGE_TAB_LABEL_KEYS[value]),
   }));
@@ -753,14 +828,22 @@ export const triggerBrowserURLDownload = (url: string) => {
 };
 
 export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const isMobile = useMediaQuery('(max-width: 768px)');
   const isEmbeddedInCPAMC = isCPAMCEmbed();
   const theme = useThemeStore((state) => state.theme);
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const setTheme = useThemeStore((state) => state.setTheme);
   const isDark = resolvedTheme === 'dark';
-  const [activeTab, setActiveTab] = useState<UsageTab>(loadUsageTab);
+  const [activeTab, setActiveTab] = useState<UsageTab>(() => {
+    const loadedTab = loadUsageTab();
+    return isEmbeddedInCPAMC && loadedTab === 'ranking' ? DEFAULT_USAGE_TAB : loadedTab;
+  });
+  const [rankingScope, setRankingScope] = useState<RankingScope>(loadRankingScope);
+  const handleRankingScopeChange = useCallback((scope: RankingScope) => {
+    setRankingScope(scope);
+    persistRankingScope(scope);
+  }, []);
   const [loadedTimeRange] = useState(loadTimeRange);
   const pendingLegacyCustomRangeRef = useRef(loadedTimeRange.pendingLegacyCustomRange);
   const [timeRangeState, setTimeRangeState] = useState<StoredUsageRangeState>(loadedTimeRange.state);
@@ -925,6 +1008,45 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
       topNoticeTimerRef.current = null;
     }, getUpdateCheckToastDuration(kind));
   }, []);
+  const handleRankingBackgroundRefreshError = useCallback(() => {
+    showTopNotice('error', t('ranking.refresh_failed'));
+  }, [showTopNotice, t]);
+  const rankingData = useRankingData({
+    enabled: activeTab === 'ranking' && !isEmbeddedInCPAMC && rankingScope === 'community',
+    onAuthRequired,
+    onBackgroundRefreshError: handleRankingBackgroundRefreshError,
+    api: RANKING_PREVIEW_API,
+  });
+  const localRankingData = useLocalRankingData({
+    enabled: activeTab === 'ranking' && !isEmbeddedInCPAMC && rankingScope === 'local',
+    period: rankingData.period,
+    metric: rankingData.metric,
+    onAuthRequired,
+    onBackgroundRefreshError: handleRankingBackgroundRefreshError,
+    api: LOCAL_RANKING_PREVIEW_API,
+  });
+  const updateLocalRankingProfile = localRankingData.updateProfile;
+  const patchLocalRankingProfileCache = localRankingData.patchProfileCache;
+  const displayedRankingLeaderboard = rankingScope === 'community'
+    ? rankingData.leaderboard
+    : localRankingData.leaderboard;
+  const refreshCommunityRanking = rankingData.refreshRanking;
+  const refreshLocalRanking = localRankingData.refreshLeaderboard;
+  const refreshRanking = useCallback(
+    () => rankingScope === 'community' ? refreshCommunityRanking() : refreshLocalRanking(),
+    [rankingScope, refreshCommunityRanking, refreshLocalRanking],
+  );
+  const handleUpdateLocalRankingProfile = useCallback(async (participantID: string, profile: LocalRankingProfileRequest) => {
+    const updated = await updateLocalRankingProfile(participantID, profile);
+    // 排行资料与设置页共用同一 Key 记录，保存后同步刷新已加载的别名投影。
+    setApiKeySettings((current) => current.map((item) => item.id === updated.participant_id
+      ? { ...item, keyAlias: updated.key_alias, label: updated.display_name }
+      : item));
+    setApiKeyOptions((current) => current.map((item) => item.id === updated.participant_id
+      ? { ...item, label: updated.display_name }
+      : item));
+    return updated;
+  }, [updateLocalRankingProfile]);
   const credentialsData = useCredentialsTabData({
     enabledAuthFiles: credentialSectionVisibility.showAuthFiles && pageVisible,
     enabledAiProviders: credentialSectionVisibility.showAiProvider && pageVisible,
@@ -940,7 +1062,10 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
   const [analysisLatencyData, setAnalysisLatencyData] = useState<AnalysisLatencyDiagnostics | null>(null);
   const analysisRequestControllerRef = useRef<AbortController | null>(null);
 
-  const tabOptions = useMemo(() => getUsageTabOptions(t), [t]);
+  const tabOptions = useMemo(
+    () => getUsageTabOptions(t, { includeRanking: !isEmbeddedInCPAMC }),
+    [isEmbeddedInCPAMC, t],
+  );
   const apiKeySelectOptions = useMemo(
     () => [
       { value: '', label: t('usage_stats.api_key_filter_all') },
@@ -1071,6 +1196,10 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
       const updated = await updateCpaApiKeyAlias(id, keyAlias);
       setApiKeySettings((current) => current.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
       setApiKeyOptions((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      patchLocalRankingProfileCache(updated.id, {
+        key_alias: updated.keyAlias,
+        display_name: updated.label,
+      });
       showTopNotice('success', t('usage_stats.api_key_settings_alias_save_success'));
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -1082,7 +1211,7 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
     } finally {
       setApiKeySettingsSavingId(null);
     }
-  }, [onAuthRequired, showTopNotice, t]);
+  }, [onAuthRequired, patchLocalRankingProfileCache, showTopNotice, t]);
 
   const handleRevokeAuthSession = useCallback(async (session: AuthManagedSessionItem) => {
     setAuthSessionRevokingId(session.id);
@@ -1509,6 +1638,10 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
       await Promise.all([loadEventFilterOptions(), loadEvents()]);
       return;
     }
+    if (activeTab === 'ranking') {
+      await refreshRanking();
+      return;
+    }
     if (credentialSectionVisibility.enabled) {
       await refreshCredentials();
       return;
@@ -1522,7 +1655,7 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
       return;
     }
     await Promise.all([loadUsage(), loadActivity(), loadRealtime()]);
-  }, [activeTab, credentialSectionVisibility.enabled, loadActivity, loadAnalysis, loadApiKeySettings, loadAuthSessions, loadEventFilterOptions, loadEvents, loadPricing, loadRealtime, loadUsage, refreshCredentials]);
+  }, [activeTab, credentialSectionVisibility.enabled, loadActivity, loadAnalysis, loadApiKeySettings, loadAuthSessions, loadEventFilterOptions, loadEvents, loadPricing, loadRealtime, loadUsage, refreshCredentials, refreshRanking]);
 
   const refreshAutoRefreshTab = useCallback(async () => {
     if (activeTab === 'events') {
@@ -1726,6 +1859,7 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
     : '';
   // 只有需要时间范围的 tab 才渲染 Range 控件，避免 Credentials/Pricing 产生空白占位。
   const showRangeControls = shouldShowRangeControls(activeTab);
+  const showRankingScopeControl = activeTab === 'ranking' && !isEmbeddedInCPAMC;
   const {
     requestsSparkline,
     tokensSparkline,
@@ -1794,16 +1928,15 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
                 </button>
               </div>
             )}
-            <div className={styles.signOutSwitcher} role="group" aria-label={t('common.logout')}>
-              <button
-                type="button"
-                className={`${styles.signOutPill} ${styles.signOutPillActive}`.trim()}
-                onClick={handleRequestLogout}
-                disabled={loggingOut}
-              >
-                <span className={styles.signOutPillInner}>{loggingOut ? t('common.loading') : t('common.logout')}</span>
-              </button>
-            </div>
+            <MainActionButton
+              type="button"
+              aria-label={t('common.logout')}
+              onClick={handleRequestLogout}
+              disabled={loggingOut}
+              loading={loggingOut}
+            >
+              {loggingOut ? t('common.loading') : t('common.logout')}
+            </MainActionButton>
           </div>
         </header>
 
@@ -1866,7 +1999,12 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
             )}
 
             <div className={styles.toolbarRow}>
-              <div className={styles.tabBar} role="tablist" aria-label={t('usage_stats.tabs_aria_label')}>
+              <div
+                className={`${styles.tabBar} ${!isEmbeddedInCPAMC ? styles.tabBarConnected : ''}`.trim()}
+                role="tablist"
+                aria-label={t('usage_stats.tabs_aria_label')}
+                lang={i18n.resolvedLanguage || i18n.language}
+              >
                 {tabOptions.map((option) => (
                   <button
                     key={option.value}
@@ -1882,8 +2020,9 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
               </div>
 
               <div className={`${styles.toolbarActionsRight} ${!isEmbeddedInCPAMC ? styles.toolbarActionsRightAnimated : ''}`.trim()}>
-                {/* 普通模式保留筛选区节点以执行过渡；CPAMC 继续按需挂载，维持既有布局。 */}
-                {(!isEmbeddedInCPAMC || showRangeControls) && (
+                <div className={isEmbeddedInCPAMC ? styles.toolbarContextSlotImmediate : styles.toolbarContextSlot}>
+                  {(!isEmbeddedInCPAMC || showRangeControls) && (
+                  /* 普通模式保留筛选区节点以执行过渡；CPAMC 继续按需挂载，维持既有布局。 */
                   <div
                     className={`${styles.usageFilterTransition} ${isEmbeddedInCPAMC ? styles.usageFilterTransitionImmediate : ''} ${showRangeControls ? styles.usageFilterTransitionOpen : ''}`.trim()}
                     aria-hidden={!showRangeControls}
@@ -1900,7 +2039,7 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
                         onChange={setSelectedApiKeyId}
                         className={styles.apiKeySelectControl}
                         ariaLabel={t('usage_stats.api_key_filter')}
-                        fullWidth
+                        fullWidth={false}
                         dropdownMinWidth={180}
                       />
                     </label>
@@ -1915,30 +2054,36 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
                       </div>
                     </div>
                   </div>
-                )}
+                  )}
+                  {!isEmbeddedInCPAMC && (
+                    <div
+                      className={`${styles.rankingScopeTransition} ${showRankingScopeControl ? styles.rankingScopeTransitionOpen : ''}`.trim()}
+                      aria-hidden={!showRankingScopeControl}
+                      inert={!showRankingScopeControl}
+                    >
+                      <div className={styles.rankingScopeTransitionInner}>
+                        <RankingScopeSwitch value={rankingScope} onChange={handleRankingScopeChange} />
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <div className={styles.usageRefreshSlot}>
                   <div className={styles.usageFilterActions}>
-                    <div className={styles.refreshSwitcher} role="group" aria-label={t('usage_stats.refresh')}>
-                      <button
-                        type="button"
-                        className={`${styles.refreshPill} ${styles.refreshPillActive} ${manualRefreshLoading ? styles.refreshPillLoading : ''}`.trim()}
-                        onClick={() => void handleManualRefresh().catch(() => {})}
-                        disabled={manualRefreshLoading}
-                        aria-busy={manualRefreshLoading}
-                      >
-                        {manualRefreshLoading ? (
-                          <span className={styles.refreshPillInner}>
-                            <LoadingSpinner size={12} className={styles.refreshSpinner} />
-                            <span>{t('common.loading')}</span>
-                          </span>
-                        ) : (
-                          <span className={styles.refreshPillInner}>
-                            <IconRefreshCw size={14} />
-                            <span>{t('usage_stats.refresh')}</span>
-                          </span>
-                        )}
-                      </button>
-                    </div>
+                    <MainActionButton
+                      type="button"
+                      shellClassName={styles.refreshMainActionShell}
+                      className={styles.refreshMainActionButton}
+                      onClick={() => void handleManualRefresh().catch(() => {})}
+                      disabled={manualRefreshLoading}
+                      loading={manualRefreshLoading}
+                    >
+                      {manualRefreshLoading ? t('common.loading') : (
+                        <>
+                          <IconRefreshCw size={14} />
+                          <span>{t('usage_stats.refresh')}</span>
+                        </>
+                      )}
+                    </MainActionButton>
                   </div>
                 </div>
               </div>
@@ -2002,6 +2147,38 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
                   isMobile={isMobile}
                 />
               </>
+            )}
+
+            {activeTab === 'ranking' && (
+              <RankingPage
+                key={rankingScope}
+                scope={rankingScope}
+                period={rankingData.period}
+                metric={rankingData.metric}
+                status={rankingScope === 'community' ? rankingData.status : null}
+                metadata={rankingScope === 'community' ? rankingData.metadata : null}
+                leaderboard={displayedRankingLeaderboard}
+                statusLoading={rankingScope === 'community' && rankingData.statusLoading}
+                metadataLoading={rankingScope === 'community' && rankingData.metadataLoading}
+                leaderboardLoading={rankingScope === 'community' ? rankingData.leaderboardLoading : localRankingData.leaderboardLoading}
+                statusError={rankingScope === 'community' ? rankingData.statusError : null}
+                metadataError={rankingScope === 'community' ? rankingData.metadataError : null}
+                leaderboardError={rankingScope === 'community' ? rankingData.leaderboardError : localRankingData.leaderboardError}
+                action={rankingScope === 'community' ? rankingData.action : null}
+                actionError={rankingScope === 'community' ? rankingData.actionError : null}
+                onClearActionError={rankingData.clearActionError}
+                onJoin={rankingData.join}
+                onSync={rankingData.sync}
+                onPause={rankingData.pause}
+                onResume={rankingData.resume}
+                onExit={rankingData.exit}
+                onRetryStatus={rankingData.refreshStatus}
+                onRetryMetadata={rankingData.refreshMetadata}
+                onRetryLeaderboard={rankingScope === 'community' ? rankingData.refreshLeaderboard : localRankingData.refreshLeaderboard}
+                onUpdateLocalProfile={handleUpdateLocalRankingProfile}
+                onPeriodChange={rankingData.setPeriod}
+                onMetricChange={rankingData.setMetric}
+              />
             )}
 
             {activeTab === 'events' && (
@@ -2142,10 +2319,10 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
         closeDisabled={loggingOut}
         footer={
           <>
-            <Button type="button" variant="secondary" className={styles.usagePillAction} onClick={() => setLogoutConfirmOpen(false)} disabled={loggingOut}>
+            <Button type="button" variant="secondary" appearance="action" onClick={() => setLogoutConfirmOpen(false)} disabled={loggingOut}>
               {t('common.cancel')}
             </Button>
-            <Button type="button" variant="danger" className={`${styles.usagePillAction} ${styles.usagePillActionDanger}`} onClick={() => void handleConfirmLogout()} loading={loggingOut}>
+            <Button type="button" variant="danger" appearance="action" onClick={() => void handleConfirmLogout()} loading={loggingOut}>
               {loggingOut ? t('common.loading') : t('usage_stats.logout_confirm_action')}
             </Button>
           </>

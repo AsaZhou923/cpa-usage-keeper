@@ -61,6 +61,9 @@ type UsageEventRecord struct {
 	ReasoningEffort     string
 	ServiceTier         string
 	ResponseServiceTier string
+	ClientIP            *string
+	XForwardedFor       *string
+	UserAgent           *string
 	ExecutorType        string
 	Endpoint            string
 	AuthType            string

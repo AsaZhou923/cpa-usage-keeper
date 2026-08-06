@@ -328,6 +328,11 @@ describe('RequestEventsDetailsCard request log virtualization', () => {
 
     const scrolledIndexes = Array.from(document.querySelectorAll<HTMLElement>('pre[data-index]'), (item) => Number(item.dataset.index));
     expect(Math.max(...scrolledIndexes)).toBeGreaterThan(Math.max(...initialIndexes));
+
+    // Let the virtualizer's scroll-reset debounce finish before happy-dom tears down window.
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 200));
+    });
   });
 
   it('keeps a multi-megabyte single-line log bounded in the DOM', async () => {

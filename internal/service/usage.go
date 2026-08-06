@@ -535,6 +535,15 @@ func mapAnalysisRecord(record *repodto.AnalysisRecord) *servicedto.AnalysisSnaps
 			CostAvailable:       bucket.CostAvailable,
 		})
 	}
+	modelUsage := make([]servicedto.AnalysisModelUsage, 0, len(record.ModelUsage))
+	for _, item := range record.ModelUsage {
+		modelUsage = append(modelUsage, servicedto.AnalysisModelUsage{
+			Bucket:      item.Bucket,
+			Model:       item.Model,
+			TotalTokens: item.TotalTokens,
+			Requests:    item.Requests,
+		})
+	}
 	apiKeys := make([]servicedto.AnalysisCompositionItem, 0, len(record.APIKeyComposition))
 	for _, item := range record.APIKeyComposition {
 		apiKeys = append(apiKeys, mapAnalysisCompositionRecord(item))
@@ -590,6 +599,7 @@ func mapAnalysisRecord(record *repodto.AnalysisRecord) *servicedto.AnalysisSnaps
 		RangeStart:            record.RangeStart,
 		RangeEnd:              record.RangeEnd,
 		TokenUsage:            tokenUsage,
+		ModelUsage:            modelUsage,
 		APIKeyComposition:     apiKeys,
 		ModelComposition:      models,
 		AuthFilesComposition:  authFiles,
@@ -691,6 +701,9 @@ func (s *usageService) ListUsageEvents(ctx context.Context, filter servicedto.Us
 			ReasoningEffort:     row.ReasoningEffort,
 			ServiceTier:         row.ServiceTier,
 			ResponseServiceTier: row.ResponseServiceTier,
+			ClientIP:            row.ClientIP,
+			XForwardedFor:       row.XForwardedFor,
+			UserAgent:           row.UserAgent,
 			ExecutorType:        row.ExecutorType,
 			Endpoint:            row.Endpoint,
 			AuthType:            row.AuthType,
@@ -743,6 +756,9 @@ func (s *usageService) StreamUsageEvents(ctx context.Context, filter servicedto.
 			ReasoningEffort:     row.ReasoningEffort,
 			ServiceTier:         row.ServiceTier,
 			ResponseServiceTier: row.ResponseServiceTier,
+			ClientIP:            row.ClientIP,
+			XForwardedFor:       row.XForwardedFor,
+			UserAgent:           row.UserAgent,
 			ExecutorType:        row.ExecutorType,
 			Endpoint:            row.Endpoint,
 			AuthType:            row.AuthType,

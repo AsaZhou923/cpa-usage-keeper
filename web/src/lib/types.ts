@@ -259,6 +259,9 @@ export interface UsageEvent {
   latency_ms: number
   ttft_ms?: number
   speed_tps?: number
+  client_ip?: string | null
+  x_forwarded_for?: string | null
+  user_agent?: string | null
   tokens: UsageEventTokens
   cost_usd?: number
   cost_available?: boolean
@@ -324,6 +327,13 @@ export interface UsageCredentialHealth {
   buckets: UsageCredentialHealthBucket[]
 }
 
+export interface UsageSubscriptionInfo {
+  provider: string
+  plan: string
+  tierId?: string
+  tierName?: string
+}
+
 export interface UsageIdentity {
   id: string
   name: string
@@ -340,7 +350,7 @@ export interface UsageIdentity {
   priority?: number
   disabled: boolean
   note?: string
-  plan_type?: string
+  subscription?: UsageSubscriptionInfo
   active_start?: string
   active_until?: string
   total_requests: number
@@ -394,7 +404,6 @@ export interface UsageQuotaRow {
   groupKey?: string
   groupLabel?: string
   groupDescription?: string
-  planType?: string
   used?: number
   limit?: number
   remaining?: number
@@ -412,6 +421,7 @@ export interface UsageQuotaRow {
 export interface UsageQuotaCheckResponse {
   id: string
   quota: UsageQuotaRow[]
+  subscription?: UsageSubscriptionInfo
   rateLimitResetCreditsAvailableCount?: number | null
 }
 
@@ -524,6 +534,17 @@ export interface AnalysisTokenUsageBucket {
   cost_available: boolean
 }
 
+export interface AnalysisModelUsageSeries {
+  model: string
+  total_tokens: number[]
+  requests: number[]
+}
+
+export interface AnalysisModelUsagePayload {
+  buckets: string[]
+  series: AnalysisModelUsageSeries[]
+}
+
 export interface AnalysisCompositionItem {
   key: string
   label: string
@@ -619,6 +640,7 @@ export interface AnalysisResponse {
   range_start?: string
   range_end?: string
   token_usage: AnalysisTokenUsageBucket[]
+  model_usage?: AnalysisModelUsagePayload
   api_key_composition: AnalysisCompositionItem[]
   model_composition: AnalysisCompositionItem[]
   auth_files_composition: AnalysisCompositionItem[]

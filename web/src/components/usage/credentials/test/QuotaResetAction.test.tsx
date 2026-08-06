@@ -94,7 +94,7 @@ describe('QuotaResetAction reset credit details', () => {
 
     expect(container.textContent).toContain('usage_stats.credentials_quota_reset_expiry_title')
     expect(container.textContent).toContain('usage_stats.credentials_quota_reset_expiry_item:1')
-    expect(container.textContent).toContain('2026-07-20 08:00:00')
+    expect(container.textContent).toContain('2026-07-20 09:00:00')
     expect(Array.from(container.querySelectorAll<HTMLButtonElement>('button')).at(-1)?.disabled).toBe(false)
   })
 
@@ -159,7 +159,7 @@ describe('QuotaResetAction reset credit details', () => {
       credits: [{ id: 'credit-1', status: 'available', expiresAt: '2026-07-20T00:00:00Z' }],
     }))
 
-    expect(container.textContent).toContain('2026-07-20 08:00:00')
+    expect(container.textContent).toContain('2026-07-20 09:00:00')
     expect(container.textContent).toContain('usage_stats.credentials_quota_reset_expiry_failed')
     expect(Array.from(container.querySelectorAll<HTMLButtonElement>('button')).at(-1)?.disabled).toBe(false)
   })
