@@ -47,6 +47,7 @@ func TestKeyOverviewEventsForceCurrentViewerAPIKey(t *testing.T) {
 			TotalTokens: 121443,
 		}},
 		TotalCount: 1,
+		HasMore:    true,
 		Page:       1,
 		PageSize:   20,
 		TotalPages: 1,
@@ -62,7 +63,7 @@ func TestKeyOverviewEventsForceCurrentViewerAPIKey(t *testing.T) {
 	}}}
 	resp, cookie, router := newKeyViewerRouteTestRouter(t, usageProvider, OptionalProviders{UsageIdentity: identityProvider})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/key-overview/events?range=24h&api_key_id=999&page=1&page_size=20&source=auth-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/key-overview/events?range=24h&api_key_id=999&page_size=20&cursor_mode=true&source=auth-1", nil)
 	req.AddCookie(cookie)
 	router.ServeHTTP(resp, req)
 
@@ -75,8 +76,12 @@ func TestKeyOverviewEventsForceCurrentViewerAPIKey(t *testing.T) {
 	if usageProvider.lastEvents.AuthIndex != "auth-1" {
 		t.Fatalf("expected source filter to become auth index filter, got %+v", usageProvider.lastEvents)
 	}
+	if !usageProvider.lastEvents.CursorMode {
+		t.Fatalf("expected events route to preserve cursor mode, got %+v", usageProvider.lastEvents)
+	}
 	body := resp.Body.String()
-	if !contains(body, `"total_count":1`) || !contains(body, `"api_key":"Viewer Key"`) || !contains(body, `"auth_index":"auth-1"`) {
+	expectedCursor := encodeUsageEventsCursor(eventTime, 7)
+	if !contains(body, `"total_count":1`) || !contains(body, `"api_key":"Viewer Key"`) || !contains(body, `"auth_index":"auth-1"`) || !contains(body, `"next_cursor":"`+expectedCursor+`"`) || !contains(body, `"has_more":true`) {
 		t.Fatalf("unexpected events response body: %s", body)
 	}
 }

@@ -127,12 +127,19 @@ func registerKeyUsageEventsRoute(
 			ID:    strconv.FormatInt(apiKey.ID, 10),
 			Label: keyViewerAPIKeyLabel(apiKey),
 		}}
+		nextCursor := ""
+		if filter.CursorMode && rows.HasMore && len(rows.Events) > 0 {
+			lastEvent := rows.Events[len(rows.Events)-1]
+			nextCursor = encodeUsageEventsCursor(lastEvent.Timestamp, lastEvent.ID)
+		}
 		c.JSON(http.StatusOK, usageEventsResponse{
 			Events:     buildUsageEventsPayload(rows.Events, resolver, apiKeyInfos),
 			TotalCount: rows.TotalCount,
 			Page:       rows.Page,
 			PageSize:   rows.PageSize,
 			TotalPages: rows.TotalPages,
+			NextCursor: nextCursor,
+			HasMore:    rows.HasMore,
 		})
 	})
 

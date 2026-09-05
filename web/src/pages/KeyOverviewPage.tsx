@@ -1,87 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  ApiError,
-  exportKeyOverviewUsageEvents,
-  fetchKeyOverview,
-  fetchKeyOverviewRealtime,
-  fetchKeyOverviewUsageEventModelFilterOptions,
-  fetchKeyOverviewUsageEventSourceFilterOptions,
-  fetchKeyOverviewUsageEvents,
-  fetchKeyOverviewUsageIdentitiesPage,
-  fetchKeyOverviewUsageQuotaCache,
-  isUsageRangeBoundsConflict,
-  logout,
-  type UsageEventsExportFormat,
-} from '@/lib/api';
-import type { AuthSessionAPIKeySummary, OverviewRealtimeBlock, OverviewRealtimeWindow, UsageCustomRange, UsageEvent, UsageOverviewResponse, UsageSourceFilterOption, UsageTimeRange } from '@/lib/types';
-import { LanguageSwitcher } from '@/components/ui/LanguageSwitcher';
-import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import { ApiError, fetchKeyOverview, fetchKeyOverviewRealtime, isUsageRangeBoundsConflict } from '@/lib/api';
+import type { AuthSessionAPIKeySummary, OverviewRealtimeBlock, OverviewRealtimeWindow, UsageCustomRange, UsageOverviewResponse, UsageTimeRange } from '@/lib/types';
 import { MainActionButton } from '@/components/ui/MainActionButton';
 import { IconRefreshCw } from '@/components/ui/icons';
+import { KeyViewerShell } from '@/features/key-viewer/KeyViewerShell';
+import type { KeyViewerPath } from '@/features/key-viewer/navigation';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { buildUsageStatsQueryKey, useThemeStore } from '@/stores';
 import {
   OverviewRealtimePanel,
   RecentActivityPanel,
   StatCards,
-  AuthFileCredentialsSection,
-  CredentialProviderFilterBar,
   TimeRangeControl,
-  useCredentialsTabData,
   useRecentActivityWindow,
   useSparklines,
   useUsageActivityData,
 } from '@/components/usage';
-import {
-  RequestEventsDetailsCard,
-  REQUEST_EVENT_COLUMN_IDS,
-  normalizeRequestEventVisibleColumnIds,
-  type RequestEventColumnId,
-} from '@/components/usage/RequestEventsDetailsCard';
 import type { UsageOverviewPayload } from '@/components/usage/hooks/useUsageData';
-import { BrandLink } from '@/components/BrandLink';
 import { getCurrentOverviewUsage, getDailyAverageCardUsage, getOverviewDisplayLoading, isDailyAverageRange } from '@/utils/usage/overview';
-import { clampStoredUsageRangeStateToCurrentBounds, parseStoredUsageRangeState, resolveUsageRangeRecoveryTimeZone, serializeUsageRangeState, type StoredUsageRangeState } from '@/utils/usage/customRange';
+import { clampStoredUsageRangeStateToCurrentBounds, resolveUsageRangeRecoveryTimeZone, type StoredUsageRangeState } from '@/utils/usage/customRange';
 import { buildUsageRangeQuery } from '@/utils/usage/rangeQuery';
-import type { Theme } from '@/types';
-import { MONITORING_TIME_ZONE } from '@/utils/time';
-import styles from './KeyOverviewPage.module.scss';
+import { loadKeyViewerTimeRange, persistKeyViewerTimeRange } from '@/features/key-viewer/timeRange';
+import styles from '@/features/key-viewer/KeyViewerShell.module.scss';
 
-const KEY_OVERVIEW_RANGE_STORAGE_KEY = 'cli-proxy-key-overview-range-v1';
-const KEY_OVERVIEW_TAB_STORAGE_KEY = 'cli-proxy-key-overview-tab-v1';
 const OVERVIEW_REALTIME_WINDOW_STORAGE_KEY = 'cli-proxy-usage-overview-realtime-window-v1';
-const DEFAULT_TIME_RANGE: UsageTimeRange = 'today';
 const DEFAULT_REALTIME_WINDOW: OverviewRealtimeWindow = '15m';
 const KEY_OVERVIEW_REALTIME_VISIBLE_DIMENSIONS = ['models'] as const;
-const REFRESH_THROTTLE_MS = 1_000;
 const KEY_OVERVIEW_AUTO_REFRESH_INTERVAL_MS = 10_000;
-const KEY_OVERVIEW_TAB_OPTIONS = ['overview', 'events', 'auth-files'] as const;
-type KeyOverviewTab = (typeof KEY_OVERVIEW_TAB_OPTIONS)[number];
-const KEY_OVERVIEW_TAB_LABEL_KEYS: Record<KeyOverviewTab, string> = {
-  overview: 'usage_stats.tab_overview',
-  events: 'usage_stats.tab_events',
-  'auth-files': 'usage_stats.tab_auth_files',
-};
-const DEFAULT_KEY_OVERVIEW_TAB: KeyOverviewTab = 'overview';
-const REQUEST_EVENTS_PAGE_SIZES = [20, 50, 100, 500, 1000] as const;
-const REQUEST_EVENTS_DEFAULT_PAGE_SIZE = 100;
-const ALL_REQUEST_EVENTS_FILTER = '__all__';
-const KEY_REQUEST_EVENT_COLUMN_IDS = REQUEST_EVENT_COLUMN_IDS.filter((columnId) => columnId !== 'api_key');
-
-const THEME_OPTIONS: ReadonlyArray<{ value: Theme; labelKey: string }> = [
-  { value: 'white', labelKey: 'usage_stats.theme_light' },
-  { value: 'dark', labelKey: 'usage_stats.theme_dark' },
-  { value: 'auto', labelKey: 'usage_stats.theme_auto' },
-];
 
 const loadTimeRange = (): StoredUsageRangeState => {
-  try {
-    if (typeof localStorage === 'undefined') return { range: DEFAULT_TIME_RANGE };
-    return parseStoredUsageRangeState(localStorage.getItem(KEY_OVERVIEW_RANGE_STORAGE_KEY), { nowMs: Date.now() });
-  } catch {
-    return { range: DEFAULT_TIME_RANGE };
-  }
+  return loadKeyViewerTimeRange();
 };
 
 const isOverviewRealtimeWindow = (value: unknown): value is OverviewRealtimeWindow => (
@@ -96,44 +45,6 @@ const loadRealtimeWindow = (): OverviewRealtimeWindow => {
   } catch {
     return DEFAULT_REALTIME_WINDOW;
   }
-};
-
-const normalizeKeyOverviewTab = (value: unknown): KeyOverviewTab | null => (
-  typeof value === 'string' && (KEY_OVERVIEW_TAB_OPTIONS as readonly string[]).includes(value)
-    ? value as KeyOverviewTab
-    : null
-);
-
-const loadKeyOverviewTab = (): KeyOverviewTab => {
-  try {
-    if (typeof localStorage === 'undefined') return DEFAULT_KEY_OVERVIEW_TAB;
-    return normalizeKeyOverviewTab(localStorage.getItem(KEY_OVERVIEW_TAB_STORAGE_KEY)) ?? DEFAULT_KEY_OVERVIEW_TAB;
-  } catch {
-    return DEFAULT_KEY_OVERVIEW_TAB;
-  }
-};
-
-type RequestEventFilterState = {
-  model: string;
-  source: string;
-  result: string;
-};
-
-const DEFAULT_REQUEST_EVENT_FILTERS: RequestEventFilterState = {
-  model: ALL_REQUEST_EVENTS_FILTER,
-  source: ALL_REQUEST_EVENTS_FILTER,
-  result: ALL_REQUEST_EVENTS_FILTER,
-};
-
-const triggerKeyOverviewFileDownload = (blob: Blob, filename: string) => {
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
 };
 
 type KeyOverviewAutoRefreshDocument = Pick<Document, 'visibilityState' | 'addEventListener' | 'removeEventListener'>;
@@ -221,17 +132,15 @@ export const scheduleKeyOverviewAutoRefresh = ({
 
 export interface KeyOverviewPageProps {
   apiKey?: AuthSessionAPIKeySummary;
+  onNavigate: (path: KeyViewerPath) => void;
   onAuthRequired?: () => void;
 }
 
-export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps) {
+export function KeyOverviewPage({ apiKey, onNavigate, onAuthRequired }: KeyOverviewPageProps) {
   const { t } = useTranslation();
   const isMobile = useMediaQuery('(max-width: 768px)');
-  const theme = useThemeStore((state) => state.theme);
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const isDark = resolvedTheme === 'dark';
-  const setTheme = useThemeStore((state) => state.setTheme);
-  const [activeTab, setActiveTab] = useState<KeyOverviewTab>(loadKeyOverviewTab);
   const [timeRangeState, setTimeRangeState] = useState<StoredUsageRangeState>(loadTimeRange);
   const { range: timeRange, customRange } = timeRangeState;
   const [realtimeWindow, setRealtimeWindow] = useState<OverviewRealtimeWindow>(loadRealtimeWindow);
@@ -243,37 +152,8 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
   const [error, setError] = useState('');
   const [realtimeError, setRealtimeError] = useState('');
   const [manualRefreshLoading, setManualRefreshLoading] = useState(false);
-  const [refreshThrottled, setRefreshThrottled] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [eventsData, setEventsData] = useState<UsageEvent[]>([]);
-  const [eventsLoading, setEventsLoading] = useState(false);
-  const [eventsError, setEventsError] = useState('');
-  const [eventsPage, setEventsPage] = useState(1);
-  const [eventsPageSize, setEventsPageSize] = useState(REQUEST_EVENTS_DEFAULT_PAGE_SIZE);
-  const [eventsTotalCount, setEventsTotalCount] = useState(0);
-  const [eventsTotalPages, setEventsTotalPages] = useState(0);
-  const [eventsModelOptions, setEventsModelOptions] = useState<string[]>([]);
-  const [eventsSourceOptions, setEventsSourceOptions] = useState<UsageSourceFilterOption[]>([]);
-  const [eventsFilters, setEventsFilters] = useState<RequestEventFilterState>(DEFAULT_REQUEST_EVENT_FILTERS);
-  const [eventsExportingFormat, setEventsExportingFormat] = useState<UsageEventsExportFormat | null>(null);
-  const [eventsVisibleColumnIds, setEventsVisibleColumnIds] = useState<RequestEventColumnId[]>(() => (
-    normalizeRequestEventVisibleColumnIds(KEY_REQUEST_EVENT_COLUMN_IDS)
-  ));
   const overviewRequestControllerRef = useRef<AbortController | null>(null);
   const realtimeRequestControllerRef = useRef<AbortController | null>(null);
-  const eventsRequestControllerRef = useRef<AbortController | null>(null);
-  const eventsFilterOptionsRequestControllerRef = useRef<AbortController | null>(null);
-  const refreshThrottleTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
-  const credentialsData = useCredentialsTabData({
-    enabledAuthFiles: activeTab === 'auth-files',
-    enabledAiProviders: false,
-    quotaAutoRefreshEnabled: false,
-    readOnly: true,
-    onAuthRequired,
-    fetchUsageIdentitiesPage: fetchKeyOverviewUsageIdentitiesPage,
-    fetchUsageQuotaCache: fetchKeyOverviewUsageQuotaCache,
-  });
-
   const usageRangeQuery = useMemo(() => buildUsageRangeQuery({
     range: timeRange,
     customUnit: customRange?.unit,
@@ -301,7 +181,7 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
   });
   const activityWindow = manualActivityWindow ?? activity?.window ?? null;
   const activityWindowIsCurrent = manualActivityWindow !== null || activityMatchesRequest;
-  const rangeTimeZone = MONITORING_TIME_ZONE;
+  const rangeTimeZone = usage?.timezone ?? timeRangeState.timeZone;
   const rangeRecoveryTimeZone = resolveUsageRangeRecoveryTimeZone(timeRangeState, usage?.timezone);
   const recoverRangeBoundsConflict = useCallback((error: unknown) => {
     if (!isUsageRangeBoundsConflict(error)) return false;
@@ -316,17 +196,16 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
     return true;
   }, [rangeRecoveryTimeZone, timeRangeState]);
   const handleTimeRangeChange = useCallback((range: UsageTimeRange, nextCustomRange?: UsageCustomRange) => {
+    let nextState: StoredUsageRangeState;
     if (range === 'custom' && nextCustomRange) {
-      setTimeRangeState({ range, customRange: nextCustomRange, timeZone: rangeTimeZone });
-      return;
+      nextState = { range, customRange: nextCustomRange, timeZone: rangeTimeZone };
+    } else {
+      nextState = { ...timeRangeState, range };
     }
-    setTimeRangeState((current) => ({ ...current, range }));
-  }, [rangeTimeZone]);
-
-  const themeOptions = useMemo(
-    () => THEME_OPTIONS.map((option) => ({ ...option, label: t(option.labelKey) })),
-    [t]
-  );
+    setTimeRangeState(nextState);
+    // 切换页面可能紧接着发生，先同步写入共享缓存，再等待状态 effect。
+    persistKeyViewerTimeRange(nextState);
+  }, [rangeTimeZone, timeRangeState]);
 
   const loadOverview = useCallback(async (options: KeyOverviewLoadOptions = {}) => {
     if (!usageRangeQuery.valid) return;
@@ -348,10 +227,6 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
       if (recoverRangeBoundsConflict(nextError)) return;
       if (nextError instanceof ApiError && nextError.status === 401) {
         onAuthRequired?.();
-        return;
-      }
-      if (nextError instanceof ApiError && nextError.status === 429) {
-        setError('KEY_OVERVIEW_RATE_LIMITED');
         return;
       }
       setError(nextError instanceof Error ? nextError.message : 'KEY_OVERVIEW_LOAD_FAILED');
@@ -385,10 +260,6 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
         onAuthRequired?.();
         return;
       }
-      if (nextError instanceof ApiError && nextError.status === 429) {
-        setRealtimeError('KEY_OVERVIEW_RATE_LIMITED');
-        return;
-      }
       setRealtimeError('KEY_OVERVIEW_REALTIME_LOAD_FAILED');
     } finally {
       if (realtimeRequestControllerRef.current === controller) {
@@ -397,130 +268,6 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
       }
     }
   }, [onAuthRequired, realtimeWindow]);
-
-  const loadEventFilterOptions = useCallback(async () => {
-    eventsFilterOptionsRequestControllerRef.current?.abort();
-    const controller = new AbortController();
-    eventsFilterOptionsRequestControllerRef.current = controller;
-    try {
-      const [modelResponse, sourceResponse] = await Promise.all([
-        fetchKeyOverviewUsageEventModelFilterOptions(controller.signal),
-        fetchKeyOverviewUsageEventSourceFilterOptions(controller.signal),
-      ]);
-      if (eventsFilterOptionsRequestControllerRef.current !== controller) return;
-      setEventsModelOptions(modelResponse.models ?? []);
-      setEventsSourceOptions(sourceResponse.sources ?? []);
-    } catch (nextError) {
-      if (controller.signal.aborted) return;
-      if (eventsFilterOptionsRequestControllerRef.current === controller) {
-        setEventsModelOptions([]);
-        setEventsSourceOptions([]);
-      }
-      if (nextError instanceof ApiError && nextError.status === 401) {
-        onAuthRequired?.();
-      }
-    } finally {
-      if (eventsFilterOptionsRequestControllerRef.current === controller) {
-        eventsFilterOptionsRequestControllerRef.current = null;
-      }
-    }
-  }, [onAuthRequired]);
-
-  const loadEvents = useCallback(async () => {
-    eventsRequestControllerRef.current?.abort();
-    const controller = new AbortController();
-    eventsRequestControllerRef.current = controller;
-
-    setEventsLoading(true);
-    setEventsError('');
-    try {
-      const response = await fetchKeyOverviewUsageEvents(usageRangeQuery, controller.signal, {
-        page: eventsPage,
-        pageSize: eventsPageSize,
-        model: eventsFilters.model === ALL_REQUEST_EVENTS_FILTER ? undefined : eventsFilters.model,
-        source: eventsFilters.source === ALL_REQUEST_EVENTS_FILTER ? undefined : eventsFilters.source,
-        result: eventsFilters.result === ALL_REQUEST_EVENTS_FILTER ? undefined : eventsFilters.result,
-      });
-      if (eventsRequestControllerRef.current !== controller) return;
-      if (response.total_pages > 0 && eventsPage > response.total_pages) {
-        setEventsPage(response.total_pages);
-        return;
-      }
-      setEventsData(response.events ?? []);
-      setEventsTotalCount(response.total_count ?? 0);
-      setEventsTotalPages(response.total_pages ?? 0);
-    } catch (nextError) {
-      if (controller.signal.aborted) return;
-      if (eventsRequestControllerRef.current === controller) {
-        setEventsData([]);
-        setEventsTotalCount(0);
-        setEventsTotalPages(0);
-      }
-      if (nextError instanceof ApiError && nextError.status === 401) {
-        onAuthRequired?.();
-        return;
-      }
-      if (nextError instanceof ApiError && nextError.status === 429) {
-        setEventsError('KEY_OVERVIEW_RATE_LIMITED');
-        return;
-      }
-      setEventsError(nextError instanceof Error ? nextError.message : 'KEY_OVERVIEW_EVENTS_LOAD_FAILED');
-    } finally {
-      if (eventsRequestControllerRef.current === controller) {
-        setEventsLoading(false);
-        eventsRequestControllerRef.current = null;
-      }
-    }
-  }, [eventsFilters.model, eventsFilters.result, eventsFilters.source, eventsPage, eventsPageSize, onAuthRequired, usageRangeQuery]);
-
-  const resetEventsPage = useCallback(() => {
-    setEventsPage(1);
-  }, []);
-
-  const handleEventsPageSizeChange = useCallback((pageSize: number) => {
-    setEventsPageSize(pageSize);
-    resetEventsPage();
-  }, [resetEventsPage]);
-
-  const handleEventsModelFilterChange = useCallback((model: string) => {
-    setEventsFilters((current) => ({ ...current, model }));
-    resetEventsPage();
-  }, [resetEventsPage]);
-
-  const handleEventsSourceFilterChange = useCallback((source: string) => {
-    setEventsFilters((current) => ({ ...current, source }));
-    resetEventsPage();
-  }, [resetEventsPage]);
-
-  const handleEventsResultFilterChange = useCallback((result: string) => {
-    setEventsFilters((current) => ({ ...current, result }));
-    resetEventsPage();
-  }, [resetEventsPage]);
-
-  const handleEventsExport = useCallback(async (format: UsageEventsExportFormat) => {
-    setEventsExportingFormat(format);
-    setEventsError('');
-    try {
-      const file = await exportKeyOverviewUsageEvents(usageRangeQuery, format, {
-        model: eventsFilters.model === ALL_REQUEST_EVENTS_FILTER ? undefined : eventsFilters.model,
-        source: eventsFilters.source === ALL_REQUEST_EVENTS_FILTER ? undefined : eventsFilters.source,
-        result: eventsFilters.result === ALL_REQUEST_EVENTS_FILTER ? undefined : eventsFilters.result,
-      });
-      triggerKeyOverviewFileDownload(file.blob, file.filename);
-    } catch (nextError) {
-      if (nextError instanceof ApiError && nextError.status === 401) {
-        onAuthRequired?.();
-        return;
-      }
-      if (nextError instanceof ApiError && nextError.status === 429) {
-        setEventsError('KEY_OVERVIEW_RATE_LIMITED');
-        return;
-      }
-      setEventsError(nextError instanceof Error ? nextError.message : 'KEY_OVERVIEW_EVENTS_EXPORT_FAILED');
-    } finally {
-      setEventsExportingFormat(null);
-    }
-  }, [eventsFilters.model, eventsFilters.result, eventsFilters.source, onAuthRequired, usageRangeQuery]);
 
   useEffect(() => {
     void loadOverview();
@@ -538,101 +285,26 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
     };
   }, [loadRealtime]);
 
-  useEffect(() => {
-    if (activeTab !== 'events') {
-      eventsFilterOptionsRequestControllerRef.current?.abort();
-      eventsFilterOptionsRequestControllerRef.current = null;
-      return;
-    }
-    void loadEventFilterOptions();
-    return () => {
-      eventsFilterOptionsRequestControllerRef.current?.abort();
-      eventsFilterOptionsRequestControllerRef.current = null;
-    };
-  }, [activeTab, loadEventFilterOptions]);
-
-  useEffect(() => {
-    if (activeTab !== 'events') {
-      eventsRequestControllerRef.current?.abort();
-      eventsRequestControllerRef.current = null;
-      setEventsLoading(false);
-      return;
-    }
-    void loadEvents();
-    return () => {
-      eventsRequestControllerRef.current?.abort();
-      eventsRequestControllerRef.current = null;
-    };
-  }, [activeTab, loadEvents]);
-
-  useEffect(() => () => {
-    if (refreshThrottleTimerRef.current !== null) {
-      window.clearTimeout(refreshThrottleTimerRef.current);
-      refreshThrottleTimerRef.current = null;
-    }
-  }, []);
-
   const refreshKeyOverview = useCallback(async (options: KeyOverviewLoadOptions = {}) => {
     await Promise.all([loadOverview(options), loadActivity(options), loadRealtime(options)]);
   }, [loadActivity, loadOverview, loadRealtime]);
-
-  const refreshCredentials = credentialsData.refresh;
-  const refreshActiveTab = useCallback(async (options: KeyOverviewLoadOptions = {}) => {
-    if (activeTab === 'events') {
-      await Promise.all([loadEventFilterOptions(), loadEvents()]);
-      return;
-    }
-    if (activeTab === 'auth-files') {
-      await refreshCredentials();
-      return;
-    }
-    await refreshKeyOverview(options);
-  }, [activeTab, loadEventFilterOptions, loadEvents, refreshCredentials, refreshKeyOverview]);
-
-  const refreshAutoRefreshTab = useCallback(async (options: KeyOverviewLoadOptions = {}) => {
-    if (activeTab === 'events') {
-      if (eventsPage === 1) {
-        await loadEvents();
-      }
-      return;
-    }
-    if (activeTab === 'overview') {
-      await refreshKeyOverview(options);
-    }
-  }, [activeTab, eventsPage, loadEvents, refreshKeyOverview]);
 
   const handleAutoRefreshError = useCallback((nextError: unknown) => {
     if (nextError instanceof ApiError && nextError.status === 401) {
       onAuthRequired?.();
       return;
     }
-    if (nextError instanceof ApiError && nextError.status === 429) {
-      setError('KEY_OVERVIEW_RATE_LIMITED');
-      return;
-    }
     setError('KEY_OVERVIEW_LOAD_FAILED');
   }, [onAuthRequired]);
 
   useEffect(() => scheduleKeyOverviewAutoRefresh({
-    refreshOverview: () => refreshAutoRefreshTab({ skipIfInFlight: true }),
+    refreshOverview: () => refreshKeyOverview({ skipIfInFlight: true }),
     onRefreshError: handleAutoRefreshError,
     intervalMs: KEY_OVERVIEW_AUTO_REFRESH_INTERVAL_MS,
-  }), [handleAutoRefreshError, refreshAutoRefreshTab]);
+  }), [handleAutoRefreshError, refreshKeyOverview]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(KEY_OVERVIEW_TAB_STORAGE_KEY, activeTab);
-    } catch {
-      // ignore storage failures
-    }
-  }, [activeTab]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(KEY_OVERVIEW_RANGE_STORAGE_KEY, serializeUsageRangeState(timeRangeState));
-    } catch {
-      // ignore storage failures
-    }
+    persistKeyViewerTimeRange(timeRangeState);
   }, [timeRangeState]);
 
   useEffect(() => {
@@ -661,274 +333,103 @@ export function KeyOverviewPage({ apiKey, onAuthRequired }: KeyOverviewPageProps
     costSparkline,
   } = useSparklines({ usage, loading });
 
-  const refreshDisabled = manualRefreshLoading || refreshThrottled;
+  const refreshDisabled = manualRefreshLoading;
   const handleManualRefresh = useCallback(async () => {
     if (refreshDisabled) return;
     setManualRefreshLoading(true);
     try {
-      await refreshActiveTab();
-      setRefreshThrottled(true);
-      if (refreshThrottleTimerRef.current !== null) {
-        window.clearTimeout(refreshThrottleTimerRef.current);
-      }
-      refreshThrottleTimerRef.current = window.setTimeout(() => {
-        refreshThrottleTimerRef.current = null;
-        setRefreshThrottled(false);
-      }, REFRESH_THROTTLE_MS);
+      await refreshKeyOverview();
     } finally {
       setManualRefreshLoading(false);
     }
-  }, [refreshActiveTab, refreshDisabled]);
+  }, [refreshDisabled, refreshKeyOverview]);
 
-  const handleLogout = useCallback(async () => {
-    setLoggingOut(true);
-    try {
-      await logout();
-    } finally {
-      onAuthRequired?.();
-      setLoggingOut(false);
-    }
-  }, [onAuthRequired]);
-
-  const identityLabel = apiKey?.display_key || t('key_overview.identity_unknown');
-  const displayError = error === 'KEY_OVERVIEW_RATE_LIMITED'
-    ? t('key_overview.rate_limited')
-    : error === 'KEY_OVERVIEW_LOAD_FAILED'
-      ? t('key_overview.load_failed')
-      : error;
+  const displayError = error === 'KEY_OVERVIEW_LOAD_FAILED'
+    ? t('key_overview.load_failed')
+    : error;
   const displayRealtimeError = realtimeError
-    ? realtimeError === 'KEY_OVERVIEW_RATE_LIMITED'
-      ? t('key_overview.rate_limited')
-      : t('usage_stats.overview_realtime_load_failed')
+    ? t('usage_stats.overview_realtime_load_failed')
     : '';
-  const displayEventsError = eventsError === 'KEY_OVERVIEW_RATE_LIMITED'
-    ? t('key_overview.rate_limited')
-    : eventsError === 'KEY_OVERVIEW_EVENTS_LOAD_FAILED'
-      ? t('usage_stats.request_events_load_failed', { defaultValue: 'Failed to load request events.' })
-      : eventsError === 'KEY_OVERVIEW_EVENTS_EXPORT_FAILED'
-        ? t('notification.download_failed')
-        : eventsError;
+
+  const toolbar = (
+    <>
+      <div className={styles.usageFilterBar}>
+        <TimeRangeControl
+          value={timeRange}
+          customRange={customRange}
+          timeZone={rangeTimeZone}
+          onChange={handleTimeRangeChange}
+          ariaLabel={t('usage_stats.range_filter')}
+        />
+      </div>
+      <div className={styles.usageRefreshSlot}>
+        <div className={styles.usageFilterActions}>
+          <MainActionButton
+            type="button"
+            shellClassName={styles.refreshMainActionShell}
+            className={styles.refreshMainActionButton}
+            onClick={() => void handleManualRefresh()}
+            disabled={refreshDisabled}
+            loading={manualRefreshLoading}
+          >
+            {manualRefreshLoading ? t('common.loading') : (
+              <>
+                <IconRefreshCw size={14} />
+                <span>{t('usage_stats.refresh')}</span>
+              </>
+            )}
+          </MainActionButton>
+        </div>
+      </div>
+    </>
+  );
 
   return (
-    <div className={styles.pageShell} data-keeper-page="key-overview">
-      <div className={styles.pageFrame}>
-        <header className={styles.topBar}>
-          <div className={styles.brandBlock}>
-            <BrandLink className={styles.eyebrow} />
-          </div>
-          <div className={styles.topBarActions}>
-            <span className={styles.identityChip} title={identityLabel}>
-              <span className={styles.identityDot} aria-hidden="true" />
-              <span className={styles.identityText}>{identityLabel}</span>
-            </span>
-            <LanguageSwitcher />
-            <div className={styles.themeSwitcher} role="tablist" aria-label={t('usage_stats.theme_switch')}>
-              {themeOptions.map((option) => {
-                const active = theme === option.value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    role="tab"
-                    aria-selected={active}
-                    className={`${styles.themePill} ${active ? styles.themePillActive : ''}`.trim()}
-                    onClick={() => setTheme(option.value)}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-            <MainActionButton
-              type="button"
-              aria-label={t('common.logout')}
-              onClick={() => void handleLogout()}
-              disabled={loggingOut}
-              loading={loggingOut}
-            >
-              {loggingOut ? t('common.loading') : t('common.logout')}
-            </MainActionButton>
-          </div>
-        </header>
+    <KeyViewerShell
+      activePage="overview"
+      apiKey={apiKey}
+      loading={loading && !usage}
+      toolbar={toolbar}
+      onNavigate={onNavigate}
+      onAuthRequired={onAuthRequired}
+    >
+      {displayError && <div className={styles.errorBox}>{displayError}</div>}
 
-        <main className={styles.contentColumn}>
-          <div className={styles.container}>
-            {loading && !usage && (
-              <div className={styles.loadingOverlay} aria-busy="true">
-                <div className={styles.loadingOverlayContent}>
-                  <LoadingSpinner size={28} className={styles.loadingOverlaySpinner} />
-                  <span className={styles.loadingOverlayText}>{t('common.loading')}</span>
-                </div>
-              </div>
-            )}
+      <StatCards
+        usage={usage}
+        loading={overviewDisplayLoading}
+        dailyAverageUsage={dailyAverageCardUsage}
+        reserveDailyAverage={reserveDailyAverageCard}
+        sparklines={{
+          requests: requestsSparkline,
+          tokens: tokensSparkline,
+          rpm: rpmSparkline,
+          tpm: tpmSparkline,
+          cacheReadRate: cacheReadRateSparkline,
+          cost: costSparkline,
+        }}
+      />
 
-            <div className={styles.toolbarRow}>
-              <div className={styles.tabBar} role="tablist" aria-label={t('key_overview.tabs_aria_label')}>
-                {KEY_OVERVIEW_TAB_OPTIONS.map((tab) => {
-                  const active = activeTab === tab;
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      className={`${styles.tabPill} ${active ? styles.tabPillActive : ''}`.trim()}
-                      onClick={() => setActiveTab(tab)}
-                    >
-                      {t(KEY_OVERVIEW_TAB_LABEL_KEYS[tab])}
-                    </button>
-                  );
-                })}
-              </div>
+      <RecentActivityPanel
+        activity={activity}
+        loading={activityLoading}
+        error={activityError}
+        window={activityWindow}
+        windowIsCurrent={activityWindowIsCurrent}
+        requestIdentity={activityRequestIdentity}
+        onWindowChange={setActivityWindow}
+      />
 
-              <div className={styles.toolbarActionsRight}>
-                {activeTab !== 'auth-files' && (
-                  <div className={styles.usageFilterBar}>
-                    <TimeRangeControl
-                      value={timeRange}
-                      customRange={customRange}
-                      timeZone={rangeTimeZone}
-                      onChange={handleTimeRangeChange}
-                      ariaLabel={t('usage_stats.range_filter')}
-                    />
-                  </div>
-                )}
-                <div className={styles.usageRefreshSlot}>
-                  <div className={styles.usageFilterActions}>
-                    <MainActionButton
-                      type="button"
-                      shellClassName={styles.refreshMainActionShell}
-                      className={styles.refreshMainActionButton}
-                      onClick={() => void handleManualRefresh()}
-                      disabled={refreshDisabled}
-                      loading={manualRefreshLoading}
-                    >
-                      {manualRefreshLoading ? t('common.loading') : (
-                        <>
-                          <IconRefreshCw size={14} />
-                          <span>{t('usage_stats.refresh')}</span>
-                        </>
-                      )}
-                    </MainActionButton>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {activeTab === 'overview' && (
-              <>
-                {displayError && <div className={styles.errorBox}>{displayError}</div>}
-
-                <StatCards
-                  usage={usage}
-                  loading={overviewDisplayLoading}
-                  dailyAverageUsage={dailyAverageCardUsage}
-                  reserveDailyAverage={reserveDailyAverageCard}
-                  sparklines={{
-                    requests: requestsSparkline,
-                    tokens: tokensSparkline,
-                    rpm: rpmSparkline,
-                    tpm: tpmSparkline,
-                    cacheReadRate: cacheReadRateSparkline,
-                    cost: costSparkline,
-                  }}
-                />
-
-                <RecentActivityPanel
-                  activity={activity}
-                  loading={activityLoading}
-                  error={activityError}
-                  window={activityWindow}
-                  windowIsCurrent={activityWindowIsCurrent}
-                  requestIdentity={activityRequestIdentity}
-                  onWindowChange={setActivityWindow}
-                />
-
-                <OverviewRealtimePanel
-                  realtime={realtime?.window === realtimeWindow ? realtime : undefined}
-                  loading={realtimeLoading}
-                  error={displayRealtimeError}
-                  window={realtimeWindow}
-                  onWindowChange={setRealtimeWindow}
-                  isDark={isDark}
-                  isMobile={isMobile}
-                  visibleDimensions={KEY_OVERVIEW_REALTIME_VISIBLE_DIMENSIONS}
-                />
-              </>
-            )}
-
-            {activeTab === 'events' && (
-              <>
-                {displayEventsError && <div className={styles.errorBox}>{displayEventsError}</div>}
-                <RequestEventsDetailsCard
-                  events={eventsData}
-                  loading={eventsLoading}
-                  page={eventsPage}
-                  pageSize={eventsPageSize}
-                  pageSizeOptions={REQUEST_EVENTS_PAGE_SIZES}
-                  totalCount={eventsTotalCount}
-                  totalPages={eventsTotalPages}
-                  modelOptions={eventsModelOptions}
-                  sourceOptions={eventsSourceOptions}
-                  modelFilter={eventsFilters.model}
-                  sourceFilter={eventsFilters.source}
-                  resultFilter={eventsFilters.result}
-                  exportingFormat={eventsExportingFormat}
-                  visibleColumnIds={eventsVisibleColumnIds}
-                  onPageChange={setEventsPage}
-                  onPageSizeChange={handleEventsPageSizeChange}
-                  onModelFilterChange={handleEventsModelFilterChange}
-                  onSourceFilterChange={handleEventsSourceFilterChange}
-                  onResultFilterChange={handleEventsResultFilterChange}
-                  onExport={handleEventsExport}
-                  onVisibleColumnIdsChange={setEventsVisibleColumnIds}
-                />
-              </>
-            )}
-
-            {activeTab === 'auth-files' && (
-              <>
-                {credentialsData.error && <div className={styles.errorBox}>{credentialsData.error}</div>}
-                <CredentialProviderFilterBar
-                  scope="auth-files"
-                  typeCounts={credentialsData.authFileTypeCounts}
-                  value={credentialsData.authFileProviderFilter}
-                  onChange={credentialsData.setAuthFileProviderFilter}
-                />
-                <div className={styles.credentialsSections}>
-                  <AuthFileCredentialsSection
-                    rows={credentialsData.authFileRows}
-                    total={credentialsData.authFileTotal}
-                    page={credentialsData.authFilePage}
-                    totalPages={credentialsData.authFileTotalPages}
-                    pageSize={credentialsData.authFilePageSize}
-                    activeOnly={credentialsData.authFileActiveOnly}
-                    sort={credentialsData.authFileSort}
-                    loading={credentialsData.loading}
-                    quotaRefreshing={credentialsData.quotaRefreshing}
-                    quotaRefreshError={credentialsData.quotaRefreshError}
-                    quotaAutoRefreshEnabled={false}
-                    quotaInspectionStatus={credentialsData.quotaInspectionStatus}
-                    quotaInspectionLoading={credentialsData.quotaInspectionLoading}
-                    quotaInspectionStarting={credentialsData.quotaInspectionStarting}
-                    quotaInspectionError={credentialsData.quotaInspectionError}
-                    readOnly
-                    onPageChange={credentialsData.setAuthFilePage}
-                    onPageSizeChange={credentialsData.setAuthFilePageSize}
-                    onActiveOnlyChange={credentialsData.setAuthFileActiveOnly}
-                    onSortChange={credentialsData.setAuthFileSort}
-                    onRefreshQuota={credentialsData.refreshQuotaForCurrentAuthFilePage}
-                    onRefreshQuotaForAuthIndex={credentialsData.refreshQuotaForAuthIndex}
-                    onResetQuotaForAuthIndex={credentialsData.resetQuotaForAuthIndex}
-                    onRefreshInspectionStatus={credentialsData.refreshQuotaInspectionStatus}
-                    onStartInspection={credentialsData.startQuotaInspection}
-                  />
-                </div>
-              </>
-            )}
-          </div>
-        </main>
-      </div>
-    </div>
+      <OverviewRealtimePanel
+        realtime={realtime?.window === realtimeWindow ? realtime : undefined}
+        loading={realtimeLoading}
+        error={displayRealtimeError}
+        window={realtimeWindow}
+        onWindowChange={setRealtimeWindow}
+        isDark={isDark}
+        isMobile={isMobile}
+        visibleDimensions={KEY_OVERVIEW_REALTIME_VISIBLE_DIMENSIONS}
+      />
+    </KeyViewerShell>
   );
 }
