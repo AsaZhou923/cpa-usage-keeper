@@ -1,46 +1,42 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const apiMocks = vi.hoisted(() => {
-  class MockApiError extends Error {
-    status: number
+import type { OverviewRealtimeBlock } from '@/lib/types'
+import { useUsageStatsStore } from '../useUsageStatsStore'
 
-    constructor(status: number, message = 'api error') {
-      super(message)
-      this.status = status
-    }
-  }
+const apiMocks = vi.hoisted(() => ({
+  fetchUsageOverview: vi.fn(),
+  fetchUsageOverviewRealtime: vi.fn(),
+}))
 
-  return {
-    ApiError: MockApiError,
-    fetchUsageOverview: vi.fn(),
-    fetchUsageOverviewRealtime: vi.fn(),
-  }
-})
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/api')>(),
+  ...apiMocks,
+}))
 
-vi.mock('@/lib/api', () => apiMocks)
+const realtime: OverviewRealtimeBlock = {
+  window: '15m',
+  bucket_seconds: 30,
+  token_velocity: [],
+  response_level: [],
+  response_distribution: {
+    ttft: { average_line: [], particles: [] },
+    latency: { average_line: [], particles: [] },
+  },
+  current_usage: { models: [], api_keys: [], auth_files: [], ai_providers: [] },
+  request_level: [],
+  cache_level: [],
+}
 
 describe('useUsageStatsStore', () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks()
-    const { useUsageStatsStore } = await import('./useUsageStatsStore')
     useUsageStatsStore.getState().clearUsageStats()
   })
 
   it('keeps overview and realtime loaders independent', async () => {
-    const { useUsageStatsStore } = await import('./useUsageStatsStore')
-    let resolveOverview: (value: unknown) => void = () => undefined
-    apiMocks.fetchUsageOverview.mockReturnValue(new Promise((resolve) => {
-      resolveOverview = resolve
-    }))
-    apiMocks.fetchUsageOverviewRealtime.mockResolvedValue({
-      window: '30m',
-      bucket_seconds: 60,
-      token_velocity: [],
-      response_level: [],
-      current_usage: { models: [], api_keys: [], auth_files: [], ai_providers: [] },
-      request_level: [],
-      cache_level: [],
-    })
+    const overview = Promise.withResolvers<unknown>()
+    apiMocks.fetchUsageOverview.mockReturnValue(overview.promise)
+    apiMocks.fetchUsageOverviewRealtime.mockResolvedValue({ ...realtime, window: '30m', bucket_seconds: 60 })
 
     const overviewLoad = useUsageStatsStore.getState().loadUsageStats({
       force: true,
@@ -63,30 +59,22 @@ describe('useUsageStatsStore', () => {
       window: '30m',
     })
 
-    resolveOverview({
+    overview.resolve({
       usage: { total_requests: 1, success_count: 1, failure_count: 0, total_tokens: 20 },
     })
     await Promise.all([overviewLoad, realtimeLoad])
 
     const state = useUsageStatsStore.getState()
-    expect('realtime' in (state.usage ?? {})).toBe(false)
+    expect(state.usage?.usage.total_requests).toBe(1)
+    expect(state.usage).not.toHaveProperty('realtime')
     expect(state.realtime?.window).toBe('30m')
   })
 
   it('does not reload overview when only the realtime window changes', async () => {
-    const { useUsageStatsStore } = await import('./useUsageStatsStore')
     apiMocks.fetchUsageOverview.mockResolvedValue({
       usage: { total_requests: 1, success_count: 1, failure_count: 0, total_tokens: 20 },
     })
-    apiMocks.fetchUsageOverviewRealtime.mockResolvedValue({
-      window: '15m',
-      bucket_seconds: 60,
-      token_velocity: [],
-      response_level: [],
-      current_usage: { models: [], api_keys: [], auth_files: [], ai_providers: [] },
-      request_level: [],
-      cache_level: [],
-    })
+    apiMocks.fetchUsageOverviewRealtime.mockResolvedValue({ ...realtime, window: '60m', bucket_seconds: 120 })
 
     await useUsageStatsStore.getState().loadUsageStats({
       force: true,
@@ -109,16 +97,7 @@ describe('useUsageStatsStore', () => {
   })
 
   it('does not keep an error from a different realtime query when cached data is fresh', async () => {
-    const { useUsageStatsStore } = await import('./useUsageStatsStore')
-    apiMocks.fetchUsageOverviewRealtime.mockResolvedValueOnce({
-      window: '15m',
-      bucket_seconds: 30,
-      token_velocity: [],
-      response_level: [],
-      current_usage: { models: [], api_keys: [], auth_files: [], ai_providers: [] },
-      request_level: [],
-      cache_level: [],
-    })
+    apiMocks.fetchUsageOverviewRealtime.mockResolvedValueOnce(realtime)
 
     await useUsageStatsStore.getState().loadUsageStatsRealtime({
       force: true,
