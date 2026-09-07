@@ -71,13 +71,7 @@ func TestActivityBucketEndBelongsToNextBucket(t *testing.T) {
 
 func TestDailyActivityBucketUsesAdjacentLocalMidnights(t *testing.T) {
 	// 准备：使用 DST 春季跳时地区，并固定跳时当天中午。
-	previousLocal := time.Local
-	location, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Fatalf("load DST location: %v", err)
-	}
-	time.Local = location
-	t.Cleanup(func() { time.Local = previousLocal })
+	location := useTimezone(t, "America/New_York")
 	timestamp := time.Date(2026, 3, 8, 12, 0, 0, 0, location)
 
 	// 执行：直接生成 daily Activity 边界。
@@ -95,13 +89,7 @@ func TestDailyActivityBucketUsesAdjacentLocalMidnights(t *testing.T) {
 }
 
 func TestCalendarDayActivityWindowUsesExactLocalMidnightsAcrossDST(t *testing.T) {
-	previousLocal := time.Local
-	location, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Fatalf("load DST location: %v", err)
-	}
-	time.Local = location
-	t.Cleanup(func() { time.Local = previousLocal })
+	location := useTimezone(t, "America/New_York")
 
 	dayStart := time.Date(2026, 3, 8, 0, 0, 0, 0, location)
 	buckets, err := activity.WindowEndingAt(entities.UsageActivityGrainShort, dayStart.AddDate(0, 0, 1))
@@ -126,13 +114,7 @@ func TestCalendarDayActivityWindowUsesExactLocalMidnightsAcrossDST(t *testing.T)
 }
 
 func TestShortActivityStorageBucketsMatchCalendarDayWindow(t *testing.T) {
-	previousLocal := time.Local
-	location, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatalf("load location: %v", err)
-	}
-	time.Local = location
-	t.Cleanup(func() { time.Local = previousLocal })
+	location := useTimezone(t, "Asia/Shanghai")
 
 	dayStart := time.Date(2026, 7, 20, 0, 0, 0, 0, location)
 	calendarBuckets, err := activity.WindowEndingAt(entities.UsageActivityGrainShort, dayStart.AddDate(0, 0, 1))
@@ -150,14 +132,16 @@ func TestShortActivityStorageBucketsMatchCalendarDayWindow(t *testing.T) {
 			t.Fatalf("short bucket %d does not match calendar grid: stored=%+v calendar=%+v", index, storedBucket, calendarBucket)
 		}
 	}
+}
 
-	window, err := activity.WindowEndingAt(entities.UsageActivityGrainShort, dayStart.AddDate(0, 0, 1))
+func useTimezone(t *testing.T, name string) *time.Location {
+	t.Helper()
+	location, err := time.LoadLocation(name)
 	if err != nil {
-		t.Fatalf("WindowEndingAt returned error: %v", err)
+		t.Fatal(err)
 	}
-	for index := range window {
-		if !window[index].Start.Equal(calendarBuckets[index].Start) || !window[index].End.Equal(calendarBuckets[index].End) {
-			t.Fatalf("calendar query bucket %d does not match short storage: query=%+v storage=%+v", index, window[index], calendarBuckets[index])
-		}
-	}
+	previous := time.Local
+	time.Local = location
+	t.Cleanup(func() { time.Local = previous })
+	return location
 }
