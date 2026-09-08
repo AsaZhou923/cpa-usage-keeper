@@ -166,4 +166,9 @@ describe('UsagePage caller wiring', () => {
     expect(usagePageSource).toContain('await Promise.all([loadUsage(), loadActivity(), loadRealtime()])')
     expect(usagePageSource).toContain('await Promise.all([loadUsage(), loadActivity({ skipIfInFlight: true }), loadRealtime()])')
   })
+
+  it('does not render the Back to CPA link in CPAMC embed mode', () => {
+    expect(usagePageSource).toMatch(/const isEmbeddedInCPAMC = isCPAMCEmbed\(\);/)
+    expect(usagePageSource).toMatch(/\{\(!isEmbeddedInCPAMC && cpaManagementURL\) && \(/)
+  })
 })

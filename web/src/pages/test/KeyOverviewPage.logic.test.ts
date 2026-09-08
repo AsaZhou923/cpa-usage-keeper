@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { scheduleKeyOverviewAutoRefresh, startKeyOverviewRequest } from './KeyOverviewPage';
+import { scheduleKeyOverviewAutoRefresh, startKeyOverviewRequest } from '../KeyOverviewPage';
 
 const createAutoRefreshTestDocument = (visibilityState: DocumentVisibilityState = 'visible') => {
   const target = new EventTarget();
@@ -14,11 +14,6 @@ const createAutoRefreshTestDocument = (visibilityState: DocumentVisibilityState 
     removeEventListener: target.removeEventListener.bind(target),
     dispatchEvent: target.dispatchEvent.bind(target),
   };
-};
-
-const flushPromises = async () => {
-  await Promise.resolve();
-  await Promise.resolve();
 };
 
 afterEach(() => {
@@ -42,8 +37,7 @@ describe('KeyOverviewPage auto refresh', () => {
       documentRef: testDocument,
     });
 
-    vi.advanceTimersByTime(10_000);
-    await flushPromises();
+    await vi.advanceTimersByTimeAsync(10_000);
 
     expect(onRefreshError).toHaveBeenCalledWith(failure);
 
