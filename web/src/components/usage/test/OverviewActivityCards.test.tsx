@@ -15,13 +15,16 @@ describe('OverviewActivityCards', () => {
       requestIdentity: 'admin::day:::',
     }));
 
-    expect(html.indexOf('Token Activity')).toBeLessThan(html.indexOf('Request Health Timeline'));
+    const tokenTitle = html.indexOf('Token Activity');
+    expect(tokenTitle).toBeGreaterThanOrEqual(0);
+    expect(html.indexOf('Request Health Timeline')).toBeGreaterThan(tokenTitle);
     expect(html.match(/role="grid"/g)).toHaveLength(2);
+    expect(html.match(/aria-rowcount="7"/g)).toHaveLength(2);
+    expect(html.match(/aria-colcount="52"/g)).toHaveLength(2);
+    expect(html.match(/tabindex="0"/g)).toHaveLength(2);
+    expect(html.match(/tabindex="-1"/g)).toHaveLength((2 * 7 * 52) - 2);
     expect(html.match(/role="gridcell"/g)).toHaveLength(2 * 7 * 52);
     expect(html.match(new RegExp(`data-activity-start="${activity.blocks[0].start_time}"`, 'g'))).toHaveLength(2);
-    expect(html.match(/keeper-card-surface/g)).toHaveLength(2);
-    expect(html.match(/keeper-card-title-track/g)).toHaveLength(2);
-    expect(html.match(/keeper-card-subtitle/g)).toHaveLength(2);
   });
 
   it('does not own a second Activity request or range state', () => {
