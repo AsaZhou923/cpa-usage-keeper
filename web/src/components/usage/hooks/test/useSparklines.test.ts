@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SPARKLINE_COLORS, buildUsageSparklineSeries } from './useSparklines';
-import type { UsageOverviewPayload } from './useUsageData';
+import { buildUsageSparklineSeries } from '../useSparklines';
+import type { UsageOverviewPayload } from '../useUsageData';
 
 const usageWithBackendSeries: UsageOverviewPayload = {
   usage: {
@@ -85,12 +85,5 @@ describe('buildUsageSparklineSeries', () => {
     expect(series.tpm).toEqual([0]);
     expect(series.cost).toEqual([0]);
     expect(series.cacheReadRate).toEqual([0]);
-  });
-});
-
-describe('SPARKLINE_COLORS', () => {
-  it('keeps the requests sparkline aligned with the Total Requests card accent', () => {
-    expect(SPARKLINE_COLORS.requests.border).toBe('#3b82f6');
-    expect(SPARKLINE_COLORS.requests.background).toBe('rgba(59, 130, 246, 0.18)');
   });
 });

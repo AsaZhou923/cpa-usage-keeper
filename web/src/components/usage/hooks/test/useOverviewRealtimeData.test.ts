@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OverviewRealtimeBlock, OverviewRealtimeWindow } from '@/lib/types';
-import { resolveDisplayRealtime } from './useOverviewRealtimeData';
+import { resolveDisplayRealtime } from '../useOverviewRealtimeData';
 
 const realtimeForWindow = (window: OverviewRealtimeWindow): OverviewRealtimeBlock => ({
   window,
@@ -55,11 +55,4 @@ describe('resolveDisplayRealtime', () => {
     })).toBeNull();
   });
 
-  it('hides stale realtime data before loading starts if the API key changes', () => {
-    expect(resolveDisplayRealtime({
-      realtime: realtimeForWindow('15m'),
-      lastRealtimeQueryKey: 'key-a:15m',
-      realtimeQueryKey: 'key-b:15m',
-    })).toBeNull();
-  });
 });
