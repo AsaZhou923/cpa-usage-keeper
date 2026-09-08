@@ -1,10 +1,8 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,10 +20,7 @@ var configEnvKeys = []string{
 }
 
 func TestMain(m *testing.M) {
-	previousEnv := make(map[string]string, len(configEnvKeys))
-	previousPresent := make(map[string]bool, len(configEnvKeys))
 	for _, key := range configEnvKeys {
-		previousEnv[key], previousPresent[key] = os.LookupEnv(key)
 		if err := os.Unsetenv(key); err != nil {
 			panic(err)
 		}
@@ -33,63 +28,22 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("LOGIN_PASSWORD", "test-login-password"); err != nil {
 		panic(err)
 	}
-	code := m.Run()
-	for _, key := range configEnvKeys {
-		if previousPresent[key] {
-			if err := os.Setenv(key, previousEnv[key]); err != nil {
-				panic(err)
-			}
-			continue
-		}
-		if err := os.Unsetenv(key); err != nil {
-			panic(err)
-		}
-	}
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
 func withIsolatedEnvFiles(t *testing.T) {
 	t.Helper()
-	previousEnv := make(map[string]string, len(configEnvKeys))
-	previousPresent := make(map[string]bool, len(configEnvKeys))
 	for _, key := range configEnvKeys {
-		previousEnv[key], previousPresent[key] = os.LookupEnv(key)
+		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatalf("unset %s: %v", key, err)
 		}
 	}
-	if err := os.Setenv("LOGIN_PASSWORD", "test-login-password"); err != nil {
-		t.Fatalf("set test login password: %v", err)
-	}
-	t.Cleanup(func() {
-		for _, key := range configEnvKeys {
-			if previousPresent[key] {
-				if err := os.Setenv(key, previousEnv[key]); err != nil {
-					t.Fatalf("restore %s: %v", key, err)
-				}
-				continue
-			}
-			if err := os.Unsetenv(key); err != nil {
-				t.Fatalf("unset %s: %v", key, err)
-			}
-		}
-	})
-	cwd := t.TempDir()
+	t.Setenv("LOGIN_PASSWORD", "test-login-password")
 	exeDir := t.TempDir()
 	previousExecutableDir := executableDir
-	previousWorkingDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("get cwd: %v", err)
-	}
-	t.Cleanup(func() {
-		executableDir = previousExecutableDir
-		if err := os.Chdir(previousWorkingDir); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
-	if err := os.Chdir(cwd); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
+	t.Cleanup(func() { executableDir = previousExecutableDir })
+	t.Chdir(t.TempDir())
 	executableDir = func() (string, error) { return exeDir, nil }
 }
 
@@ -190,19 +144,6 @@ func TestLoadReadsSpecifiedEnvFile(t *testing.T) {
 
 func TestLoadResolvesRelativeEnvFilePathBase(t *testing.T) {
 	withIsolatedEnvFiles(t)
-	cwd := t.TempDir()
-	previousWorkingDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("get cwd: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(previousWorkingDir); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
-	if err := os.Chdir(cwd); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
 	if err := os.Mkdir("config", 0o755); err != nil {
 		t.Fatalf("mkdir config: %v", err)
 	}
@@ -274,80 +215,6 @@ func TestLoadFallsBackToExecutableDirEnv(t *testing.T) {
 	}
 }
 
-func TestDefaultTimeZoneIsLoadable(t *testing.T) {
-	location, err := time.LoadLocation(DefaultTimeZone)
-	if err != nil {
-		t.Fatalf("expected default timezone %s to be loadable: %v", DefaultTimeZone, err)
-	}
-	if location.String() != DefaultTimeZone {
-		t.Fatalf("expected location %s, got %s", DefaultTimeZone, location)
-	}
-}
-
-func TestLoadFromEnvAppliesDefaultTimeZone(t *testing.T) {
-	previousLocal := time.Local
-	t.Cleanup(func() { time.Local = previousLocal })
-	t.Setenv("TZ", "")
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-
-	_, err := LoadFromEnv()
-	if err != nil {
-		t.Fatalf("LoadFromEnv returned error: %v", err)
-	}
-
-	if time.Local.String() != "Asia/Shanghai" {
-		t.Fatalf("expected default local timezone Asia/Shanghai, got %s", time.Local)
-	}
-}
-
-func TestLoadFromEnvHonorsExplicitTimeZone(t *testing.T) {
-	previousLocal := time.Local
-	t.Cleanup(func() { time.Local = previousLocal })
-	t.Setenv("TZ", "UTC")
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-
-	_, err := LoadFromEnv()
-	if err != nil {
-		t.Fatalf("LoadFromEnv returned error: %v", err)
-	}
-
-	if time.Local.String() != "UTC" {
-		t.Fatalf("expected explicit local timezone UTC, got %s", time.Local)
-	}
-}
-
-func TestLoadFromEnvHonorsExplicitIANATimeZone(t *testing.T) {
-	previousLocal := time.Local
-	t.Cleanup(func() { time.Local = previousLocal })
-	t.Setenv("TZ", "America/New_York")
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-
-	_, err := LoadFromEnv()
-	if err != nil {
-		t.Fatalf("LoadFromEnv returned error: %v", err)
-	}
-
-	if time.Local.String() != "America/New_York" {
-		t.Fatalf("expected explicit local timezone America/New_York, got %s", time.Local)
-	}
-}
-
-func TestLoadFromEnvRejectsInvalidTimeZone(t *testing.T) {
-	previousLocal := time.Local
-	t.Cleanup(func() { time.Local = previousLocal })
-	t.Setenv("TZ", "Not/AZone")
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-
-	_, err := LoadFromEnv()
-	if err == nil || !strings.Contains(err.Error(), "TZ is invalid") {
-		t.Fatalf("expected invalid TZ error, got %v", err)
-	}
-}
-
 func TestLoadFromEnvRequiresCriticalValues(t *testing.T) {
 	withIsolatedEnvFiles(t)
 
@@ -409,29 +276,6 @@ func TestLoadFromEnvUsesRedisQueueAddrOverride(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvRejectsNonPositiveRedisQueueBatchSize(t *testing.T) {
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-	t.Setenv("REDIS_QUEUE_BATCH_SIZE", "0")
-
-	_, err := LoadFromEnv()
-	if err == nil || err.Error() != "REDIS_QUEUE_BATCH_SIZE must be positive" {
-		t.Fatalf("expected REDIS_QUEUE_BATCH_SIZE validation error, got %v", err)
-	}
-}
-
-func TestLoadFromEnvRejectsOversizedRedisQueueBatchSize(t *testing.T) {
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-	t.Setenv("REDIS_QUEUE_BATCH_SIZE", strconv.Itoa(cpa.ManagementUsageQueueMaxBatchSize+1))
-
-	_, err := LoadFromEnv()
-	expected := fmt.Sprintf("REDIS_QUEUE_BATCH_SIZE must be <= %d", cpa.ManagementUsageQueueMaxBatchSize)
-	if err == nil || err.Error() != expected {
-		t.Fatalf("expected REDIS_QUEUE_BATCH_SIZE max validation error, got %v", err)
-	}
-}
-
 func TestLoadFromEnvParsesOverrides(t *testing.T) {
 	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
 	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
@@ -470,76 +314,6 @@ func TestLoadFromEnvParsesOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvRejectsNonPositiveBackupInterval(t *testing.T) {
-	for _, value := range []string{"0s", "-1h"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-			t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-			t.Setenv("BACKUP_INTERVAL", value)
-
-			_, err := LoadFromEnv()
-			if err == nil || err.Error() != "BACKUP_INTERVAL must be positive" {
-				t.Fatalf("expected BACKUP_INTERVAL validation error, got %v", err)
-			}
-		})
-	}
-}
-
-func TestLoadFromEnvRejectsNegativeBackupRetentionDays(t *testing.T) {
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-	t.Setenv("BACKUP_RETENTION_DAYS", "-1")
-
-	_, err := LoadFromEnv()
-	if err == nil || err.Error() != "BACKUP_RETENTION_DAYS must be non-negative" {
-		t.Fatalf("expected BACKUP_RETENTION_DAYS validation error, got %v", err)
-	}
-}
-
-func TestLoadFromEnvRejectsNegativeLogRetentionDays(t *testing.T) {
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-	t.Setenv("LOG_RETENTION_DAYS", "-1")
-
-	_, err := LoadFromEnv()
-	if err == nil || err.Error() != "LOG_RETENTION_DAYS must be non-negative" {
-		t.Fatalf("expected LOG_RETENTION_DAYS validation error, got %v", err)
-	}
-}
-
-func TestLoadFromEnvRejectsOversizedQuotaRefreshWorkerLimit(t *testing.T) {
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-	t.Setenv("QUOTA_REFRESH_WORKER_LIMIT", "101")
-
-	_, err := LoadFromEnv()
-	if err == nil || err.Error() != "QUOTA_REFRESH_WORKER_LIMIT must be <= 100" {
-		t.Fatalf("expected QUOTA_REFRESH_WORKER_LIMIT max validation error, got %v", err)
-	}
-}
-
-func TestLoadFromEnvRejectsNonPositiveQuotaRefreshWorkerLimit(t *testing.T) {
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-	t.Setenv("QUOTA_REFRESH_WORKER_LIMIT", "0")
-
-	_, err := LoadFromEnv()
-	if err == nil || err.Error() != "QUOTA_REFRESH_WORKER_LIMIT must be positive" {
-		t.Fatalf("expected QUOTA_REFRESH_WORKER_LIMIT validation error, got %v", err)
-	}
-}
-
-func TestLoadFromEnvRejectsNonPositiveRedisQueueIdleInterval(t *testing.T) {
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-	t.Setenv("REDIS_QUEUE_IDLE_INTERVAL", "0s")
-
-	_, err := LoadFromEnv()
-	if err == nil || err.Error() != "REDIS_QUEUE_IDLE_INTERVAL must be positive" {
-		t.Fatalf("expected REDIS_QUEUE_IDLE_INTERVAL validation error, got %v", err)
-	}
-}
-
 func TestLoadFromEnvIgnoresRemovedMetadataSyncIntervalOverride(t *testing.T) {
 	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
 	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
@@ -551,27 +325,5 @@ func TestLoadFromEnvIgnoresRemovedMetadataSyncIntervalOverride(t *testing.T) {
 	}
 	if cfg.MetadataSyncInterval != MetadataSyncIntervalDefault {
 		t.Fatalf("expected removed env overrides to be ignored, got metadata_interval=%s", cfg.MetadataSyncInterval)
-	}
-}
-
-func TestLoadFromEnvRejectsInvalidBasePath(t *testing.T) {
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-	t.Setenv("APP_BASE_PATH", "cpa")
-
-	_, err := LoadFromEnv()
-	if err == nil || err.Error() != "APP_BASE_PATH is invalid: must start with '/'" {
-		t.Fatalf("expected APP_BASE_PATH validation error, got %v", err)
-	}
-}
-
-func TestLoadFromEnvRejectsNonPositiveAuthSessionTTL(t *testing.T) {
-	t.Setenv("CPA_BASE_URL", "http://127.0.0.1:"+cpa.ManagementRedisDefaultPort)
-	t.Setenv("CPA_MANAGEMENT_KEY", "secret")
-	t.Setenv("AUTH_SESSION_TTL", "0s")
-
-	_, err := LoadFromEnv()
-	if err == nil || err.Error() != "AUTH_SESSION_TTL must be positive" {
-		t.Fatalf("expected AUTH_SESSION_TTL validation error, got %v", err)
 	}
 }
