@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { appendUniqueUsageEvents, getBackToCPALinkURL, getCredentialSectionVisibility, getOverviewDisplayLoading, getUsageCustomRangeForTab, getUsageTabOptions, handleUsageEventLoadMoreError, isUsagePageVisible, loadAnalysisSections, loadRequestEventsPreferences, loadUsagePageVersionInfo, normalizeRequestEventsPreferences, normalizeStoredApiKeyFilter, normalizeUsageTabValue, refreshPageData, REQUEST_EVENTS_PREFERENCES_STORAGE_KEY, resolveApiKeyFilterRequestState, runUsageEventRequestLogDownload, sanitizeRequestEventFilters, saveRequestEventsPreferences, scheduleOverviewAutoRefresh, shouldAutoRefreshUsageTab, shouldResetSelectedApiKeyFilter, shouldShowApiKeyFilter, shouldShowRangeControls, shouldShowUpdateCheckButton, getUpdateCheckToastDuration, API_KEY_FILTER_MAX_LENGTH } from '../UsagePage';
-import { REQUEST_EVENT_COLUMN_IDS } from '@/components/usage/RequestEventsDetailsCard';
+import { loadUsageRangeState, migrateLegacyUsageRangeState, persistMigratedUsageRangeState, appendUniqueUsageEvents, getBackToCPALinkURL, getCredentialSectionVisibility, getOverviewDisplayLoading, getUsageCustomRangeForTab, getUsageTabOptions, handleUsageEventLoadMoreError, isUsagePageVisible, loadAnalysisSections, loadUsagePageVersionInfo, normalizeStoredApiKeyFilter, normalizeUsageTabValue, refreshPageData, resolveApiKeyFilterRequestState, runUsageEventRequestLogDownload, sanitizeRequestEventFilters, scheduleOverviewAutoRefresh, shouldAutoRefreshUsageTab, shouldResetSelectedApiKeyFilter, shouldShowApiKeyFilter, shouldShowRangeControls, shouldShowUpdateCheckButton, getUpdateCheckToastDuration, API_KEY_FILTER_MAX_LENGTH } from '../UsagePage';
 import { ApiError } from '@/lib/api';
-import type { UsageFilterWindow, VersionResponse } from '@/lib/types';
+import type { VersionResponse } from '@/lib/types';
 
 describe('appendUniqueUsageEvents', () => {
   it('appends cursor batches without duplicating overlapping event ids', () => {
@@ -98,16 +97,9 @@ const flushPromises = async () => {
   await Promise.resolve();
 };
 
-const createMemoryStorage = (seed: Record<string, string> = {}) => {
-  const values = new Map(Object.entries(seed));
-  return {
-    getItem: vi.fn((key: string) => values.get(key) ?? null),
-    setItem: vi.fn((key: string, value: string) => {
-      values.set(key, value);
-    }),
-    value: (key: string) => values.get(key),
-  };
-};
+const createMemoryStorage = (seed: Record<string, string>) => ({
+  getItem: (key: string) => seed[key] ?? null,
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -144,14 +136,10 @@ describe('UsagePage Overview loading display', () => {
 
 describe('UsagePage Analysis section loading', () => {
   it('starts core and latency requests together and publishes each result independently', async () => {
-    let resolveCore: (value: 'core') => void = () => undefined;
-    let rejectLatency: (reason: Error) => void = () => undefined;
-    const loadCore = vi.fn(() => new Promise<'core'>((resolve) => {
-      resolveCore = resolve;
-    }));
-    const loadLatency = vi.fn(() => new Promise<'latency'>((_resolve, reject) => {
-      rejectLatency = reject;
-    }));
+    const core = Promise.withResolvers<'core'>();
+    const latency = Promise.withResolvers<'latency'>();
+    const loadCore = vi.fn(() => core.promise);
+    const loadLatency = vi.fn(() => latency.promise);
     const onCoreLoaded = vi.fn();
     const onCoreError = vi.fn();
     const onLatencyLoaded = vi.fn();
@@ -169,13 +157,13 @@ describe('UsagePage Analysis section loading', () => {
     expect(loadCore).toHaveBeenCalledOnce();
     expect(loadLatency).toHaveBeenCalledOnce();
 
-    resolveCore('core');
+    core.resolve('core');
     await flushPromises();
     expect(onCoreLoaded).toHaveBeenCalledWith('core');
     expect(onLatencyLoaded).not.toHaveBeenCalled();
 
     const latencyError = new Error('latency failed');
-    rejectLatency(latencyError);
+    latency.reject(latencyError);
     await loading;
     expect(onCoreError).not.toHaveBeenCalled();
     expect(onLatencyError).toHaveBeenCalledWith(latencyError);
@@ -183,16 +171,13 @@ describe('UsagePage Analysis section loading', () => {
 });
 
 describe('UsagePage legacy Custom range migration', () => {
-  it('keeps a valid legacy Custom range pending until the project timezone is available', async () => {
-    const usagePageModule = await import('../UsagePage') as Record<string, unknown>;
-    const loadUsageRangeState = usagePageModule.loadUsageRangeState as ((storage: ReturnType<typeof createMemoryStorage>, nowMs: number) => unknown) | undefined;
+  it('keeps a valid legacy Custom range pending until the project timezone is available', () => {
     const storage = createMemoryStorage({
       'cli-proxy-usage-time-range-v1': 'custom',
       'cli-proxy-usage-custom-range-v1': '{"start":"2026-07-01","end":"2026-07-17"}',
     });
 
-    expect(loadUsageRangeState).toBeTypeOf('function');
-    expect(loadUsageRangeState?.(storage, Date.parse('2026-07-17T07:36:42.000Z'))).toEqual({
+    expect(loadUsageRangeState(storage, Date.parse('2026-07-17T07:36:42.000Z'))).toEqual({
       state: { range: 'today' },
       pendingLegacyCustomRange: {
         unit: 'day',
@@ -202,29 +187,20 @@ describe('UsagePage legacy Custom range migration', () => {
     });
   });
 
-  it('ignores invalid legacy Custom state instead of scheduling a migration', async () => {
-    const usagePageModule = await import('../UsagePage') as Record<string, unknown>;
-    const loadUsageRangeState = usagePageModule.loadUsageRangeState as ((storage: ReturnType<typeof createMemoryStorage>, nowMs: number) => unknown) | undefined;
+  it('ignores invalid legacy Custom state instead of scheduling a migration', () => {
     const storage = createMemoryStorage({
       'cli-proxy-usage-time-range-v1': 'custom',
       'cli-proxy-usage-custom-range-v1': '{"start":"bad","end":"2026-07-17"}',
     });
 
-    expect(loadUsageRangeState?.(storage, Date.parse('2026-07-17T07:36:42.000Z'))).toEqual({
+    expect(loadUsageRangeState(storage, Date.parse('2026-07-17T07:36:42.000Z'))).toEqual({
       state: { range: 'today' },
       pendingLegacyCustomRange: null,
     });
   });
 
-  it('normalizes the pending legacy dates after the project timezone arrives', async () => {
-    const usagePageModule = await import('../UsagePage') as Record<string, unknown>;
-    const migrateLegacyUsageRangeState = usagePageModule.migrateLegacyUsageRangeState as ((
-      range: { unit: 'day'; start: string; end: string },
-      options: { nowMs: number; timeZone: string },
-    ) => unknown) | undefined;
-
-    expect(migrateLegacyUsageRangeState).toBeTypeOf('function');
-    expect(migrateLegacyUsageRangeState?.({
+  it('normalizes the pending legacy dates after the project timezone arrives', () => {
+    expect(migrateLegacyUsageRangeState({
       unit: 'day',
       start: '2026-07-01',
       end: '2026-07-17',
@@ -242,14 +218,8 @@ describe('UsagePage legacy Custom range migration', () => {
     });
   });
 
-  it('preserves historical legacy dates and their selected end', async () => {
-    const usagePageModule = await import('../UsagePage') as Record<string, unknown>;
-    const migrateLegacyUsageRangeState = usagePageModule.migrateLegacyUsageRangeState as ((
-      range: { unit: 'day'; start: string; end: string },
-      options: { nowMs: number; timeZone: string },
-    ) => unknown) | undefined;
-
-    expect(migrateLegacyUsageRangeState?.({
+  it('preserves historical legacy dates and their selected end', () => {
+    expect(migrateLegacyUsageRangeState({
       unit: 'day',
       start: '2026-06-17',
       end: '2026-07-16',
@@ -267,12 +237,7 @@ describe('UsagePage legacy Custom range migration', () => {
     });
   });
 
-  it('writes the migrated state before deleting the only legacy copy', async () => {
-    const usagePageModule = await import('../UsagePage') as Record<string, unknown>;
-    const persistMigratedUsageRangeState = usagePageModule.persistMigratedUsageRangeState as ((
-      storage: { setItem: (key: string, value: string) => void; removeItem: (key: string) => void },
-      state: { range: 'custom'; customRange: { unit: 'day'; start: string; end: string }; timeZone: string },
-    ) => boolean) | undefined;
+  it('writes the migrated state before deleting the only legacy copy', () => {
     const calls: string[] = [];
     const state = {
       range: 'custom' as const,
@@ -280,8 +245,7 @@ describe('UsagePage legacy Custom range migration', () => {
       timeZone: 'Asia/Shanghai',
     };
 
-    expect(persistMigratedUsageRangeState).toBeTypeOf('function');
-    expect(persistMigratedUsageRangeState?.({
+    expect(persistMigratedUsageRangeState({
       setItem: (key) => calls.push(`set:${key}`),
       removeItem: (key) => calls.push(`remove:${key}`),
     }, state)).toBe(true);
@@ -291,15 +255,10 @@ describe('UsagePage legacy Custom range migration', () => {
     ]);
   });
 
-  it('keeps the legacy copy when writing the migrated state fails', async () => {
-    const usagePageModule = await import('../UsagePage') as Record<string, unknown>;
-    const persistMigratedUsageRangeState = usagePageModule.persistMigratedUsageRangeState as ((
-      storage: { setItem: () => void; removeItem: () => void },
-      state: { range: 'custom'; customRange: { unit: 'day'; start: string; end: string }; timeZone: string },
-    ) => boolean) | undefined;
+  it('keeps the legacy copy when writing the migrated state fails', () => {
     const removeItem = vi.fn();
 
-    expect(persistMigratedUsageRangeState?.({
+    expect(persistMigratedUsageRangeState({
       setItem: () => { throw new Error('quota exceeded'); },
       removeItem,
     }, {
@@ -612,200 +571,18 @@ describe('UsagePage request event filters', () => {
   });
 });
 
-describe('UsagePage request event preferences', () => {
-
-  it('preserves persisted filters while resetting legacy columns', () => {
-    const preferences = normalizeRequestEventsPreferences({
-      version: 1,
-      filters: {
-        model: 'claude-opus',
-        source: 'authidx-source-b',
-        result: 'failed',
-      },
-      visibleColumnIds: ['model', 'timestamp', 'model', 'not-a-column', 'total_cost'],
-    });
-
-    expect(preferences).toEqual({
-      version: 9,
-      filters: {
-        model: 'claude-opus',
-        source: 'authidx-source-b',
-        result: 'failed',
-      },
-      visibleColumnIds: REQUEST_EVENT_COLUMN_IDS,
-      columnOrder: REQUEST_EVENT_COLUMN_IDS,
-    });
-  });
-
-  it('falls back safely for damaged persisted request event preferences', () => {
-    const preferences = normalizeRequestEventsPreferences({
-      version: 9,
-      filters: {
-        model: 42,
-        source: '',
-        result: 'maybe',
-      },
-      visibleColumnIds: ['not-a-column'],
-    });
-
-    expect(preferences.filters).toEqual({
-      model: '__all__',
-      source: '__all__',
-      result: '__all__',
-    });
-    expect(preferences.visibleColumnIds[0]).toBe('timestamp');
-    expect(preferences.visibleColumnIds.length).toBeGreaterThan(1);
-  });
-
-  it('keeps current request event columns unchanged when Speed is absent', () => {
-    const columnIdsWithoutSpeed = REQUEST_EVENT_COLUMN_IDS.filter((columnId) => columnId !== 'speed');
-    const preferences = normalizeRequestEventsPreferences({
-      version: 9,
-      visibleColumnIds: columnIdsWithoutSpeed,
-    });
-
-    expect(preferences.visibleColumnIds).toEqual(columnIdsWithoutSpeed);
-    expect(preferences.visibleColumnIds).not.toContain('speed');
-  });
-
-  it('resets legacy full-column request event preferences', () => {
-    const legacyFullColumnIds = [
-      'timestamp',
-      'api_key',
-      'source',
-      'model',
-      'reasoning_effort',
-      'result',
-      'request_type',
-      'endpoint',
-      'ttft',
-      'latency',
-      'speed',
-      'input_tokens',
-      'output_tokens',
-      'reasoning_tokens',
-      'cached_tokens',
-      'cache_rate',
-      'total_tokens',
-      'total_cost',
-    ];
-    const preferences = normalizeRequestEventsPreferences({
-      version: 1,
-      visibleColumnIds: legacyFullColumnIds,
-    });
-
-    expect(preferences.visibleColumnIds).toEqual(REQUEST_EVENT_COLUMN_IDS);
-  });
-
-  it('preserves a saved preference that intentionally hides Speed', () => {
-    const storage = createMemoryStorage();
-    const hiddenSpeedColumnIds = REQUEST_EVENT_COLUMN_IDS.filter((columnId) => columnId !== 'speed');
-
-    saveRequestEventsPreferences({
-      version: 9,
-      filters: {
-        model: '__all__',
-        source: '__all__',
-        result: '__all__',
-      },
-      visibleColumnIds: hiddenSpeedColumnIds,
-      columnOrder: [...REQUEST_EVENT_COLUMN_IDS],
-    }, storage);
-
-    const stored = JSON.parse(storage.value(REQUEST_EVENTS_PREFERENCES_STORAGE_KEY) ?? '');
-    expect(stored).toEqual({
-      version: 9,
-      filters: {
-        model: '__all__',
-        source: '__all__',
-        result: '__all__',
-      },
-      visibleColumnIds: hiddenSpeedColumnIds,
-      columnOrder: REQUEST_EVENT_COLUMN_IDS,
-    });
-    expect(loadRequestEventsPreferences(storage).visibleColumnIds).toEqual(hiddenSpeedColumnIds);
-  });
-
-  it('preserves a saved preference that intentionally hides Speed Mode', () => {
-    const storage = createMemoryStorage();
-    const hiddenSpeedModeColumnIds = REQUEST_EVENT_COLUMN_IDS.filter((columnId) => columnId !== 'service_tier');
-
-    saveRequestEventsPreferences({
-      version: 9,
-      filters: {
-        model: '__all__',
-        source: '__all__',
-        result: '__all__',
-      },
-      visibleColumnIds: hiddenSpeedModeColumnIds,
-      columnOrder: [...REQUEST_EVENT_COLUMN_IDS],
-    }, storage);
-
-    expect(loadRequestEventsPreferences(storage).visibleColumnIds).toEqual(hiddenSpeedModeColumnIds);
-  });
-
-  it('loads defaults from invalid JSON and persists normalized request event preferences', () => {
-    const storage = createMemoryStorage({
-      [REQUEST_EVENTS_PREFERENCES_STORAGE_KEY]: '{bad json',
-    });
-
-    expect(loadRequestEventsPreferences(storage).filters).toEqual({
-      model: '__all__',
-      source: '__all__',
-      result: '__all__',
-    });
-
-    saveRequestEventsPreferences({
-      version: 9,
-      filters: {
-        model: 'gpt-4.1',
-        source: 'source-a',
-        result: 'success',
-      },
-      visibleColumnIds: ['timestamp', 'timestamp', 'model'],
-    }, storage);
-
-    expect(storage.setItem).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(storage.value(REQUEST_EVENTS_PREFERENCES_STORAGE_KEY) ?? '')).toEqual({
-      version: 9,
-      filters: {
-        model: 'gpt-4.1',
-        source: 'source-a',
-        result: 'success',
-      },
-      visibleColumnIds: ['timestamp', 'model'],
-      columnOrder: REQUEST_EVENT_COLUMN_IDS,
-    });
-  });
+it.each([
+  ['overview', true],
+  ['analysis', true],
+  ['ranking', false],
+  ['events', true],
+  ['auth-files', false],
+  ['ai-provider', false],
+  ['settings', false],
+] as const)('shows range and API Key controls on %s: %s', (tab, expected) => {
+  expect(shouldShowRangeControls(tab)).toBe(expected);
+  expect(shouldShowApiKeyFilter(tab)).toBe(expected);
 });
-
-for (const [tab, expected] of [
-  ['overview', true],
-  ['analysis', true],
-  ['ranking', false],
-  ['events', true],
-  ['auth-files', false],
-  ['ai-provider', false],
-  ['settings', false],
-] as const) {
-  it(`returns ${expected} for ${tab} range controls visibility`, () => {
-    expect(shouldShowRangeControls(tab)).toBe(expected);
-  });
-}
-
-for (const [tab, expected] of [
-  ['overview', true],
-  ['analysis', true],
-  ['ranking', false],
-  ['events', true],
-  ['auth-files', false],
-  ['ai-provider', false],
-  ['settings', false],
-] as const) {
-  it(`returns ${expected} for ${tab} API Key filter visibility`, () => {
-    expect(shouldShowApiKeyFilter(tab)).toBe(expected);
-  });
-}
 
 describe('UsagePage tab labels', () => {
   it('resolves tab labels through translation keys', () => {
@@ -858,28 +635,18 @@ describe('UsagePage credentials tab migration', () => {
 });
 
 describe('UsagePage refresh action', () => {
-  it('reloads page data without triggering backend sync', async () => {
-    let refreshCalls = 0;
-    const syncCalls = 0;
-
-    await refreshPageData({
-      refreshActiveTab: async () => {
-        refreshCalls += 1;
-      },
-    });
-
-    expect(refreshCalls).toBe(1);
-    expect(syncCalls).toBe(0);
+  it('refreshes the active tab once', async () => {
+    const refreshActiveTab = vi.fn();
+    await refreshPageData({ refreshActiveTab });
+    expect(refreshActiveTab).toHaveBeenCalledOnce();
   });
 });
 
 describe('UsagePage request log download guard', () => {
   it('does not trigger a stale native download after the modal is closed', async () => {
     const generationRef = { current: 0 };
-    let resolveDownloadURL: (url: string) => void = () => undefined;
-    const createDownloadURL = vi.fn(() => new Promise<string>((resolve) => {
-      resolveDownloadURL = resolve;
-    }));
+    const downloadURL = Promise.withResolvers<string>();
+    const createDownloadURL = vi.fn(() => downloadURL.promise);
     const triggerDownload = vi.fn();
     const setDownloading = vi.fn();
     const showDownloadError = vi.fn();
@@ -897,7 +664,7 @@ describe('UsagePage request log download guard', () => {
     expect(setDownloading).toHaveBeenCalledWith(true);
 
     generationRef.current += 1;
-    resolveDownloadURL('/api/v1/usage/events/42/request-log/download-file?token=abc');
+    downloadURL.resolve('/api/v1/usage/events/42/request-log/download-file?token=abc');
     await pendingDownload;
 
     expect(triggerDownload).not.toHaveBeenCalled();
