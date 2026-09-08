@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildStatCardMetrics } from './StatCards';
-import type { UsageOverviewPayload } from './hooks/useUsageData';
+import { buildStatCardMetrics } from '../StatCards';
+import type { UsageOverviewPayload } from '../hooks/useUsageData';
 
-const usageWithBackendSummary: UsageOverviewPayload = {
+const usageWithBackendSummary = {
   usage: {
     total_requests: 9,
     success_count: 8,
@@ -28,7 +28,7 @@ const usageWithBackendSummary: UsageOverviewPayload = {
     cost: [],
     cache_read_rate: [],
   },
-};
+} satisfies UsageOverviewPayload;
 
 describe('buildStatCardMetrics', () => {
   it('prefers backend summary values over detail-derived metrics', () => {
@@ -54,7 +54,7 @@ describe('buildStatCardMetrics', () => {
       usage: {
         ...usageWithBackendSummary,
         summary: {
-          ...usageWithBackendSummary.summary!,
+          ...usageWithBackendSummary.summary,
           input_tokens: 0,
         },
       },
@@ -84,7 +84,7 @@ describe('buildStatCardMetrics', () => {
       usage: {
         ...usageWithBackendSummary,
         summary: {
-          ...usageWithBackendSummary.summary!,
+          ...usageWithBackendSummary.summary,
           total_cost: 4.56,
           cost_available: false,
         },
