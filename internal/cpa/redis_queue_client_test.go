@@ -2,7 +2,6 @@ package cpa
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -12,13 +11,13 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
 func TestRedisQueueClientPopsBatch(t *testing.T) {
@@ -72,9 +71,6 @@ func TestRedisQueueClientClassifiesAuthErrors(t *testing.T) {
 
 	client := NewRedisQueueClientWithOptions(RedisQueueOptions{BaseURL: server.URL, ManagementKey: "wrong", Timeout: time.Second, QueueKey: ManagementUsageQueueKey, BatchSize: 1000})
 	_, err := client.PopUsage(ctxWithTimeout(t))
-	if err == nil {
-		t.Fatal("expected auth error")
-	}
 	if !errors.Is(err, ErrRedisQueueAuth) {
 		t.Fatalf("expected ErrRedisQueueAuth, got %v", err)
 	}
@@ -130,13 +126,8 @@ func TestRedisQueueClientTLS(t *testing.T) {
 			if err != nil {
 				t.Fatalf("PopUsage over TLS returned error: %v", err)
 			}
-			if len(messages) != len(tc.expected) {
-				t.Fatalf("expected %d messages, got %#v", len(tc.expected), messages)
-			}
-			for i, want := range tc.expected {
-				if messages[i] != want {
-					t.Fatalf("message[%d] = %q, want %q", i, messages[i], want)
-				}
+			if !slices.Equal(messages, tc.expected) {
+				t.Fatalf("messages = %v, want %v", messages, tc.expected)
 			}
 		})
 	}
@@ -172,67 +163,33 @@ func TestRedisQueueClientDefaultsToManagementPortFromBaseURLHost(t *testing.T) {
 	}
 }
 
-func TestRedisQueueClientRejectsOversizedRESPBulk(t *testing.T) {
-	server := newRedisQueueTestServer(t, func(t *testing.T, conn net.Conn) {
-		reader := bufio.NewReader(conn)
-		readRESPCommand(t, reader)
-		fmt.Fprint(conn, "+OK\r\n")
-		readRESPCommand(t, reader)
-		fmt.Fprint(conn, "$4194305\r\n")
-	})
-
-	client := NewRedisQueueClientWithOptions(RedisQueueOptions{BaseURL: server.URL, ManagementKey: "secret", Timeout: time.Second, QueueKey: ManagementUsageQueueKey, BatchSize: 1000})
-	_, err := client.PopUsage(ctxWithTimeout(t))
-	if err == nil || !strings.Contains(err.Error(), "exceeds maximum size") {
-		t.Fatalf("expected oversized bulk error, got %v", err)
-	}
-}
-
-func TestRedisQueueClientRejectsArrayLargerThanBatchSize(t *testing.T) {
-	server := newRedisQueueTestServer(t, func(t *testing.T, conn net.Conn) {
-		reader := bufio.NewReader(conn)
-		readRESPCommand(t, reader)
-		fmt.Fprint(conn, "+OK\r\n")
-		readRESPCommand(t, reader)
-		fmt.Fprint(conn, "*2\r\n$2\r\n{}\r\n$2\r\n{}\r\n")
-	})
-
-	client := NewRedisQueueClientWithOptions(RedisQueueOptions{BaseURL: server.URL, ManagementKey: "secret", Timeout: time.Second, QueueKey: ManagementUsageQueueKey, BatchSize: 1})
-	_, err := client.PopUsage(ctxWithTimeout(t))
-	if err == nil || !strings.Contains(err.Error(), "array exceeds maximum length") {
-		t.Fatalf("expected batch-size array limit error, got %v", err)
-	}
-}
-
-func TestRedisQueueClientRejectsOversizedRESPArray(t *testing.T) {
-	server := newRedisQueueTestServer(t, func(t *testing.T, conn net.Conn) {
-		reader := bufio.NewReader(conn)
-		readRESPCommand(t, reader)
-		fmt.Fprint(conn, "+OK\r\n")
-		readRESPCommand(t, reader)
-		fmt.Fprint(conn, "*10001\r\n")
-	})
-
-	client := NewRedisQueueClientWithOptions(RedisQueueOptions{BaseURL: server.URL, ManagementKey: "secret", Timeout: time.Second, QueueKey: ManagementUsageQueueKey, BatchSize: 1000})
-	_, err := client.PopUsage(ctxWithTimeout(t))
-	if err == nil || !strings.Contains(err.Error(), "array exceeds maximum length") {
-		t.Fatalf("expected oversized array error, got %v", err)
-	}
-}
-
-func TestRedisQueueClientReportsMalformedRESP(t *testing.T) {
-	server := newRedisQueueTestServer(t, func(t *testing.T, conn net.Conn) {
-		reader := bufio.NewReader(conn)
-		readRESPCommand(t, reader)
-		fmt.Fprint(conn, "+OK\r\n")
-		readRESPCommand(t, reader)
-		fmt.Fprint(conn, "!not-resp\r\n")
-	})
-
-	client := NewRedisQueueClientWithOptions(RedisQueueOptions{BaseURL: server.URL, ManagementKey: "secret", Timeout: time.Second, QueueKey: ManagementUsageQueueKey, BatchSize: 1000})
-	_, err := client.PopUsage(ctxWithTimeout(t))
-	if err == nil || !strings.Contains(err.Error(), "read redis queue pop response") {
-		t.Fatalf("expected malformed response error, got %v", err)
+func TestRedisQueueClientRejectsInvalidRESP(t *testing.T) {
+	for _, tc := range []struct {
+		name, response string
+		batchSize      int
+		wantError      string
+	}{
+		{"oversized bulk", "$4194305\r\n", 1000, "exceeds maximum size"},
+		{"array larger than batch", "*2\r\n$2\r\n{}\r\n$2\r\n{}\r\n", 1, "array exceeds maximum length"},
+		{"oversized array", "*10001\r\n", 1000, "array exceeds maximum length"},
+		{"malformed response", "!not-resp\r\n", 1000, "read redis queue pop response"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newRedisQueueTestServer(t, func(t *testing.T, conn net.Conn) {
+				reader := bufio.NewReader(conn)
+				readRESPCommand(t, reader)
+				fmt.Fprint(conn, "+OK\r\n")
+				readRESPCommand(t, reader)
+				fmt.Fprint(conn, tc.response)
+			})
+			client := NewRedisQueueClientWithOptions(RedisQueueOptions{
+				BaseURL: server.URL, ManagementKey: "secret", Timeout: time.Second,
+				QueueKey: ManagementUsageQueueKey, BatchSize: tc.batchSize,
+			})
+			if _, err := client.PopUsage(ctxWithTimeout(t)); err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("PopUsage error = %v, want %q", err, tc.wantError)
+			}
+		})
 	}
 }
 
@@ -251,16 +208,6 @@ func newRedisQueueTLSTestServer(t *testing.T, handler func(*testing.T, net.Conn)
 
 func startRedisQueueTestServer(t *testing.T, useTLS bool, handler func(*testing.T, net.Conn)) redisQueueTestServer {
 	t.Helper()
-	return startRedisQueueMultiTestServer(t, 1, useTLS, handler)
-}
-
-func newRedisQueueMultiTestServer(t *testing.T, connections int, handler func(*testing.T, net.Conn)) redisQueueTestServer {
-	t.Helper()
-	return startRedisQueueMultiTestServer(t, connections, false, handler)
-}
-
-func startRedisQueueMultiTestServer(t *testing.T, connections int, useTLS bool, handler func(*testing.T, net.Conn)) redisQueueTestServer {
-	t.Helper()
 	var listener net.Listener
 	var err error
 	if useTLS {
@@ -272,21 +219,21 @@ func startRedisQueueMultiTestServer(t *testing.T, connections int, useTLS bool, 
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { listener.Close() })
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for range connections {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			handler(t, conn)
-			conn.Close()
+		conn, err := listener.Accept()
+		if err != nil {
+			return
 		}
+		defer conn.Close()
+		handler(t, conn)
 	}()
-	t.Cleanup(func() { <-done })
+	t.Cleanup(func() {
+		listener.Close()
+		<-done
+	})
 
 	scheme := "http"
 	if useTLS {
@@ -340,29 +287,12 @@ func readRESPCommand(t *testing.T, reader *bufio.Reader) []string {
 			t.Fatalf("parse bulk header %q: %v", bulkHeader, err)
 		}
 		buf := make([]byte, size+2)
-		if _, err := reader.Read(buf); err != nil {
+		if _, err := io.ReadFull(reader, buf); err != nil {
 			t.Fatalf("read bulk body: %v", err)
 		}
 		parts = append(parts, string(buf[:size]))
 	}
 	return parts
-}
-
-func captureRedisQueueClientInfoLogs(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var logs bytes.Buffer
-	previousOutput := logrus.StandardLogger().Out
-	previousFormatter := logrus.StandardLogger().Formatter
-	previousLevel := logrus.GetLevel()
-	logrus.SetOutput(&logs)
-	logrus.SetFormatter(&logrus.TextFormatter{DisableTimestamp: true})
-	logrus.SetLevel(logrus.InfoLevel)
-	t.Cleanup(func() {
-		logrus.SetOutput(previousOutput)
-		logrus.SetFormatter(previousFormatter)
-		logrus.SetLevel(previousLevel)
-	})
-	return &logs
 }
 
 func ctxWithTimeout(t *testing.T) context.Context {
