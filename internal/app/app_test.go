@@ -24,39 +24,6 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestAppCloseClosesDatabase(t *testing.T) {
-	app, err := NewWithConfig(testAppConfig(t))
-	if err != nil {
-		t.Fatalf("NewWithConfig returned error: %v", err)
-	}
-	sqlDB, err := app.DB.DB()
-	if err != nil {
-		t.Fatalf("load sql db: %v", err)
-	}
-
-	if err := app.Close(); err != nil {
-		t.Fatalf("Close returned error: %v", err)
-	}
-
-	if err := sqlDB.Ping(); err == nil {
-		t.Fatal("expected database ping to fail after app close")
-	}
-}
-
-func TestNewWithConfigBuildsQuotaAutoRefreshRunner(t *testing.T) {
-	app, err := NewWithConfig(testAppConfig(t))
-	if err != nil {
-		t.Fatalf("NewWithConfig returned error: %v", err)
-	}
-	defer app.Close()
-	if app.QuotaAutoRefresh == nil {
-		t.Fatal("expected quota scheduled refresh runner to be initialized")
-	}
-	if app.QuotaService == nil {
-		t.Fatal("expected quota service to remain available for manual refresh")
-	}
-}
-
 func TestAppCloseWaitsForQuotaRefreshTasksBeforeDatabaseClose(t *testing.T) {
 	waitCalled := make(chan struct{}, 1)
 	quotaService := &quotaContextRecorder{contextSet: make(chan context.Context, 1), waitCalled: waitCalled}
@@ -90,6 +57,7 @@ func TestAppCloseStopsRealQuotaRefreshTasksBeforeDatabaseClose(t *testing.T) {
 	)
 	quotaService.SetRefreshContext(context.Background())
 	app := &App{DB: db, QuotaService: quotaService}
+	t.Cleanup(func() { _ = app.Close() })
 
 	response, err := quotaService.Refresh(context.Background(), quota.RefreshRequest{AuthIndexes: []string{"auth-1"}, Source: quota.RefreshSourceManual})
 	if err != nil {
@@ -107,25 +75,25 @@ func TestAppCloseStopsRealQuotaRefreshTasksBeforeDatabaseClose(t *testing.T) {
 	if task.Status != quota.RefreshTaskStatusFailed {
 		t.Fatalf("expected app close to cancel and drain real quota worker before closing DB, got %+v", task)
 	}
-	if handler.callCount() != 0 {
-		t.Fatalf("expected canceled quota worker not to complete provider call, got %d calls", handler.callCount())
+	if handler.calls != 0 {
+		t.Fatalf("expected canceled quota worker not to complete provider call, got %d calls", handler.calls)
 	}
 }
 
-func TestNewWithConfigBuildsRedisIngestAndRouter(t *testing.T) {
+func TestNewWithConfigBuildsAndClosesApplication(t *testing.T) {
 	app, err := NewWithConfig(testAppConfig(t))
 	if err != nil {
 		t.Fatalf("NewWithConfig returned error: %v", err)
 	}
 	defer app.Close()
-	if app.Poller == nil {
-		t.Fatal("expected poller status provider to be initialized")
+	if runner, ok := app.Poller.(*poller.RedisPoller); !ok || runner == nil {
+		t.Fatalf("expected Poller to be an initialized RedisPoller, got %T", app.Poller)
 	}
-	if app.RedisIngest == nil {
-		t.Fatal("expected redis ingest runner to be initialized")
+	if runner, ok := app.RedisIngest.(*poller.RedisIngestRunner); !ok || runner == nil {
+		t.Fatalf("expected RedisIngest to be an initialized RedisIngestRunner, got %T", app.RedisIngest)
 	}
-	if app.RedisProcess == nil {
-		t.Fatal("expected redis process runner to be initialized")
+	if runner, ok := app.RedisProcess.(*poller.RedisProcessRunner); !ok || runner == nil {
+		t.Fatalf("expected RedisProcess to be an initialized RedisProcessRunner, got %T", app.RedisProcess)
 	}
 	if app.UsageAggregation == nil {
 		t.Fatal("expected usage aggregation runner to be initialized")
@@ -141,6 +109,25 @@ func TestNewWithConfigBuildsRedisIngestAndRouter(t *testing.T) {
 	}
 	if app.MetadataSync == nil {
 		t.Fatal("expected metadata sync runner to be initialized")
+	}
+	if app.QuotaAutoRefresh == nil {
+		t.Fatal("expected quota scheduled refresh runner to be initialized")
+	}
+	if app.QuotaService == nil {
+		t.Fatal("expected quota service to remain available for manual refresh")
+	}
+	if app.Maintenance == nil {
+		t.Fatal("expected maintenance cleanup runner to be initialized")
+	}
+	sqlDB, err := app.DB.DB()
+	if err != nil {
+		t.Fatalf("load sql db: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if err := sqlDB.Ping(); err == nil {
+		t.Fatal("expected database ping to fail after app close")
 	}
 }
 
@@ -298,46 +285,6 @@ func TestNewWithConfigSkipsBackupRunnerWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestNewWithConfigSelectsRedisIngestRunners(t *testing.T) {
-	app, err := NewWithConfig(testAppConfig(t))
-	if err != nil {
-		t.Fatalf("NewWithConfig returned error: %v", err)
-	}
-	defer app.Close()
-	if _, ok := app.Poller.(*poller.RedisPoller); !ok {
-		t.Fatalf("expected redis status provider to use redis poller, got %T", app.Poller)
-	}
-	if _, ok := app.RedisIngest.(*poller.RedisIngestRunner); !ok {
-		t.Fatalf("expected redis ingest runner, got %T", app.RedisIngest)
-	}
-	if _, ok := app.RedisProcess.(*poller.RedisProcessRunner); !ok {
-		t.Fatalf("expected redis process runner, got %T", app.RedisProcess)
-	}
-	if app.Maintenance == nil {
-		t.Fatal("expected maintenance cleanup runner to be initialized")
-	}
-}
-
-func TestNewWithConfigCreatesIndependentMaintenanceRunner(t *testing.T) {
-	app, err := NewWithConfig(testAppConfig(t))
-	if err != nil {
-		t.Fatalf("NewWithConfig returned error: %v", err)
-	}
-	defer app.Close()
-	if app.Poller == nil {
-		t.Fatal("expected sync status provider to be initialized")
-	}
-	if app.RedisIngest == nil {
-		t.Fatal("expected independent redis ingest runner to be initialized")
-	}
-	if app.RedisProcess == nil {
-		t.Fatal("expected independent redis process runner to be initialized")
-	}
-	if app.Maintenance == nil {
-		t.Fatal("expected independent maintenance runner to be initialized")
-	}
-}
-
 func TestRunStartsPollerAndMaintenanceIndependently(t *testing.T) {
 	// 准备：为每个后台 runner 配置独立启动信号，并使用非法端口让 HTTP 立即返回。
 	cfg := testAppConfig(t)
@@ -382,43 +329,27 @@ func TestRunStartsPollerAndMaintenanceIndependently(t *testing.T) {
 	if err := app.Run(); err == nil {
 		t.Fatal("expected Run to return an error for invalid port")
 	}
-	// 断言：ingest、process、aggregation、maintenance、metadata 与 backup 都已独立启动。
-	select {
-	case <-pullStarted:
-	case <-time.After(time.Second):
-		t.Fatal("expected redis ingest runner to start")
-	}
-	select {
-	case <-processStarted:
-	case <-time.After(time.Second):
-		t.Fatal("expected redis process runner to start")
-	}
-	select {
-	case <-aggregationStarted:
-	case <-time.After(time.Second):
-		t.Fatal("expected usage aggregation runner to start")
+	for name, started := range map[string]<-chan struct{}{
+		"redis ingest":      pullStarted,
+		"redis process":     processStarted,
+		"usage aggregation": aggregationStarted,
+		"maintenance":       maintenanceStarted,
+		"metadata sync":     metadataStarted,
+		"backup":            backupStarted,
+	} {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("expected %s runner to start", name)
+		}
 	}
 	select {
 	case <-statusProvider.started:
 		t.Fatal("expected poller status provider not to be started as a background runner")
 	default:
 	}
-	select {
-	case <-maintenanceStarted:
-	case <-time.After(time.Second):
-		t.Fatal("expected maintenance runner to start")
-	}
-	select {
-	case <-metadataStarted:
-	case <-time.After(time.Second):
-		t.Fatal("expected metadata sync runner to start")
-	}
-	select {
-	case <-backupStarted:
-	case <-time.After(time.Second):
-		t.Fatal("expected database backup runner to start")
-	}
 }
+
 func TestRunSetsQuotaServiceContext(t *testing.T) {
 	cfg := testAppConfig(t)
 	cfg.AppPort = "invalid-port"
@@ -511,10 +442,6 @@ func (s *appQuotaHandlerStub) Check(ctx context.Context, input quota.ProviderInp
 	}
 	s.calls++
 	return quota.ProviderOutput{Result: quota.ClaudeResult{Usage: &quota.ClaudeUsagePayload{FiveHour: &quota.ClaudeUsageWindow{Utilization: 25}}}}, nil
-}
-
-func (s *appQuotaHandlerStub) callCount() int {
-	return s.calls
 }
 
 func waitForAppQuotaTaskStatus(t *testing.T, service *quota.Service, authIndex string, status quota.RefreshTaskStatus) {
