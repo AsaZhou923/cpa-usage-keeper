@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestSessionManagerCreateValidateDelete(t *testing.T) {
+func TestSessionManagerCreateMetadataValidateDelete(t *testing.T) {
 	manager := NewSessionManager(2 * time.Hour)
 	manager.now = func() time.Time { return time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC) }
 	manager.generate = func() (string, error) { return "token-1", nil }
@@ -29,22 +29,6 @@ func TestSessionManagerCreateValidateDelete(t *testing.T) {
 		t.Fatal("expected token to validate")
 	}
 
-	manager.Delete(token)
-	if manager.Validate(token) {
-		t.Fatal("expected deleted token to fail validation")
-	}
-}
-
-func TestSessionManagerCreateReturnsAdminSessionMetadata(t *testing.T) {
-	manager := NewSessionManager(2 * time.Hour)
-	manager.now = func() time.Time { return time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC) }
-	manager.generate = func() (string, error) { return "token-admin", nil }
-
-	token, expiresAt, err := manager.Create()
-	if err != nil {
-		t.Fatalf("Create returned error: %v", err)
-	}
-
 	session, ok := manager.Get(token)
 	if !ok {
 		t.Fatal("expected session metadata to be available")
@@ -57,6 +41,11 @@ func TestSessionManagerCreateReturnsAdminSessionMetadata(t *testing.T) {
 	}
 	if !session.ExpiresAt.Equal(expiresAt) {
 		t.Fatalf("expected session expiry %s, got %s", expiresAt, session.ExpiresAt)
+	}
+
+	manager.Delete(token)
+	if manager.Validate(token) {
+		t.Fatal("expected deleted token to fail validation")
 	}
 }
 
@@ -203,7 +192,7 @@ func TestPersistentSessionManagerLoadsSessionAfterRestart(t *testing.T) {
 		t.Fatalf("expected persisted token hash %q, got %q", sessionTokenHash(token), row.TokenHash)
 	}
 
-	restartedStore := &trackingSessionStore{store: store}
+	restartedStore := &trackingSessionStore{SessionStore: store}
 	restarted := NewPersistentSessionManager(2*time.Hour, restartedStore)
 	restarted.now = func() time.Time { return baseTime.Add(time.Minute) }
 	session, ok := restarted.Get(token)
@@ -308,43 +297,11 @@ func openSessionStoreTestDatabase(t *testing.T) *gorm.DB {
 }
 
 type trackingSessionStore struct {
-	store    SessionStore
+	SessionStore
 	getCalls int
-}
-
-func (s *trackingSessionStore) Save(token string, session Session) error {
-	return s.store.Save(token, session)
 }
 
 func (s *trackingSessionStore) Get(token string) (Session, bool, error) {
 	s.getCalls++
-	return s.store.Get(token)
-}
-
-func (s *trackingSessionStore) List(now time.Time) ([]SessionRecord, error) {
-	return s.store.List(now)
-}
-
-func (s *trackingSessionStore) UpdateActivity(token, lastSeenIP string, lastSeenAt time.Time) error {
-	return s.store.UpdateActivity(token, lastSeenIP, lastSeenAt)
-}
-
-func (s *trackingSessionStore) UpdateAdminAliasByTokenHash(tokenHash, alias string, updatedAt time.Time) (int64, error) {
-	return s.store.UpdateAdminAliasByTokenHash(tokenHash, alias, updatedAt)
-}
-
-func (s *trackingSessionStore) Delete(token string) error {
-	return s.store.Delete(token)
-}
-
-func (s *trackingSessionStore) DeleteByTokenHash(tokenHash string) (int64, error) {
-	return s.store.DeleteByTokenHash(tokenHash)
-}
-
-func (s *trackingSessionStore) DeleteByRole(role Role) (int64, error) {
-	return s.store.DeleteByRole(role)
-}
-
-func (s *trackingSessionStore) DeleteExpired(now time.Time) error {
-	return s.store.DeleteExpired(now)
+	return s.SessionStore.Get(token)
 }
