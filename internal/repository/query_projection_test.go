@@ -11,6 +11,7 @@ func TestRepositoryQueriesAvoidKnownFullEntityReads(t *testing.T) {
 	assertFileDoesNotContain(t, "usage.go",
 		"var events []entities.UsageEvent\n\tif err := query.Find(&events)",
 		"var events []entities.UsageEvent\n\tif err := db.Find(&events)",
+		"var events []usageEventProjection\n\tif err := query.Find(&events)",
 		"Select(usageOverviewRealtimeProjectionColumns)",
 		"loadUsageOverviewRealtimeEventsWithFilter",
 	)
