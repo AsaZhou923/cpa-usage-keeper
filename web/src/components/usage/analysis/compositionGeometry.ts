@@ -1,7 +1,7 @@
 import type { ArcElement, Chart, Plugin } from 'chart.js';
 
 type ArcOptionsRestore = { element: ArcElement; options: ArcElement['options'] };
-const originalOptions = new WeakMap<Chart, ArcOptionsRestore[]>();
+const originalOptions = new WeakMap<Chart<'doughnut'>, ArcOptionsRestore[]>();
 
 export const compositionGeometryPlugin: Plugin<'doughnut'> = {
   id: 'analysis-composition-geometry',
