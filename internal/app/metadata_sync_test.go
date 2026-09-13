@@ -5,13 +5,13 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 type metadataSyncStub struct {
-	mu     sync.Mutex
-	calls  int
+	calls  atomic.Int32
 	errs   []error
 	onCall func(int)
 }
@@ -19,27 +19,18 @@ type metadataSyncStub struct {
 func (s *metadataSyncStub) SyncMetadata(context.Context) error {
 	var err error
 
-	s.mu.Lock()
-	s.calls++
-	call := s.calls
+	call := int(s.calls.Add(1))
 	if len(s.errs) >= call {
 		err = s.errs[call-1]
-	} else if len(s.errs) > 0 {
-		err = s.errs[len(s.errs)-1]
 	}
-	onCall := s.onCall
-	s.mu.Unlock()
-
-	if onCall != nil {
-		onCall(call)
+	if s.onCall != nil {
+		s.onCall(call)
 	}
 	return err
 }
 
 func (s *metadataSyncStub) CallCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.calls
+	return int(s.calls.Load())
 }
 
 type metadataSyncErrContext struct {
@@ -136,30 +127,6 @@ func TestMetadataSyncRunnerDefaultsRefreshDebounceToOneSecond(t *testing.T) {
 	}
 }
 
-func TestMetadataSyncRunnerRefreshSupportMakesPeriodicTickNoop(t *testing.T) {
-	syncer := &metadataSyncStub{}
-	runner := NewMetadataSyncRunner(syncer, time.Millisecond)
-	runner.NotifyIngestConnected()
-	runner.MarkRefreshSupported()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	syncer.onCall = func(call int) {
-		if call == 1 {
-			go func() {
-				time.Sleep(5 * time.Millisecond)
-				cancel()
-			}()
-		}
-	}
-
-	if err := runner.Run(ctx); err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if got := syncer.CallCount(); got != 1 {
-		t.Fatalf("expected only connection-triggered sync in notification mode, got %d", got)
-	}
-}
-
 func TestMetadataSyncRunnerLogsModeSwitches(t *testing.T) {
 	logs := captureAppInfoLogs(t)
 	runner := NewMetadataSyncRunner(&metadataSyncStub{}, time.Minute)
@@ -183,7 +150,7 @@ func TestMetadataSyncRunnerLogsModeSwitches(t *testing.T) {
 	}
 }
 
-func TestMetadataSyncRunnerRefreshSupportDoesNotAddExtraSyncWithoutRefreshRequest(t *testing.T) {
+func TestMetadataSyncRunnerNotificationModeWaitsForRefreshRequest(t *testing.T) {
 	syncer := &metadataSyncStub{}
 	runner := NewMetadataSyncRunner(syncer, time.Millisecond)
 	runner.refreshDebounce = time.Millisecond

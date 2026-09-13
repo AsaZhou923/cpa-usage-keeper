@@ -1,13 +1,10 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/sirupsen/logrus"
 )
 
 type maintenanceSyncStub struct {
@@ -39,7 +36,7 @@ func TestNextDailyCleanupAtUsesLocal0430(t *testing.T) {
 }
 
 func TestStorageCleanupRunnerLogsTaskStart(t *testing.T) {
-	logs := captureMaintenanceInfoLogs(t)
+	logs := captureAppInfoLogs(t)
 	syncer := &maintenanceSyncStub{}
 	runner := NewStorageCleanupRunner(syncer)
 	runner.now = func() time.Time { return time.Date(2026, 4, 26, 18, 30, 0, 0, time.UTC) }
@@ -87,21 +84,4 @@ func TestStorageCleanupRunnerRunsAtScheduledTime(t *testing.T) {
 	if syncer.cleanupCalls != 1 {
 		t.Fatalf("expected cleanup loop to run once, got %d", syncer.cleanupCalls)
 	}
-}
-
-func captureMaintenanceInfoLogs(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var logs bytes.Buffer
-	previousOutput := logrus.StandardLogger().Out
-	previousFormatter := logrus.StandardLogger().Formatter
-	previousLevel := logrus.GetLevel()
-	logrus.SetOutput(&logs)
-	logrus.SetFormatter(&logrus.TextFormatter{DisableTimestamp: true})
-	logrus.SetLevel(logrus.InfoLevel)
-	t.Cleanup(func() {
-		logrus.SetOutput(previousOutput)
-		logrus.SetFormatter(previousFormatter)
-		logrus.SetLevel(previousLevel)
-	})
-	return &logs
 }

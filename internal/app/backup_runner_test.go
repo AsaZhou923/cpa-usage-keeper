@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,10 +33,7 @@ func TestDatabaseBackupRunnerRunsAtScheduledTime(t *testing.T) {
 	sleepCalls := 0
 	runner.sleep = func(context.Context, time.Duration) bool {
 		sleepCalls++
-		if sleepCalls == 1 {
-			return true
-		}
-		return false
+		return sleepCalls == 1
 	}
 
 	if err := runner.Run(context.Background()); err != nil {
@@ -52,113 +50,65 @@ func TestDatabaseBackupRunnerRunsAtScheduledTime(t *testing.T) {
 	}
 }
 
-func TestDatabaseBackupRunnerWaitsUntilNext0400AfterDailyScheduleWithoutTodaysBackup(t *testing.T) {
-	writer := &databaseBackupWriterStub{}
-	runner := NewDatabaseBackupRunner(writer, nil, 24*time.Hour, 0)
+func TestDatabaseBackupRunnerUsesDailySchedule(t *testing.T) {
 	now := time.Date(2026, 4, 16, 4, 5, 0, 0, time.Local)
-	writer.lastBackupAt = now.AddDate(0, 0, -1)
-	runner.now = func() time.Time { return now }
-	var delay time.Duration
-	runner.sleep = func(_ context.Context, d time.Duration) bool {
-		delay = d
-		return false
-	}
-
-	if err := runner.Run(context.Background()); err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	expected := time.Date(2026, 4, 17, 4, 0, 0, 0, time.Local).Sub(now)
-	if delay != expected {
-		t.Fatalf("expected next 04:00 backup delay %s, got %s", expected, delay)
-	}
-}
-
-func TestDatabaseBackupRunnerWaitsUntilTomorrowAfterTodaysDailyBackup(t *testing.T) {
-	writer := &databaseBackupWriterStub{}
-	runner := NewDatabaseBackupRunner(writer, nil, 24*time.Hour, 0)
-	now := time.Date(2026, 4, 16, 4, 5, 0, 0, time.Local)
-	writer.lastBackupAt = time.Date(2026, 4, 16, 4, 0, 0, 0, time.Local)
-	runner.now = func() time.Time { return now }
-	var delay time.Duration
-	runner.sleep = func(_ context.Context, d time.Duration) bool {
-		delay = d
-		return false
-	}
-
-	if err := runner.Run(context.Background()); err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	expected := time.Date(2026, 4, 17, 4, 0, 0, 0, time.Local).Sub(now)
-	if delay != expected {
-		t.Fatalf("expected next daily backup delay %s, got %s", expected, delay)
+	for _, tc := range []struct {
+		name         string
+		interval     time.Duration
+		lastBackupAt time.Time
+	}{
+		{"no backup today", 24 * time.Hour, now.AddDate(0, 0, -1)},
+		{"already backed up today", 24 * time.Hour, time.Date(2026, 4, 16, 4, 0, 0, 0, time.Local)},
+		{"48 hour interval", 48 * time.Hour, time.Date(2026, 4, 15, 10, 0, 0, 0, time.Local)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writer := &databaseBackupWriterStub{lastBackupAt: tc.lastBackupAt}
+			runner := NewDatabaseBackupRunner(writer, nil, tc.interval, 0)
+			runner.now = func() time.Time { return now }
+			var delay time.Duration
+			runner.sleep = func(_ context.Context, d time.Duration) bool {
+				delay = d
+				return false
+			}
+			if err := runner.Run(context.Background()); err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			want := time.Date(2026, 4, 17, 4, 0, 0, 0, time.Local).Sub(now)
+			if delay != want {
+				t.Fatalf("backup delay = %s, want %s", delay, want)
+			}
+		})
 	}
 }
 
-func TestDatabaseBackupRunnerUsesDailyScheduleForMultipleOf24Hours(t *testing.T) {
-	writer := &databaseBackupWriterStub{}
-	runner := NewDatabaseBackupRunner(writer, nil, 48*time.Hour, 0)
-	now := time.Date(2026, 4, 16, 4, 5, 0, 0, time.Local)
-	writer.lastBackupAt = time.Date(2026, 4, 15, 10, 0, 0, 0, time.Local)
-	runner.now = func() time.Time { return now }
-	var delay time.Duration
-	runner.sleep = func(_ context.Context, d time.Duration) bool {
-		delay = d
-		return false
-	}
-
-	if err := runner.Run(context.Background()); err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	expected := time.Date(2026, 4, 17, 4, 0, 0, 0, time.Local).Sub(now)
-	if delay != expected {
-		t.Fatalf("expected next 48h daily schedule delay %s, got %s", expected, delay)
-	}
-}
-
-func TestDatabaseBackupRunnerUsesExistingBackupForIntervalSchedule(t *testing.T) {
-	writer := &databaseBackupWriterStub{}
-	runner := NewDatabaseBackupRunner(writer, nil, 10*time.Second, 0)
-	now := time.Date(2026, 4, 16, 3, 45, 0, 0, time.Local)
-	writer.lastBackupAt = now.Add(-4 * time.Second)
-	runner.now = func() time.Time { return now }
-	var delays []time.Duration
-	sleepCalls := 0
-	runner.sleep = func(_ context.Context, d time.Duration) bool {
-		sleepCalls++
-		delays = append(delays, d)
-		return sleepCalls == 1
-	}
-
-	if err := runner.Run(context.Background()); err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if len(delays) == 0 || delays[0] != 6*time.Second {
-		t.Fatalf("expected first interval delay 6s, got %+v", delays)
-	}
-	if writer.calls != 1 {
-		t.Fatalf("expected one database backup, got %d", writer.calls)
-	}
-}
-
-func TestDatabaseBackupRunnerRunsImmediatelyWhenIntervalBackupIsExpired(t *testing.T) {
-	writer := &databaseBackupWriterStub{}
-	runner := NewDatabaseBackupRunner(writer, nil, 10*time.Second, 0)
-	now := time.Date(2026, 4, 16, 3, 45, 0, 0, time.Local)
-	writer.lastBackupAt = now.Add(-11 * time.Second)
-	runner.now = func() time.Time { return now }
-	var delays []time.Duration
-	sleepCalls := 0
-	runner.sleep = func(_ context.Context, d time.Duration) bool {
-		sleepCalls++
-		delays = append(delays, d)
-		return sleepCalls == 1
-	}
-
-	if err := runner.Run(context.Background()); err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if len(delays) == 0 || delays[0] != 0 {
-		t.Fatalf("expected immediate backup for expired interval, got delays %+v", delays)
+func TestDatabaseBackupRunnerResumesIntervalSchedule(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		age, delay time.Duration
+	}{
+		{"recent backup", 4 * time.Second, 6 * time.Second},
+		{"expired backup", 11 * time.Second, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 4, 16, 3, 45, 0, 0, time.Local)
+			writer := &databaseBackupWriterStub{lastBackupAt: now.Add(-tc.age)}
+			runner := NewDatabaseBackupRunner(writer, nil, 10*time.Second, 0)
+			runner.now = func() time.Time { return now }
+			var delays []time.Duration
+			runner.sleep = func(_ context.Context, delay time.Duration) bool {
+				delays = append(delays, delay)
+				return len(delays) == 1
+			}
+			if err := runner.Run(context.Background()); err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			if len(delays) == 0 || delays[0] != tc.delay {
+				t.Fatalf("delays = %v, want first delay %s", delays, tc.delay)
+			}
+			if writer.calls != 1 {
+				t.Fatalf("expected one database backup, got %d", writer.calls)
+			}
+		})
 	}
 }
 
@@ -195,22 +145,18 @@ func TestDatabaseBackupRunnerRetriesDailyBackupAfterFailure(t *testing.T) {
 	now := time.Date(2026, 4, 16, 3, 59, 0, 0, time.Local)
 	runner.now = func() time.Time { return now }
 	var delays []time.Duration
-	sleepCalls := 0
-	runner.sleep = func(_ context.Context, d time.Duration) bool {
-		delays = append(delays, d)
-		sleepCalls++
-		switch sleepCalls {
-		case 1:
-			now = time.Date(2026, 4, 16, 4, 0, 0, 0, time.Local)
-		case 2:
-			now = time.Date(2026, 4, 16, 4, 15, 0, 0, time.Local)
-		case 3:
-			now = time.Date(2026, 4, 16, 4, 30, 0, 0, time.Local)
-		case 4:
-			now = time.Date(2026, 4, 16, 4, 45, 0, 0, time.Local)
-		default:
+	retryTimes := []time.Time{
+		time.Date(2026, 4, 16, 4, 0, 0, 0, time.Local),
+		time.Date(2026, 4, 16, 4, 15, 0, 0, time.Local),
+		time.Date(2026, 4, 16, 4, 30, 0, 0, time.Local),
+		time.Date(2026, 4, 16, 4, 45, 0, 0, time.Local),
+	}
+	runner.sleep = func(_ context.Context, delay time.Duration) bool {
+		delays = append(delays, delay)
+		if len(delays) > len(retryTimes) {
 			return false
 		}
+		now = retryTimes[len(delays)-1]
 		return true
 	}
 
@@ -218,13 +164,8 @@ func TestDatabaseBackupRunnerRetriesDailyBackupAfterFailure(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 	expectedDelays := []time.Duration{time.Minute, 15 * time.Minute, 15 * time.Minute, 15 * time.Minute, 23*time.Hour + 15*time.Minute}
-	if len(delays) != len(expectedDelays) {
-		t.Fatalf("expected delays %+v, got %+v", expectedDelays, delays)
-	}
-	for i, expected := range expectedDelays {
-		if delays[i] != expected {
-			t.Fatalf("expected delay %d to be %s, got %s", i, expected, delays[i])
-		}
+	if !slices.Equal(delays, expectedDelays) {
+		t.Fatalf("delays = %v, want %v", delays, expectedDelays)
 	}
 	if writer.calls != 4 {
 		t.Fatalf("expected initial attempt plus 3 retries, got %d attempts", writer.calls)
@@ -252,13 +193,10 @@ func (s *databaseBackupWriterStub) LastBackupAt() (time.Time, bool, error) {
 type databaseBackupCleanerStub struct {
 	calls         int
 	retentionDays int
-	now           time.Time
-	err           error
 }
 
-func (s *databaseBackupCleanerStub) Cleanup(retentionDays int, now time.Time) (int, error) {
+func (s *databaseBackupCleanerStub) Cleanup(retentionDays int, _ time.Time) (int, error) {
 	s.calls++
 	s.retentionDays = retentionDays
-	s.now = now
-	return 0, s.err
+	return 0, nil
 }
