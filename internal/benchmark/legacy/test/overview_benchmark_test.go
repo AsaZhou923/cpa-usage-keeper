@@ -1,17 +1,16 @@
-package legacy
+package legacy_test
 
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/pricing"
 	"cpa-usage-keeper/internal/repository"
 	repositorydto "cpa-usage-keeper/internal/repository/dto"
+	"cpa-usage-keeper/internal/timeutil"
 	"gorm.io/gorm"
 )
 
@@ -22,8 +21,7 @@ func BenchmarkUsageOverviewStatsBacked(b *testing.B) {
 			b.Run(fmt.Sprintf("events_%d_%s", size, window.name), func(b *testing.B) {
 				db := openOverviewBenchmarkDB(b, size)
 				filter := repositorydto.UsageQueryFilter{Range: window.name, StartTime: &window.start, EndTime: &window.end}
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					if _, err := repository.BuildUsageOverviewWithFilter(db, filter, pricing.NewCatalog(pricing.EmptySnapshot()).NewResolver()); err != nil {
 						b.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 					}
@@ -39,9 +37,7 @@ func BenchmarkUsageOverviewRawEventScan(b *testing.B) {
 		for _, window := range overviewBenchmarkWindows() {
 			b.Run(fmt.Sprintf("events_%d_%s", size, window.name), func(b *testing.B) {
 				db := openOverviewBenchmarkDBWithoutStats(b, size)
-				b.Cleanup(func() { closeOverviewBenchmarkDB(b, db) })
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
+				for b.Loop() {
 					record := rawUsageOverviewBenchmarkScan(b, db, window.start, window.end)
 					if record.requests == 0 {
 						b.Fatalf("raw scan returned no requests")
@@ -80,7 +76,7 @@ func rawUsageOverviewBenchmarkScan(b *testing.B, db *gorm.DB, start, end time.Ti
 	b.Helper()
 	var events []entities.UsageEvent
 	if err := db.Model(&entities.UsageEvent{}).
-		Where("timestamp >= ? AND timestamp < ?", start, end).
+		Where("timestamp >= ? AND timestamp < ?", timeutil.FormatStorageTime(start), timeutil.FormatStorageTime(end)).
 		Order("timestamp asc").
 		Find(&events).Error; err != nil {
 		b.Fatalf("load raw usage events returned error: %v", err)
@@ -96,14 +92,16 @@ func rawUsageOverviewBenchmarkScan(b *testing.B, db *gorm.DB, start, end time.Ti
 func BenchmarkUsageOverviewAggregateCatchup(b *testing.B) {
 	for _, size := range []int{1_000, 10_000} {
 		b.Run(fmt.Sprintf("events_%d", size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
+				b.StopTimer()
 				db := openOverviewBenchmarkDBWithoutStats(b, size)
 				b.StartTimer()
 				if err := repository.AggregateUsageOverviewStats(context.Background(), db, time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)); err != nil {
 					b.Fatalf("AggregateUsageOverviewStats returned error: %v", err)
 				}
 				b.StopTimer()
-				closeOverviewBenchmarkDB(b, db)
+				closeLegacyBenchmarkDB(b, db)
+				b.StartTimer()
 			}
 		})
 	}
@@ -115,18 +113,14 @@ func openOverviewBenchmarkDB(b *testing.B, eventCount int) *gorm.DB {
 	if err := repository.AggregateUsageOverviewStats(context.Background(), db, time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)); err != nil {
 		b.Fatalf("AggregateUsageOverviewStats returned error: %v", err)
 	}
-	b.Cleanup(func() { closeOverviewBenchmarkDB(b, db) })
 	return db
 }
 
 func openOverviewBenchmarkDBWithoutStats(b *testing.B, eventCount int) *gorm.DB {
 	b.Helper()
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(b.TempDir(), "overview-benchmark.db")})
-	if err != nil {
-		b.Fatalf("OpenDatabase returned error: %v", err)
-	}
+	db := openLegacyBenchmarkDB(b)
 	events := make([]entities.UsageEvent, 0, eventCount)
-	base := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	base := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC).Add(-time.Duration(eventCount) * time.Minute)
 	for i := 0; i < eventCount; i++ {
 		events = append(events, entities.UsageEvent{
 			EventKey:            fmt.Sprintf("bench-%d", i),
@@ -147,12 +141,4 @@ func openOverviewBenchmarkDBWithoutStats(b *testing.B, eventCount int) *gorm.DB 
 		b.Fatalf("InsertUsageEvents returned error: %v", err)
 	}
 	return db
-}
-
-func closeOverviewBenchmarkDB(b *testing.B, db *gorm.DB) {
-	b.Helper()
-	sqlDB, err := db.DB()
-	if err == nil {
-		_ = sqlDB.Close()
-	}
 }

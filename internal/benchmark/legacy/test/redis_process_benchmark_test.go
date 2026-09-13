@@ -1,13 +1,11 @@
-package legacy
+package legacy_test
 
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/poller"
 	"cpa-usage-keeper/internal/repository"
@@ -46,9 +44,9 @@ func BenchmarkRedisUsageInboxWriterRefreshFiltered(b *testing.B) {
 	b.ReportAllocs()
 	var totalInserted int
 	var totalElapsed time.Duration
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		b.StopTimer()
-		db := openRedisProcessBenchmarkDBWithoutSeed(b, i)
+		db := openLegacyBenchmarkDB(b)
 		writer := poller.NewControlAwareRedisInboxWriter(poller.NewRedisInboxWriter(db), &redisProcessBenchmarkRefreshObserver{})
 		messages := redisProcessBenchmarkMessagesWithRefresh(1_000, 1_000, time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC))
 		b.StartTimer()
@@ -63,7 +61,8 @@ func BenchmarkRedisUsageInboxWriterRefreshFiltered(b *testing.B) {
 
 		totalInserted += inserted
 		totalElapsed += elapsed
-		closeRedisProcessBenchmarkDB(b, db)
+		closeLegacyBenchmarkDB(b, db)
+		b.StartTimer()
 	}
 	if totalElapsed > 0 {
 		b.ReportMetric(float64(totalInserted)/totalElapsed.Seconds(), "inbox_rows/sec")
@@ -78,9 +77,9 @@ func benchmarkRedisUsageInboxProcessing(b *testing.B, rowCount, identityCount in
 	var totalBatches int
 	var totalElapsed time.Duration
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		b.StopTimer()
-		db := openRedisProcessBenchmarkDB(b, rowCount, identityCount, i)
+		db := openRedisProcessBenchmarkDB(b, rowCount, identityCount)
 		// 使用生产 notifier 的同步内存路径，但不启动后台聚合 goroutine，隔离 ingestion 自身成本。
 		aggregationRunner := poller.NewUsageAggregationRunner(db)
 		syncService := service.NewSyncServiceWithOptions(db, service.SyncServiceOptions{
@@ -100,7 +99,8 @@ func benchmarkRedisUsageInboxProcessing(b *testing.B, rowCount, identityCount in
 		totalInserted += result.InsertedEvents
 		totalBatches += nonEmptyBatches
 		totalElapsed += elapsed
-		closeRedisProcessBenchmarkDB(b, db)
+		closeLegacyBenchmarkDB(b, db)
+		b.StartTimer()
 	}
 
 	if totalElapsed > 0 {
@@ -116,38 +116,27 @@ func processRedisUsageBenchmarkRows(syncService *service.SyncService, drain bool
 	nonEmptyBatches := 0
 	for {
 		result, err := syncService.ProcessRedisUsageInbox(context.Background())
-		if result != nil {
-			total.InsertedEvents += result.InsertedEvents
-			total.DedupedEvents += result.DedupedEvents
-			total.Status = result.Status
-			total.Empty = result.Empty
-			if result.InsertedEvents > 0 {
-				nonEmptyBatches++
-			}
-		}
 		if err != nil {
 			return total, nonEmptyBatches, err
 		}
-		if !drain || result == nil || result.Empty || result.InsertedEvents == 0 {
+		total.InsertedEvents += result.InsertedEvents
+		total.DedupedEvents += result.DedupedEvents
+		total.Status = result.Status
+		total.Empty = result.Empty
+		if result.InsertedEvents > 0 {
+			nonEmptyBatches++
+		}
+		if !drain || result.Empty || result.InsertedEvents == 0 {
 			return total, nonEmptyBatches, nil
 		}
 	}
 }
 
-func openRedisProcessBenchmarkDB(b *testing.B, rowCount, identityCount, iteration int) *gorm.DB {
+func openRedisProcessBenchmarkDB(b *testing.B, rowCount, identityCount int) *gorm.DB {
 	b.Helper()
-	db := openRedisProcessBenchmarkDBWithoutSeed(b, iteration)
+	db := openLegacyBenchmarkDB(b)
 	seedRedisProcessBenchmarkIdentities(b, db, identityCount)
 	seedRedisProcessBenchmarkInbox(b, db, rowCount, identityCount)
-	return db
-}
-
-func openRedisProcessBenchmarkDBWithoutSeed(b *testing.B, iteration int) *gorm.DB {
-	b.Helper()
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(b.TempDir(), fmt.Sprintf("redis-process-%d.db", iteration))})
-	if err != nil {
-		b.Fatalf("OpenDatabase returned error: %v", err)
-	}
 	return db
 }
 
@@ -221,11 +210,3 @@ func (o *redisProcessBenchmarkRefreshObserver) MarkRefreshSupported()  {}
 func (o *redisProcessBenchmarkRefreshObserver) RequestMetadataRefresh() {}
 
 func (o *redisProcessBenchmarkRefreshObserver) MarkRefreshPollingRequired(string) {}
-
-func closeRedisProcessBenchmarkDB(b *testing.B, db *gorm.DB) {
-	b.Helper()
-	sqlDB, err := db.DB()
-	if err == nil {
-		_ = sqlDB.Close()
-	}
-}

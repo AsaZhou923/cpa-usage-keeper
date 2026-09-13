@@ -1,4 +1,4 @@
-package legacy
+package legacy_test
 
 import (
 	"context"
@@ -7,27 +7,24 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"cpa-usage-keeper/internal/api"
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/pricing"
-	"cpa-usage-keeper/internal/repository"
 	"cpa-usage-keeper/internal/service"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
 func BenchmarkUsageOverviewCustomDayRanges(b *testing.B) {
-	db, queryLogger := openCustomOverviewBenchmarkDatabase(b)
+	now := time.Now()
+	lastDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	db, queryLogger := openCustomOverviewBenchmarkDatabase(b, lastDay)
 	provider := service.NewUsageService(db, pricing.NewCatalog(pricing.EmptySnapshot()))
 	router := api.NewRouter(nil, nil, provider, nil, api.AuthConfig{}, nil, "")
-	lastDay := time.Date(2026, 7, 1, 0, 0, 0, 0, time.Local)
 
 	for _, days := range []int{30, 90, 365} {
 		b.Run(fmt.Sprintf("days_%d", days), func(b *testing.B) {
@@ -53,10 +50,7 @@ func BenchmarkUsageOverviewCustomDayRanges(b *testing.B) {
 			if err := json.Unmarshal(warmup.Body.Bytes(), &payload); err != nil {
 				b.Fatalf("decode Overview response: %v", err)
 			}
-			wantPoints := days
-			if wantPoints > 90 {
-				wantPoints = 90
-			}
+			wantPoints := min(days, 90)
 			if len(payload.Series.Buckets) != wantPoints {
 				b.Fatalf("series points=%d, want %d", len(payload.Series.Buckets), wantPoints)
 			}
@@ -68,8 +62,7 @@ func BenchmarkUsageOverviewCustomDayRanges(b *testing.B) {
 			var responseBytes int
 			var rollupRows int64
 			b.ReportAllocs()
-			b.ResetTimer()
-			for index := 0; index < b.N; index++ {
+			for b.Loop() {
 				response := httptest.NewRecorder()
 				queryLogger.rollupRows = 0
 				router.ServeHTTP(response, request)
@@ -82,7 +75,6 @@ func BenchmarkUsageOverviewCustomDayRanges(b *testing.B) {
 				responseBytes = response.Body.Len()
 				rollupRows = queryLogger.rollupRows
 			}
-			b.StopTimer()
 			b.ReportMetric(float64(responseBytes), "response_B")
 			b.ReportMetric(float64(rollupRows), "rollup_rows")
 		})
@@ -101,32 +93,11 @@ func (l *overviewBenchmarkQueryLogger) Trace(_ context.Context, _ time.Time, que
 	}
 }
 
-func openCustomOverviewBenchmarkDatabase(b *testing.B) (*gorm.DB, *overviewBenchmarkQueryLogger) {
+func openCustomOverviewBenchmarkDatabase(b *testing.B, lastDay time.Time) (*gorm.DB, *overviewBenchmarkQueryLogger) {
 	b.Helper()
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		b.Fatalf("resolve working directory: %v", err)
-	}
-	projectDataDirectory := filepath.Join(workingDirectory, "..", "..", "..", "data")
-	if err := os.MkdirAll(projectDataDirectory, 0o755); err != nil {
-		b.Fatalf("create project data directory: %v", err)
-	}
-	benchmarkDirectory, err := os.MkdirTemp(projectDataDirectory, "overview-custom-benchmark-")
-	if err != nil {
-		b.Fatalf("create benchmark directory: %v", err)
-	}
-	b.Cleanup(func() { _ = os.RemoveAll(benchmarkDirectory) })
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(benchmarkDirectory, "overview.db")})
-	if err != nil {
-		b.Fatalf("open benchmark database: %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		b.Fatalf("resolve benchmark sql database: %v", err)
-	}
-	b.Cleanup(func() { _ = sqlDB.Close() })
+	db := openLegacyBenchmarkDB(b)
 
-	start := time.Date(2025, 7, 2, 0, 0, 0, 0, time.Local)
+	start := lastDay.AddDate(0, 0, -364)
 	rows := make([]entities.UsageOverviewDailyStat, 0, 365*4*4*3)
 	for dayIndex := 0; dayIndex < 365; dayIndex++ {
 		bucket := start.AddDate(0, 0, dayIndex)
