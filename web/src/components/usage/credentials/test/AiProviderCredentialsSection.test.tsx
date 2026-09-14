@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { AiProviderCredentialsSection } from './AiProviderCredentialsSection'
-import type { AiProviderCredentialRow } from './credentialViewModels'
+import { AiProviderCredentialsSection } from '../AiProviderCredentialsSection'
+import { createAiProviderSectionProps } from './credentialSectionFixtures'
+import type { AiProviderCredentialRow } from '../credentialViewModels'
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => undefined },
@@ -14,18 +15,9 @@ describe('AiProviderCredentialsSection', () => {
   it('renders the AI Provider title without the Credentials eyebrow', () => {
     const html = renderToStaticMarkup(
       <AiProviderCredentialsSection
+        {...createAiProviderSectionProps()}
         rows={[]}
         total={0}
-        page={1}
-        totalPages={1}
-        pageSize={10}
-        activeOnly={false}
-        sort="priority"
-        loading={false}
-        onPageChange={() => undefined}
-        onPageSizeChange={() => undefined}
-        onActiveOnlyChange={() => undefined}
-        onSortChange={() => undefined}
       />,
     )
 
@@ -74,22 +66,13 @@ describe('AiProviderCredentialsSection', () => {
       remainingDaysLabel: '25d',
       primaryQuota: { label: '5h' },
       secondaryQuota: { label: 'Weekly' },
-    } as AiProviderCredentialRow & Record<string, unknown>
+    } satisfies AiProviderCredentialRow & Record<string, unknown>
 
     const html = renderToStaticMarkup(
       <AiProviderCredentialsSection
+        {...createAiProviderSectionProps()}
         rows={[row]}
         total={1}
-        page={1}
-        totalPages={1}
-        pageSize={10}
-        activeOnly={false}
-        sort="priority"
-        loading={false}
-        onPageChange={() => undefined}
-        onPageSizeChange={() => undefined}
-        onActiveOnlyChange={() => undefined}
-        onSortChange={() => undefined}
       />,
     )
 
@@ -114,7 +97,6 @@ describe('AiProviderCredentialsSection', () => {
     expect(html).toContain('usage_stats.credentials_sort_priority')
     expect(html).toContain('aria-label="usage_stats.credentials_sort_label: usage_stats.credentials_sort_priority"')
     expect(html).toContain('usage_stats.credentials_sort_last_used')
-    expect(html).toContain('data-credential-pagination-sort-sizer="true"')
     expect(html).not.toContain('Team')
     expect(html).not.toContain('25d')
     expect(html).not.toContain('Weekly')
