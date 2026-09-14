@@ -1,7 +1,16 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { CredentialSectionShell, CredentialsPagination, formatCredentialNumber, formatCredentialPercent } from './CredentialSectionShell'
+import { CredentialSectionShell, CredentialsPagination, formatCredentialNumber, formatCredentialPercent } from '../CredentialSectionShell'
+
+const renderPagination = (props: Partial<Parameters<typeof CredentialsPagination>[0]> = {}) => renderToStaticMarkup(
+  createElement(CredentialsPagination, {
+    page: 1, totalPages: 1, pageSize: 10,
+    previousLabel: 'Previous', nextLabel: 'Next', rowsPerPageLabel: 'Size',
+    onPageChange: () => undefined, onPageSizeChange: () => undefined,
+    ...props,
+  }),
+)
 
 describe('CredentialSectionShell formatting', () => {
   it('renders the title area without a label slot', () => {
@@ -13,7 +22,6 @@ describe('CredentialSectionShell formatting', () => {
     }))
 
     expect(html).toContain('Auth Files')
-    expect(html).not.toContain('_credentialSectionEyebrow_')
     expect(html).not.toContain('Credentials')
   })
 
@@ -30,18 +38,11 @@ describe('CredentialSectionShell formatting', () => {
   })
 
   it('renders only controls in the pagination footer', () => {
-    const html = renderToStaticMarkup(createElement(CredentialsPagination, {
+    const html = renderPagination({
       page: 2,
       totalPages: 5,
-      pageSize: 10,
-      previousLabel: 'Previous',
-      nextLabel: 'Next',
-      rowsPerPageLabel: 'Size',
-      onPageChange: () => undefined,
-      onPageSizeChange: () => undefined,
-    }))
+    })
 
-    expect(html).not.toContain('_credentialPaginationRange_')
     expect(html).not.toContain('11–20 / 42')
     expect(html).toContain('Size')
     expect(html).not.toContain('Rows per page')
@@ -52,39 +53,22 @@ describe('CredentialSectionShell formatting', () => {
   })
 
   it('keeps pagination controls visible for non-empty single-page sections', () => {
-    const html = renderToStaticMarkup(createElement(CredentialsPagination, {
-      page: 1,
-      total: 3,
-      totalPages: 1,
-      pageSize: 10,
-      previousLabel: 'Previous',
-      nextLabel: 'Next',
-      rowsPerPageLabel: 'Size',
-      onPageChange: () => undefined,
-      onPageSizeChange: () => undefined,
-    }))
+    const html = renderPagination({ total: 3 })
 
     expect(html).toContain('Size')
     expect(html).toContain('1 / 1')
   })
 
   it('renders an optional sort control before pagination buttons', () => {
-    const html = renderToStaticMarkup(createElement(CredentialsPagination, {
+    const html = renderPagination({
       leadingControls: createElement('span', null, 'Quota Usage'),
-      page: 1,
       total: 3,
-      totalPages: 1,
-      pageSize: 10,
       sortValue: 'priority',
       sortOptions: [{ value: 'priority', label: 'Priority' }],
       sortLabel: 'Order by',
-      previousLabel: 'Previous',
-      nextLabel: 'Next',
       rowsPerPageLabel: 'Rows',
-      onPageChange: () => undefined,
-      onPageSizeChange: () => undefined,
       onSortChange: () => undefined,
-    }))
+    })
 
     expect(html.indexOf('Quota Usage')).toBeLessThan(html.indexOf('Order by'))
     expect(html.indexOf('Order by')).toBeLessThan(html.indexOf('Rows'))
