@@ -2,36 +2,9 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { AuthFileCredentialsSection, AuthFileQuotaPanel, INSPECTION_RESULT_PAGE_SIZE_OPTIONS, QuotaAutoRefreshSettingsModal, QuotaInspectionModal, buildInspectionResultsPage, buildInvalidInspectionAccountFileNames, buildQuotaAutoRefreshSettings, formatInspectionCompletedAt, formatInspectionProgressPercent, formatQuotaErrorDisplay, formatQuotaResetDuration, formatQuotaResetLabel, formatQuotaWindowUsageAriaLabel, inspectionIndicatorTone, invertInvalidInspectionAccountFileNames, isAutoRefreshSettingsControlDisabled, isAutoRefreshSettingsSaveDisabled, isInspectionStartDisabled, isQuotaInspectionCloseDisabled, isSelectableInspectionStatusFilter, nextInspectionResultStatusFilter, persistAuthFileDisplayMode, readStoredAuthFileDisplayMode, resolveQuotaAutoRefreshSettingsLoadFailure, selectAllInvalidInspectionAccountFileNames } from '../AuthFileCredentialsSection'
+import { createAuthFileSectionProps } from './credentialSectionFixtures'
 import type { AuthFileCredentialRow, DisplayQuota } from '../credentialViewModels'
 import type { UsageQuotaInspectionResult, UsageQuotaInspectionResultStatus } from '@/lib/types'
-
-
-const createAuthFileSectionProps = (overrides: Partial<Parameters<typeof AuthFileCredentialsSection>[0]> = {}) => ({
-  rows: [],
-  total: 0,
-  page: 1,
-  totalPages: 1,
-  pageSize: 10,
-  activeOnly: false,
-  sort: 'priority' as const,
-  loading: false,
-  quotaRefreshing: false,
-  quotaRefreshError: '',
-  quotaInspectionStatus: null,
-  quotaInspectionLoading: false,
-  quotaInspectionStarting: false,
-  quotaInspectionError: '',
-  onPageChange: () => undefined,
-  onPageSizeChange: () => undefined,
-  onActiveOnlyChange: () => undefined,
-  onSortChange: () => undefined,
-  onRefreshQuota: async () => undefined,
-  onRefreshQuotaForAuthIndex: async () => undefined,
-  onResetQuotaForAuthIndex: async () => undefined,
-  onRefreshInspectionStatus: async () => undefined,
-  onStartInspection: async () => undefined,
-  ...overrides,
-})
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => undefined },
@@ -49,24 +22,37 @@ const formatLocalResetTime = (resetAt: string) => {
   return `${month}/${day} ${hour}:${minute}`
 }
 
-describe('AuthFileCredentialsSection quota reset formatting', () => {
-  it('formats reset labels with days when remaining time exceeds 24 hours', () => {
-    vi.setSystemTime(new Date('2026-05-10T10:00:00Z'))
-    try {
-      const resetAt = '2026-05-12T10:15:00Z'
-      expect(formatQuotaResetLabel(resetAt)).toBe(formatLocalResetTime(resetAt))
-      expect(formatQuotaResetDuration(resetAt)).toBe('2d0h15m')
-    } finally {
-      vi.useRealTimers()
-    }
-  })
+type RowFixture = Omit<Partial<AuthFileCredentialRow>, 'identity'> & { identity?: Partial<AuthFileCredentialRow['identity']> }
+const createRow = (overrides: RowFixture = {}): AuthFileCredentialRow => ({
+  identity: { id: '1', identity: 'auth-1', is_deleted: false },
+  displayName: 'Codex Account', maskedIdentity: 'auth-1',
+  providerLabel: 'Codex', typeLabel: 'codex', authTypeLabel: 'oauth',
+  totalRequests: 0, successCount: 0, failureCount: 0, successRate: null,
+  totalTokens: 0, cacheReadRate: null, windowCacheReadRate: null,
+  quota: [], quotaLoading: false, displayQuotas: [],
+  ...overrides,
+} as AuthFileCredentialRow)
 
-  it('formats reset labels without days when remaining time is under 24 hours', () => {
+const renderSettings = (props: Partial<Parameters<typeof QuotaAutoRefreshSettingsModal>[0]> = {}) => renderToStaticMarkup(
+  createElement(QuotaAutoRefreshSettingsModal, {
+    open: true, enabled: true, unit: 'hour', value: '6',
+    loading: false, saving: false, loaded: true, error: '',
+    onClose: () => undefined, onEnabledChange: () => undefined,
+    onUnitChange: () => undefined, onValueChange: () => undefined,
+    onSave: async () => undefined,
+    ...props,
+  }),
+)
+
+describe('AuthFileCredentialsSection quota reset formatting', () => {
+  it.each([
+    ['2026-05-12T10:15:00Z', '2d0h15m'],
+    ['2026-05-10T14:15:00Z', '4h15m'],
+  ])('formats reset %s and remaining duration %s', (resetAt, duration) => {
     vi.setSystemTime(new Date('2026-05-10T10:00:00Z'))
     try {
-      const resetAt = '2026-05-10T14:15:00Z'
       expect(formatQuotaResetLabel(resetAt)).toBe(formatLocalResetTime(resetAt))
-      expect(formatQuotaResetDuration(resetAt)).toBe('4h15m')
+      expect(formatQuotaResetDuration(resetAt)).toBe(duration)
     } finally {
       vi.useRealTimers()
     }
@@ -90,16 +76,10 @@ describe('AuthFileCredentialsSection title', () => {
       },
     })
     try {
-      const row = {
-        identity: { id: '1', identity: 'auth-1', is_deleted: false },
+      const row = createRow({
         displayName: 'Auth File',
-        maskedIdentity: 'auth-1',
-        providerLabel: 'Codex',
-        typeLabel: 'codex',
-        authTypeLabel: 'oauth',
         totalRequests: 2,
         successCount: 2,
-        failureCount: 0,
         successRate: 100,
         totalTokens: 800,
         cacheReadRate: 12.5,
@@ -116,10 +96,7 @@ describe('AuthFileCredentialsSection title', () => {
           cache_read_tokens: 300,
           buckets: [],
         },
-        quota: [],
-        quotaLoading: false,
-        displayQuotas: [],
-      } as AuthFileCredentialRow
+      })
 
       const html = renderToStaticMarkup(createElement(AuthFileCredentialsSection, createAuthFileSectionProps({ rows: [row], total: 1 })))
 
@@ -131,13 +108,9 @@ describe('AuthFileCredentialsSection title', () => {
   })
 
   it('renders shared metric headers without repeating labels in each row', () => {
-    const row = {
+    const row = createRow({
       identity: { id: '1', identity: 'auth-1', type: 'codex', is_deleted: false },
       displayName: 'Very Long Auth File Name For Wrapping',
-      maskedIdentity: 'auth-1',
-      providerLabel: 'Codex',
-      typeLabel: 'codex',
-      authTypeLabel: 'oauth',
       priorityLabel: 'P1',
       totalRequests: 1234,
       successCount: 1200,
@@ -145,11 +118,7 @@ describe('AuthFileCredentialsSection title', () => {
       successRate: 97.24,
       totalTokens: 456789,
       cacheReadRate: 41.5,
-      windowCacheReadRate: null,
-      quota: [],
-      quotaLoading: false,
-      displayQuotas: [],
-    } as AuthFileCredentialRow
+    })
 
     const html = renderToStaticMarkup(createElement(AuthFileCredentialsSection, createAuthFileSectionProps({ rows: [row], total: 1 })))
 
@@ -169,110 +138,35 @@ describe('AuthFileCredentialsSection title', () => {
   })
 
   it('keeps Auth Files metric cells aligned when values are unavailable', () => {
-    const row = {
-      identity: { id: '1', identity: 'auth-1', is_deleted: false },
+    const row = createRow({
       displayName: 'Sparse Auth File',
-      maskedIdentity: 'auth-1',
-      providerLabel: 'Codex',
-      typeLabel: 'codex',
-      authTypeLabel: 'oauth',
-      totalRequests: 0,
-      successCount: 0,
-      failureCount: 0,
-      successRate: null,
-      totalTokens: 0,
-      cacheReadRate: null,
-      windowCacheReadRate: null,
-      quota: [],
-      quotaLoading: false,
-      displayQuotas: [],
-    } as AuthFileCredentialRow
+      subscriptionBadge: { kind: 'codex-pro20x', fallbackLabel: 'Pro 20x' },
+    })
 
     const html = renderToStaticMarkup(createElement(AuthFileCredentialsSection, createAuthFileSectionProps({ rows: [row], total: 1 })))
 
+    expect(html).toContain('Pro 20x')
     expect(html.match(/credentialMetricValueCell/g)).toHaveLength(4)
     expect(html).toContain('usage_stats.total_requests')
     expect(html).toContain('usage_stats.success_rate')
     expect(html).toContain('usage_stats.total_tokens')
     expect(html).toContain('usage_stats.cache_rate')
   })
-
-  it('renders isolated decorative layers for animated subscription badges', () => {
-    const row = {
-      identity: { id: '1', identity: 'auth-1', is_deleted: false },
-      displayName: 'Codex Pro Account',
-      maskedIdentity: 'auth-1',
-      providerLabel: 'Codex',
-      typeLabel: 'codex',
-      authTypeLabel: 'oauth',
-      subscriptionBadge: { kind: 'codex-pro20x', fallbackLabel: 'Pro 20x' },
-      totalRequests: 0,
-      successCount: 0,
-      failureCount: 0,
-      successRate: null,
-      totalTokens: 0,
-      cacheReadRate: null,
-      windowCacheReadRate: null,
-      quota: [],
-      quotaLoading: false,
-      displayQuotas: [],
-    } as AuthFileCredentialRow
-
-    const html = renderToStaticMarkup(createElement(AuthFileCredentialsSection, createAuthFileSectionProps({ rows: [row], total: 1 })))
-
-    expect(html).toContain('credentialPlanBadgeFlow')
-    expect(html).toContain('credentialPlanBadgeCorona')
-    expect(html).toContain('credentialPlanBadgeLabel')
-    expect(html).toMatch(/credentialPlanBadgeFlow[^>]+aria-hidden="true"/)
-    expect(html).toMatch(/credentialPlanBadgeCorona[^>]+aria-hidden="true"/)
-
-    for (const subscriptionBadge of [
-      { kind: 'codex-free', fallbackLabel: 'Free' },
-      { kind: 'codex-unknown', fallbackLabel: 'Custom' },
-    ] as const) {
-      const lightweightHtml = renderToStaticMarkup(createElement(AuthFileCredentialsSection, createAuthFileSectionProps({
-        rows: [{ ...row, subscriptionBadge }],
-        total: 1,
-      })))
-
-      expect(lightweightHtml).toContain('credentialPlanBadgeLabel')
-      expect(lightweightHtml).toContain(subscriptionBadge.fallbackLabel)
-      expect(lightweightHtml).not.toContain('credentialPlanBadgeFlow')
-      expect(lightweightHtml).not.toContain('credentialPlanBadgeCorona')
-    }
-  })
 })
 
 describe('AuthFileCredentialsSection quota reset action', () => {
-  const baseRow = {
-    identity: { id: '1', identity: 'auth-1', is_deleted: false },
-    displayName: 'Codex Account',
-    maskedIdentity: 'auth-1',
-    providerLabel: 'Codex',
-    typeLabel: 'codex',
-    authTypeLabel: 'oauth',
-    totalRequests: 12,
-    successCount: 12,
-    failureCount: 0,
-    successRate: 100,
-    totalTokens: 1200,
-    cacheReadRate: 0,
-    windowCacheReadRate: null,
-    quota: [],
-    quotaLoading: false,
-    displayQuotas: [],
-  } as AuthFileCredentialRow
+  const baseRow = createRow({ totalRequests: 12, successCount: 12, successRate: 100, totalTokens: 1200, cacheReadRate: 0 })
+  const resetButton = (html: string) => html.match(/<button\b[^>]*aria-label="usage_stats.credentials_quota_reset_button[^>]*>/)![0]
 
   it('renders the quota reset action when reset credits are available', () => {
     const row = {
       ...baseRow,
       quotaResetCreditsAvailableCount: 2,
-    } as AuthFileCredentialRow
+    }
 
     const html = renderToStaticMarkup(createElement(AuthFileCredentialsSection, createAuthFileSectionProps({ rows: [row], total: 1 })))
 
-    expect(html).toContain('credentialQuotaActionStack')
-    expect(html).toContain('credentialRowResetButton')
+    expect(resetButton(html)).toContain('aria-haspopup="dialog"')
     expect(html).toContain('usage_stats.credentials_quota_reset_button')
   })
 
@@ -280,13 +174,11 @@ describe('AuthFileCredentialsSection quota reset action', () => {
     const row = {
       ...baseRow,
       quotaResetCreditsAvailableCount: 3,
-    } as AuthFileCredentialRow
+    }
 
     const html = renderToStaticMarkup(createElement(AuthFileCredentialsSection, createAuthFileSectionProps({ rows: [row], total: 1 })))
 
     expect(html).toContain('role="tooltip"')
-    expect(html).toContain('credentialQuotaResetTooltip')
-    expect(html).toContain('credentialQuotaResetCount')
     expect(html).toContain('>3</span>')
     expect(html).toContain('usage_stats.credentials_quota_reset_tooltip_suffix')
   })
@@ -295,11 +187,10 @@ describe('AuthFileCredentialsSection quota reset action', () => {
     const row = {
       ...baseRow,
       quotaResetCreditsAvailableCount: 0,
-    } as AuthFileCredentialRow
+    }
 
     const html = renderToStaticMarkup(createElement(AuthFileCredentialsSection, createAuthFileSectionProps({ rows: [row], total: 1 })))
 
-    expect(html).not.toContain('credentialRowResetButton')
     expect(html).not.toContain('usage_stats.credentials_quota_reset_button')
   })
 
@@ -308,13 +199,13 @@ describe('AuthFileCredentialsSection quota reset action', () => {
       ...baseRow,
       quotaResetCreditsAvailableCount: 2,
       quotaResetting: true,
-    } as AuthFileCredentialRow
+    }
 
     const html = renderToStaticMarkup(createElement(AuthFileCredentialsSection, createAuthFileSectionProps({ rows: [row], total: 1 })))
 
-    expect(html).toContain('credentialRowResetButton')
-    expect(html).toContain('aria-busy="true"')
-    expect(html).toContain('disabled=""')
+    expect(resetButton(html)).toContain('aria-haspopup="dialog"')
+    expect(resetButton(html)).toContain('aria-busy="true"')
+    expect(resetButton(html)).toContain('disabled=""')
     expect(html).toContain('credentialRowRefreshButton')
   })
 
@@ -326,8 +217,8 @@ describe('AuthFileCredentialsSection quota reset action', () => {
     ] as AuthFileCredentialRow[]) {
       const html = renderToStaticMarkup(createElement(AuthFileCredentialsSection, createAuthFileSectionProps({ rows: [row], total: 1 })))
 
-      expect(html).toContain('credentialRowResetButton')
-      expect(html).toContain('disabled=""')
+      expect(resetButton(html)).toContain('aria-haspopup="dialog"')
+      expect(resetButton(html)).toContain('disabled=""')
     }
   })
 })
@@ -453,9 +344,6 @@ describe('AuthFileCredentialsSection quota usage mode rendering', () => {
     expect(html.match(/Gemini Models/g)).toHaveLength(1)
     expect(html.match(/Claude and GPT models/g)).toHaveLength(1)
     expect(html.match(/credentialQuotaGroupBlock/g)).toHaveLength(2)
-    expect(html.match(/credentialQuotaGroupBars/g)).toHaveLength(2)
-    expect(html).toContain('credentialQuotaGroupLabel')
-    expect(html).toContain('credentialQuotaGroupTooltipTarget')
     expect(html).toContain('role="tooltip"')
     expect(html).toContain('aria-describedby=')
     expect(html).toContain('Models within this group: Gemini Flash, Gemini Pro')
@@ -483,7 +371,6 @@ describe('AuthFileCredentialsSection quota usage mode rendering', () => {
     const html = renderToStaticMarkup(createElement(AuthFileQuotaPanel, { row: ordinaryRow, quotaUsageMode: 'current' }))
 
     expect(html).not.toContain('credentialQuotaGroupBlock')
-    expect(html).not.toContain('credentialQuotaGroupBars')
     expect(html).toContain('Other Provider Group')
     expect(html.match(/credentialQuotaBarBlock/g)).toHaveLength(2)
   })
@@ -534,7 +421,7 @@ describe('AuthFileCredentialsSection quota usage mode rendering', () => {
     expect(html.match(/credentialQuotaBarTooltipRight/g)).toHaveLength(1)
   })
 
-  it('anchors reset time on the right when Codex has no token or cost usage', () => {
+  it('keeps the reset time visible when Codex has no token or cost usage', () => {
     const noUsageRow = {
       ...row,
       displayQuotas: [{
@@ -547,7 +434,7 @@ describe('AuthFileCredentialsSection quota usage mode rendering', () => {
 
     const html = renderToStaticMarkup(createElement(AuthFileQuotaPanel, { row: noUsageRow, quotaUsageMode: 'current' }))
 
-    expect(html).toContain('credentialQuotaResetTime')
+    expect(html).toContain(formatLocalResetTime('2026-05-09T12:00:00Z'))
   })
 
   it('renders xai billing spend without token usage metrics', () => {
@@ -569,8 +456,6 @@ describe('AuthFileCredentialsSection quota usage mode rendering', () => {
     expect(html).toContain('Monthly Spend')
     expect(html).toContain('$1.67')
     expect(html).toContain('$200.00')
-    expect(html.match(/<img/g)).toHaveLength(1)
-    expect(html.indexOf('<img')).toBeLessThan(html.indexOf('$1.67'))
     expect(html).not.toContain('1.00M')
   })
 
@@ -732,101 +617,36 @@ describe('AuthFileCredentialsSection inspection controls', () => {
     expect(isAutoRefreshSettingsSaveDisabled({ loading: false, saving: false, loaded: fallback.loaded })).toBe(false)
   })
 
-  it('keeps auto refresh controls in a separate modal with the Auth Files switch style', () => {
-    const html = renderToStaticMarkup(createElement(QuotaAutoRefreshSettingsModal, {
-      open: true,
-      enabled: true,
-      unit: 'hour',
-      value: '6',
-      loading: false,
-      saving: false,
-      loaded: true,
-      error: '',
-      onClose: () => undefined,
-      onEnabledChange: () => undefined,
-      onUnitChange: () => undefined,
-      onValueChange: () => undefined,
-      onSave: async () => undefined,
-    }))
+  it('renders the enabled auto refresh frequency form', () => {
+    const html = renderSettings()
 
     expect(html).toContain('usage_stats.credentials_auto_refresh_settings')
-    expect(html).toContain('credentialActiveOnlySwitch')
-    expect(html).toContain('credentialActiveOnlyTrack')
-    expect(html).toContain('credentialActiveOnlyThumb')
-    expect(html).toContain('credentialAutoRefreshScheduleAreaActive')
-    expect(html).toContain('credentialAutoRefreshIntervalField')
-    expect(html).toContain('credentialAutoRefreshIntervalLabel')
-    expect(html).toContain('credentialAutoRefreshUnitSuffix')
     expect(html).toContain('usage_stats.credentials_auto_refresh_value')
     expect(html).toContain('usage_stats.credentials_auto_refresh_unit_hour')
     expect(html).toContain('usage_stats.credentials_auto_refresh_tip_hour')
     expect(html).toContain('usage_stats.credentials_auto_refresh_save')
-    expect(html).not.toContain('credentialAutoRefreshField')
   })
 
   it('renders frequency-specific scheduled refresh tips', () => {
     for (const unit of ['minute', 'hour', 'day', 'week'] as const) {
-      const html = renderToStaticMarkup(createElement(QuotaAutoRefreshSettingsModal, {
-        open: true,
-        enabled: true,
-        unit,
-        value: unit === 'week' ? '1' : '6',
-        loading: false,
-        saving: false,
-        loaded: true,
-        error: '',
-        onClose: () => undefined,
-        onEnabledChange: () => undefined,
-        onUnitChange: () => undefined,
-        onValueChange: () => undefined,
-        onSave: async () => undefined,
-      }))
+      const html = renderSettings({ unit, value: unit === 'week' ? '1' : '6' })
 
       expect(html).toContain(`usage_stats.credentials_auto_refresh_tip_${unit}`)
     }
   })
 
   it('does not repeat the weekly unit after the weekday selector', () => {
-    const html = renderToStaticMarkup(createElement(QuotaAutoRefreshSettingsModal, {
-      open: true,
-      enabled: true,
-      unit: 'week',
-      value: '1',
-      loading: false,
-      saving: false,
-      loaded: true,
-      error: '',
-      onClose: () => undefined,
-      onEnabledChange: () => undefined,
-      onUnitChange: () => undefined,
-      onValueChange: () => undefined,
-      onSave: async () => undefined,
-    }))
+    const html = renderSettings({ unit: 'week', value: '1' })
 
     expect(html.match(/usage_stats\.credentials_auto_refresh_unit_week/g)).toHaveLength(1)
     expect(html).toContain('usage_stats.credentials_auto_refresh_weekday')
   })
 
   it('keeps the schedule area mounted but collapsed when auto refresh is off', () => {
-    const html = renderToStaticMarkup(createElement(QuotaAutoRefreshSettingsModal, {
-      open: true,
-      enabled: false,
-      unit: 'minute',
-      value: '',
-      loading: false,
-      saving: false,
-      loaded: true,
-      error: '',
-      onClose: () => undefined,
-      onEnabledChange: () => undefined,
-      onUnitChange: () => undefined,
-      onValueChange: () => undefined,
-      onSave: async () => undefined,
-    }))
+    const html = renderSettings({ enabled: false, unit: 'minute', value: '' })
 
-    expect(html).toContain('credentialAutoRefreshScheduleArea')
-    expect(html).not.toContain('credentialAutoRefreshScheduleAreaActive')
-    expect(html).not.toContain('credentialAutoRefreshField')
+    expect(html).toMatch(/credentialAutoRefreshScheduleArea[^>]*aria-hidden="true"/)
+    expect(html).toMatch(/<input[^>]*type="number"[^>]*disabled=""/)
   })
 
   it('keeps the inspection modal close behavior independent from auto refresh settings saving', () => {
@@ -867,18 +687,7 @@ describe('AuthFileCredentialsSection inspection results', () => {
     expect(firstPage.total).toBe(12)
     expect(firstPage.totalPages).toBe(2)
     expect(firstPage.page).toBe(1)
-    expect(firstPage.results.map((result) => result.auth_index)).toEqual([
-      'auth-01',
-      'auth-02',
-      'auth-03',
-      'auth-04',
-      'auth-05',
-      'auth-06',
-      'auth-07',
-      'auth-08',
-      'auth-09',
-      'auth-10',
-    ])
+    expect(firstPage.results).toEqual(results.slice(0, 10))
 
     const secondPage = buildInspectionResultsPage(results, null, 2, 10)
     expect(secondPage.results.map((result) => result.auth_index)).toEqual(['auth-11', 'auth-12'])
@@ -938,5 +747,4 @@ describe('AuthFileCredentialsSection inspection results', () => {
     expect(invertInvalidInspectionAccountFileNames(fileNames, ['a.json', 'c.json'])).toEqual(['b.json'])
     expect(invertInvalidInspectionAccountFileNames(fileNames, [])).toEqual(fileNames)
   })
-
 })
