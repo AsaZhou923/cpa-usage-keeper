@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	keeperapi "cpa-usage-keeper/internal/api"
 	"cpa-usage-keeper/internal/auth"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/timeutil"
@@ -19,8 +18,7 @@ import (
 
 func TestPasswordLoginCapturesSessionClientMetadataFromRightmostForwardedIP(t *testing.T) {
 	sessions := auth.NewSessionManager(time.Hour)
-	config := keeperapi.AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour}
-	router := keeperapi.NewRouter(nil, nil, nil, nil, config, keeperapi.NewAuthHandler(config, sessions), "")
+	router := newManagedSessionRouter(sessions)
 	userAgent := "Keeper-Test/" + strings.Repeat("a", 600) + "/tail-marker"
 
 	login := httptest.NewRecorder()
@@ -82,8 +80,7 @@ func TestPasswordLoginCapturesSessionClientMetadataFromRightmostForwardedIP(t *t
 
 func TestPasswordLoginFallsBackToObservedClientIPWithoutForwardedHeader(t *testing.T) {
 	sessions := auth.NewSessionManager(time.Hour)
-	config := keeperapi.AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour}
-	router := keeperapi.NewRouter(nil, nil, nil, nil, config, keeperapi.NewAuthHandler(config, sessions), "")
+	router := newManagedSessionRouter(sessions)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"password":"secret"}`))
 	request.Header.Set(requestIntentHeaderName, requestIntentHeaderValueFetch)
@@ -103,25 +100,22 @@ func TestPasswordLoginFallsBackToObservedClientIPWithoutForwardedHeader(t *testi
 func TestManagedSessionsSortCurrentFirstThenRecentActivityDescending(t *testing.T) {
 	db := openSessionMetadataAPIDatabase(t)
 	manager := auth.NewPersistentSessionManager(time.Hour, auth.NewGormSessionStore(db))
-	currentToken, _, err := manager.CreateWithSourceAndMetadata(auth.SessionSourceStandard, auth.SessionClientMetadata{IP: "203.0.113.1"})
-	if err != nil {
-		t.Fatalf("create current session: %v", err)
+	tokens := make([]string, 3)
+	for i, ip := range []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"} {
+		token, _, err := manager.CreateWithSourceAndMetadata(auth.SessionSourceStandard, auth.SessionClientMetadata{IP: ip})
+		if err != nil {
+			t.Fatalf("create session for %s: %v", ip, err)
+		}
+		tokens[i] = token
 	}
-	olderToken, _, err := manager.CreateWithSourceAndMetadata(auth.SessionSourceStandard, auth.SessionClientMetadata{IP: "203.0.113.2"})
-	if err != nil {
-		t.Fatalf("create older session: %v", err)
-	}
-	newerToken, _, err := manager.CreateWithSourceAndMetadata(auth.SessionSourceStandard, auth.SessionClientMetadata{IP: "203.0.113.3"})
-	if err != nil {
-		t.Fatalf("create newer session: %v", err)
-	}
+	currentToken, olderToken, newerToken := tokens[0], tokens[1], tokens[2]
+
 	now := timeutil.NormalizeStorageTime(time.Now())
 	setSessionLastSeen(t, db, olderToken, now.Add(-20*time.Minute))
 	setSessionLastSeen(t, db, newerToken, now.Add(-10*time.Minute))
 
 	restarted := auth.NewPersistentSessionManager(time.Hour, auth.NewGormSessionStore(db))
-	config := keeperapi.AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour}
-	router := keeperapi.NewRouter(nil, nil, nil, nil, config, keeperapi.NewAuthHandler(config, restarted), "")
+	router := newManagedSessionRouter(restarted)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/sessions", nil)
 	request.AddCookie(&http.Cookie{Name: standardSessionCookieName, Value: currentToken})
 	// 排序测试不验证活动写入；保持来源 IP 不变，避免启动异步 writer 干扰临时数据库清理。
