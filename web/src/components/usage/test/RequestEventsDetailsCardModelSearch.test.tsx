@@ -4,7 +4,7 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
-import { RequestEventsDetailsCard } from '../RequestEventsDetailsCard';
+import { RequestEventsTestCard } from './requestEventsFixtures';
 
 describe('RequestEventsDetailsCard model search', () => {
   let container: HTMLDivElement;
@@ -21,21 +21,14 @@ describe('RequestEventsDetailsCard model search', () => {
     root = createRoot(container);
     function TestCard() {
       const [modelFilter, setModelFilter] = React.useState('claude-sonnet-4');
-      return <RequestEventsDetailsCard
+      return <RequestEventsTestCard
         events={[]}
-        loading={false}
-        totalCount={0}
         modelOptions={modelOptions}
-        sourceOptions={[]}
         modelFilter={modelFilter}
-        sourceFilter="__all__"
-        resultFilter="__all__"
         onModelFilterChange={(model) => {
           onModelFilterChange(model);
           setModelFilter(model);
         }}
-        onSourceFilterChange={() => undefined}
-        onResultFilterChange={() => undefined}
       />;
     }
     await act(async () => root.render(<TestCard />));
@@ -50,7 +43,6 @@ describe('RequestEventsDetailsCard model search', () => {
   const input = () => container.querySelector<HTMLInputElement>('input[role="combobox"][aria-label="Model"]')!;
   const options = () => Array.from(document.querySelectorAll('[role="option"]')).map((node) => node.textContent);
   const openInput = async () => {
-    expect(input()).not.toBeNull();
     await act(async () => input().focus());
     await act(async () => input().click());
     expect(input().getAttribute('aria-expanded')).toBe('true');
@@ -63,7 +55,6 @@ describe('RequestEventsDetailsCard model search', () => {
   };
 
   it('filters names locally without changing the query until a model is selected', async () => {
-    expect(input()).not.toBeNull();
     expect(input().value).toBe('claude-sonnet-4');
     expect(input().getAttribute('aria-expanded')).toBe('false');
     await openInput();
@@ -156,7 +147,6 @@ describe('RequestEventsDetailsCard model search', () => {
     }
     await keyDown('Enter', true);
     expect(onModelFilterChange).not.toHaveBeenCalled();
-    expect(input()).not.toBeNull();
     await keyDown('Enter');
     expect(onModelFilterChange).toHaveBeenCalledExactlyOnceWith('gpt-5');
     expect(input().getAttribute('aria-expanded')).toBe('false');
