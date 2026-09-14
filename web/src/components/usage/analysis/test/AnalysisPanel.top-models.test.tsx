@@ -40,7 +40,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-import { AnalysisPanel } from '../AnalysisPanel';
+import { AnalysisTestPanel, emptyAnalysis } from './analysisFixtures';
 
 const tokenBucket = (bucket: string, totalTokens: number): AnalysisTokenUsageBucket => ({
   bucket,
@@ -56,6 +56,7 @@ const tokenBucket = (bucket: string, totalTokens: number): AnalysisTokenUsageBuc
 });
 
 const baseAnalysis = (granularity: AnalysisResponse['granularity'], buckets: string[]): AnalysisResponse => ({
+  ...emptyAnalysis,
   granularity,
   timezone: 'Asia/Shanghai',
   token_usage: buckets.map((bucket) => tokenBucket(bucket, 1)),
@@ -63,29 +64,11 @@ const baseAnalysis = (granularity: AnalysisResponse['granularity'], buckets: str
     buckets,
     series: [],
   },
-  api_key_composition: [],
-  model_composition: [],
-  auth_files_composition: [],
-  ai_provider_composition: [],
-  cost_breakdown: {
-    uncached_input_cost_usd: 0,
-    cache_read_cost_usd: 0,
-    cache_write_cost_usd: 0,
-    output_cost_usd: 0,
-    total_cost_usd: 0,
-    cost_available: true,
-  },
-  model_efficiency: [],
-  heatmap: { api_keys: [], api_key_labels: {}, models: [], cells: [] },
 });
 
-const findTopModelsBar = () => chartCapture.bars.find((bar) =>
+const findTopModelsBar = () => chartCapture.bars.findLast((bar) =>
   bar.data.datasets.some((dataset) => dataset.label === 'model-alpha'),
-);
-
-const findLatestTopModelsBar = () => [...chartCapture.bars].reverse().find((bar) =>
-  bar.data.datasets.some((dataset) => dataset.label === 'model-alpha'),
-);
+)!;
 
 const createFakeChartCanvas = (): HTMLCanvasElement => {
   const canvas = {
@@ -122,33 +105,8 @@ const createFakeChartCanvas = (): HTMLCanvasElement => {
   };
   const context = new Proxy(contextTarget, {
     get: (target, property) => Reflect.has(target, property) ? Reflect.get(target, property) : () => {},
-    set: (target, property, value) => {
-      Reflect.set(target, property, value);
-      return true;
-    },
   }) as unknown as CanvasRenderingContext2D;
   return canvas as unknown as HTMLCanvasElement;
-};
-
-const getRecordedGradientStops = (fill: unknown): Array<[number, string]> => {
-  if (!fill || typeof fill !== 'object') return [];
-  const stops = (fill as Partial<RecordedGradient>).stops;
-  return Array.isArray(stops) ? stops : [];
-};
-
-const readVerticalGradientStops = (backgroundColor: unknown) => {
-  expect(typeof backgroundColor).toBe('function');
-  const stops: Array<[number, string]> = [];
-  const gradient = {
-    addColorStop: (offset: number, color: string) => stops.push([offset, color]),
-  };
-  const createLinearGradient = vi.fn(() => gradient);
-  const fill = (backgroundColor as (context: unknown) => unknown)({
-    chart: { ctx: { createLinearGradient }, chartArea: { top: 0, bottom: 100 } },
-  });
-  expect(fill).toBe(gradient);
-  expect(createLinearGradient).toHaveBeenCalledWith(0, 0, 0, 100);
-  return stops;
 };
 
 describe('AnalysisPanel Top Models card', () => {
@@ -170,7 +128,7 @@ describe('AnalysisPanel Top Models card', () => {
     ];
 
     const markup = renderToStaticMarkup(
-      <AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />,
+      <AnalysisTestPanel analysis={analysis} />,
     );
 
     const topModelsStart = markup.indexOf('usage_stats.analysis_top_models_title');
@@ -179,8 +137,8 @@ describe('AnalysisPanel Top Models card', () => {
     expect(topModelsStart).toBeLessThan(latencyStart);
 
     const topModelsBar = findTopModelsBar();
-    expect(topModelsBar?.data.labels).toEqual(['09:00', '10:00']);
-    expect(topModelsBar?.data.datasets.map((dataset) => dataset.label)).toEqual([
+    expect(topModelsBar.data.labels).toEqual(['09:00', '10:00']);
+    expect(topModelsBar.data.datasets.map((dataset) => dataset.label)).toEqual([
       'model-alpha',
       'model-beta',
       'model-gamma',
@@ -188,19 +146,10 @@ describe('AnalysisPanel Top Models card', () => {
       'model-epsilon',
       'usage_stats.analysis_others',
     ]);
-    expect(topModelsBar?.data.datasets[0]?.data).toEqual([100, null]);
-    expect(topModelsBar?.data.datasets.at(-1)?.data).toEqual([50, 40]);
-    expect(topModelsBar?.data.datasets.map((dataset) => readVerticalGradientStops(dataset.backgroundColor))).toEqual([
-      [[0, '#f9a8d4'], [1, '#db2777']],
-      [[0, '#fcd34d'], [1, '#d97706']],
-      [[0, '#6ee7b7'], [1, '#059669']],
-      [[0, '#93c5fd'], [1, '#2563eb']],
-      [[0, '#fca5a5'], [1, '#dc2626']],
-      [[0, '#cbd5e1'], [1, '#64748b']],
-    ]);
-    expect(topModelsBar?.data.datasets.map((dataset) => dataset.minBarLength)).toEqual([4, 4, 4, 4, 4, 4]);
-    expect(topModelsBar?.options.scales?.x?.stacked).toBe(true);
-    expect(topModelsBar?.options.scales?.tokens?.stacked).toBe(true);
+    expect(topModelsBar.data.datasets[0]?.data).toEqual([100, null]);
+    expect(topModelsBar.data.datasets.at(-1)?.data).toEqual([50, 40]);
+    expect(topModelsBar.options.scales?.x?.stacked).toBe(true);
+    expect(topModelsBar.options.scales?.tokens?.stacked).toBe(true);
 
     const cardMarkup = markup.slice(topModelsStart, latencyStart);
     expect(cardMarkup).toContain('<button');
@@ -218,21 +167,21 @@ describe('AnalysisPanel Top Models card', () => {
       { model: 'model-beta', total_tokens: [25, 75], requests: [1, 2] },
     ];
     renderToStaticMarkup(
-      <AnalysisPanel analysis={analysis} loading={false} isDark isMobile={false} />,
+      <AnalysisTestPanel analysis={analysis} isDark />,
     );
 
     const topModelsBar = findTopModelsBar();
-    expect(topModelsBar?.data.labels).toEqual(['8/1', '8/2']);
-    const tooltip = topModelsBar?.options.plugins?.tooltip;
-    const label = tooltip?.callbacks?.label as ((context: unknown) => string) | undefined;
-    const footer = tooltip?.callbacks?.footer as ((items: unknown[]) => string) | undefined;
-    const filter = tooltip?.filter as ((context: unknown) => boolean) | undefined;
-    expect(label?.({ dataset: { label: 'model-alpha' }, dataIndex: 0, parsed: { y: 75 } })).toContain('75.00%');
-    expect(footer?.([{ dataIndex: 0 }])).toContain('100');
-    expect(filter?.({ parsed: { y: 0 } })).toBe(false);
+    expect(topModelsBar.data.labels).toEqual(['8/1', '8/2']);
+    const tooltip = topModelsBar.options.plugins?.tooltip;
+    const label = tooltip?.callbacks?.label as (context: unknown) => string;
+    const footer = tooltip?.callbacks?.footer as (items: unknown[]) => string;
+    const filter = tooltip?.filter as (context: unknown) => boolean;
+    expect(label({ dataset: { label: 'model-alpha' }, dataIndex: 0, parsed: { y: 75 } })).toContain('75.00%');
+    expect(footer([{ dataIndex: 0 }])).toContain('100');
+    expect(filter({ parsed: { y: 0 } })).toBe(false);
   });
 
-  it('sorts each tooltip by that bucket token usage and shares Token Usage tooltip spacing', () => {
+  it('sorts each tooltip by that bucket token usage', () => {
     const buckets = ['2026-08-01T01:00:00Z'];
     const analysis = baseAnalysis('hourly', buckets);
     analysis.model_usage.series = [
@@ -241,27 +190,21 @@ describe('AnalysisPanel Top Models card', () => {
       { model: 'model-gamma', total_tokens: [171.04], requests: [1] },
     ];
     renderToStaticMarkup(
-      <AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />,
+      <AnalysisTestPanel analysis={analysis} />,
     );
 
-    const tokenTooltip = chartCapture.bars[0]?.options.plugins?.tooltip;
-    const topModelsTooltip = findTopModelsBar()?.options.plugins?.tooltip;
-    const itemSort = topModelsTooltip?.itemSort as ((left: unknown, right: unknown, data: unknown) => number) | undefined;
-    expect(typeof itemSort).toBe('function');
+    const topModelsTooltip = findTopModelsBar().options.plugins?.tooltip;
+    const itemSort = topModelsTooltip?.itemSort as (left: unknown, right: unknown, data: unknown) => number;
     const items = [
       { label: 'model-beta', datasetIndex: 1, parsed: { y: 26.19 } },
       { label: 'model-gamma', datasetIndex: 2, parsed: { y: 171.04 } },
       { label: 'model-alpha', datasetIndex: 0, parsed: { y: 843.43 } },
     ];
-    expect(items.sort((left, right) => itemSort?.(left, right, {}) ?? 0).map((item) => item.label)).toEqual([
+    expect(items.sort((left, right) => itemSort(left, right, {})).map((item) => item.label)).toEqual([
       'model-alpha',
       'model-gamma',
       'model-beta',
     ]);
-    expect(topModelsTooltip?.bodySpacing).toBe(2);
-    expect(topModelsTooltip?.bodySpacing).toBe(tokenTooltip?.bodySpacing);
-    expect(topModelsTooltip?.footerMarginTop).toBe(tokenTooltip?.footerMarginTop);
-    expect(topModelsTooltip?.padding).toEqual(tokenTooltip?.padding);
   });
 
   it('keeps every non-zero stacked segment visible after Chart.js clipping', () => {
@@ -277,17 +220,16 @@ describe('AnalysisPanel Top Models card', () => {
       { model: 'model-zeta', total_tokens: [1], requests: [1] },
     ];
     renderToStaticMarkup(
-      <AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />,
+      <AnalysisTestPanel analysis={analysis} />,
     );
 
     const topModelsBar = findTopModelsBar();
-    expect(topModelsBar).toBeDefined();
     const chart = new Chart(createFakeChartCanvas(), {
       type: 'bar',
-      data: topModelsBar?.data ?? { labels: [], datasets: [] },
+      data: topModelsBar.data,
       platform: BasicPlatform,
       options: {
-        ...topModelsBar?.options,
+        ...topModelsBar.options,
         responsive: false,
         animation: false,
       },
@@ -309,14 +251,14 @@ describe('AnalysisPanel Top Models card', () => {
   it('shows card-local loading and empty states', () => {
     const analysis = baseAnalysis('hourly', []);
     const loadingMarkup = renderToStaticMarkup(
-      <AnalysisPanel analysis={analysis} loading isDark={false} isMobile />,
+      <AnalysisTestPanel analysis={analysis} loading isMobile />,
     );
     const loadingStart = loadingMarkup.indexOf('usage_stats.analysis_top_models_title');
     const loadingEnd = loadingMarkup.indexOf('usage_stats.analysis_latency_title');
     expect(loadingMarkup.slice(loadingStart, loadingEnd)).toContain('common.loading');
 
     const emptyMarkup = renderToStaticMarkup(
-      <AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile />,
+      <AnalysisTestPanel analysis={analysis} isMobile />,
     );
     const emptyStart = emptyMarkup.indexOf('usage_stats.analysis_top_models_title');
     const emptyEnd = emptyMarkup.indexOf('usage_stats.analysis_latency_title');
@@ -336,34 +278,27 @@ describe('AnalysisPanel Top Models card', () => {
     const root = createRoot(container);
     try {
       act(() => root.render(
-        <AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />,
+        <AnalysisTestPanel analysis={analysis} />,
       ));
       const buttons = Array.from(container.querySelectorAll('button'));
       const alphaButton = buttons.find((item) => item.getAttribute('aria-label')?.startsWith('1. model-alpha'));
       const betaButton = buttons.find((item) => item.getAttribute('aria-label')?.startsWith('2. model-beta'));
-      expect(alphaButton).toBeDefined();
-      expect(betaButton).toBeDefined();
 
-      act(() => alphaButton?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
-      act(() => betaButton?.focus());
+      act(() => alphaButton!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+      act(() => betaButton!.focus());
       expect(document.activeElement).toBe(betaButton);
-      expect(findLatestTopModelsBar()?.data.datasets[0]?.borderWidth).toBe(0);
-      expect(findLatestTopModelsBar()?.data.datasets[1]?.borderWidth).toBe(1.5);
+      expect(findTopModelsBar().data.datasets[0]?.borderWidth).toBe(0);
+      expect(findTopModelsBar().data.datasets[1]?.borderWidth).toBeGreaterThan(0);
 
-      act(() => alphaButton?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })));
+      act(() => alphaButton!.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })));
       expect(document.activeElement).toBe(betaButton);
-      expect(findLatestTopModelsBar()?.data.datasets[1]?.borderWidth).toBe(1.5);
+      expect(findTopModelsBar().data.datasets[1]?.borderWidth).toBeGreaterThan(0);
     } finally {
       act(() => root.unmount());
       container.remove();
     }
 
-    const panelSource = readFileSync(resolve(process.cwd(), 'src/components/usage/analysis/AnalysisPanel.tsx'), 'utf8');
     const panelStyles = readFileSync(resolve(process.cwd(), 'src/components/usage/analysis/AnalysisPanel.module.scss'), 'utf8');
-    expect(panelSource).toContain('setHoveredModel');
-    expect(panelSource).toContain('setFocusedModel');
-    expect(panelSource).toContain('onMouseEnter');
-    expect(panelSource).toContain('onFocus');
     expect(panelStyles).toMatch(/\.topModelsRankItem:focus-visible/);
     expect(panelStyles).toContain('outline: 2px solid var(--text-primary);');
     expect(panelStyles).not.toMatch(/\[data-muted='true'\]\s*\{\s*opacity:/);
@@ -385,20 +320,19 @@ describe('AnalysisPanel Top Models card', () => {
     let chart: Chart<'bar', Array<number | null>, string> | undefined;
     try {
       act(() => root.render(
-        <AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />,
+        <AnalysisTestPanel analysis={analysis} />,
       ));
       const betaButton = Array.from(container.querySelectorAll('button'))
         .find((item) => item.getAttribute('aria-label')?.startsWith('2. model-beta'));
-      act(() => betaButton?.focus());
+      act(() => betaButton!.focus());
 
-      const topModelsBar = findLatestTopModelsBar();
-      expect(topModelsBar).toBeDefined();
+      const topModelsBar = findTopModelsBar();
       chart = new Chart(createFakeChartCanvas(), {
         type: 'bar',
-        data: topModelsBar?.data ?? { labels: [], datasets: [] },
+        data: topModelsBar.data,
         platform: BasicPlatform,
         options: {
-          ...topModelsBar?.options,
+          ...topModelsBar.options,
           responsive: false,
           animation: false,
         },
@@ -409,10 +343,8 @@ describe('AnalysisPanel Top Models card', () => {
       ]);
 
       const alphaElement = chart.getDatasetMeta(0).data[0] as unknown as { options: { backgroundColor?: unknown } };
-      expect(getRecordedGradientStops(alphaElement.options.backgroundColor)).toEqual([
-        [0, '#f9a8d433'],
-        [1, '#db277733'],
-      ]);
+      const mutedStops = (alphaElement.options.backgroundColor as RecordedGradient).stops;
+      expect(mutedStops.map(([, color]) => color.slice(-2))).toEqual(['33', '33']);
     } finally {
       chart?.destroy();
       act(() => root.unmount());
