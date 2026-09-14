@@ -1,15 +1,16 @@
-package api
+package test
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	keeperapi "cpa-usage-keeper/internal/api"
 	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/repository"
@@ -26,7 +27,7 @@ func TestCPAAPIKeyRoutesReturnDisplayDataWithoutRawKeys(t *testing.T) {
 	if err := repository.UpdateCPAAPIKeyAlias(db, 1, "Primary Key"); err != nil {
 		t.Fatalf("seed alias: %v", err)
 	}
-	router := NewRouter(nil, statusStub{}, nil, nil, AuthConfig{}, nil, "", OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
+	router := keeperapi.NewRouter(nil, nil, nil, nil, keeperapi.AuthConfig{}, nil, "", keeperapi.OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
 
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/api-keys", nil)
@@ -71,7 +72,7 @@ func TestCPAAPIKeySettingsRouteReturnsRawKeys(t *testing.T) {
 	if err := repository.UpdateCPAAPIKeyAlias(db, 1, "Primary Key"); err != nil {
 		t.Fatalf("seed alias: %v", err)
 	}
-	router := NewRouter(nil, statusStub{}, nil, nil, AuthConfig{}, nil, "", OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
+	router := keeperapi.NewRouter(nil, nil, nil, nil, keeperapi.AuthConfig{}, nil, "", keeperapi.OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
 
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/api-keys/settings", nil)
@@ -112,7 +113,7 @@ func TestCPAAPIKeyRoutesNormalizeStaleDisplayKeys(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("seed stale API key: %v", err)
 	}
-	router := NewRouter(nil, statusStub{}, nil, nil, AuthConfig{}, nil, "", OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
+	router := keeperapi.NewRouter(nil, nil, nil, nil, keeperapi.AuthConfig{}, nil, "", keeperapi.OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
 
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/api-keys", nil)
@@ -146,7 +147,7 @@ func TestCPAAPIKeyOptionsReturnActiveLabels(t *testing.T) {
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456"}, time.Date(2026, 5, 13, 11, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("delete missing key: %v", err)
 	}
-	router := NewRouter(nil, statusStub{}, nil, nil, AuthConfig{}, nil, "", OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
+	router := keeperapi.NewRouter(nil, nil, nil, nil, keeperapi.AuthConfig{}, nil, "", keeperapi.OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
 
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/api-keys/options", nil)
@@ -156,29 +157,14 @@ func TestCPAAPIKeyOptionsReturnActiveLabels(t *testing.T) {
 		t.Fatalf("expected status 200, got %d body=%s", resp.Code, resp.Body.String())
 	}
 	var parsed struct {
-		Options []struct {
-			ID    string `json:"id"`
-			Label string `json:"label"`
-		} `json:"options"`
+		Options []map[string]string `json:"options"`
 	}
 	if err := json.Unmarshal(resp.Body.Bytes(), &parsed); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(parsed.Options) != 1 || parsed.Options[0].ID != "1" || parsed.Options[0].Label != "Primary Key" {
-		t.Fatalf("unexpected options: %+v", parsed.Options)
-	}
-	var raw struct {
-		Options []map[string]any `json:"options"`
-	}
-	if err := json.Unmarshal(resp.Body.Bytes(), &raw); err != nil {
-		t.Fatalf("decode raw response: %v", err)
-	}
-	for _, option := range raw.Options {
-		for _, key := range []string{"keyAlias", "displayKey", "lastSyncedAt"} {
-			if _, ok := option[key]; ok {
-				t.Fatalf("options response included settings-only field %q: %s", key, resp.Body.String())
-			}
-		}
+	want := []map[string]string{{"id": "1", "label": "Primary Key"}}
+	if !reflect.DeepEqual(parsed.Options, want) {
+		t.Fatalf("options must expose only active ids and labels, got %+v", parsed.Options)
 	}
 }
 
@@ -187,26 +173,25 @@ func TestUpdateCPAAPIKeyAliasUpdatesAndClearsAlias(t *testing.T) {
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456"}, time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("seed API keys: %v", err)
 	}
-	router := NewRouter(nil, statusStub{}, nil, nil, AuthConfig{}, nil, "", OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
+	router := keeperapi.NewRouter(nil, nil, nil, nil, keeperapi.AuthConfig{}, nil, "", keeperapi.OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
 
-	for _, body := range []string{`{"keyAlias":"  Primary Key  "}`, `{"keyAlias":""}`} {
-		resp := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPatch, "/api/v1/usage/api-keys/1", bytes.NewBufferString(body))
-		req.Header.Set(requestIntentHeaderName, requestIntentHeaderValueFetch)
-		req.Header.Set("Content-Type", "application/json")
-		router.ServeHTTP(resp, req)
+	for _, tc := range []struct{ body, want string }{
+		{`{"keyAlias":"  Primary Key  "}`, "Primary Key"},
+		{`{"keyAlias":""}`, ""},
+	} {
+		resp := serveCredentialMutation(router, http.MethodPatch, "/api/v1/usage/api-keys/1", tc.body)
 		if resp.Code != http.StatusOK {
 			t.Fatalf("expected status 200, got %d body=%s", resp.Code, resp.Body.String())
 		}
+		rows, err := repository.ListActiveCPAAPIKeys(db)
+		if err != nil {
+			t.Fatalf("ListActiveCPAAPIKeys returned error: %v", err)
+		}
+		if len(rows) != 1 || rows[0].KeyAlias != tc.want {
+			t.Fatalf("unexpected stored alias, got %+v", rows)
+		}
 	}
 
-	rows, err := repository.ListActiveCPAAPIKeys(db)
-	if err != nil {
-		t.Fatalf("ListActiveCPAAPIKeys returned error: %v", err)
-	}
-	if len(rows) != 1 || rows[0].KeyAlias != "" {
-		t.Fatalf("expected alias to be cleared, got %+v", rows)
-	}
 }
 
 func TestUpdateCPAAPIKeyAliasRejectsInvalidInputAndDeletedRows(t *testing.T) {
@@ -217,7 +202,7 @@ func TestUpdateCPAAPIKeyAliasRejectsInvalidInputAndDeletedRows(t *testing.T) {
 	if err := repository.SyncCPAAPIKeys(db, nil, time.Date(2026, 5, 13, 11, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("mark deleted: %v", err)
 	}
-	router := NewRouter(nil, statusStub{}, nil, nil, AuthConfig{}, nil, "", OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
+	router := keeperapi.NewRouter(nil, nil, nil, nil, keeperapi.AuthConfig{}, nil, "", keeperapi.OptionalProviders{CPAAPIKeys: service.NewCPAAPIKeyService(db)})
 
 	for _, tc := range []struct {
 		name string
@@ -228,13 +213,9 @@ func TestUpdateCPAAPIKeyAliasRejectsInvalidInputAndDeletedRows(t *testing.T) {
 		{name: "invalid id", path: "/api/v1/usage/api-keys/not-an-int", body: `{"keyAlias":"ok"}`, want: http.StatusBadRequest},
 		{name: "deleted id", path: "/api/v1/usage/api-keys/1", body: `{"keyAlias":"ok"}`, want: http.StatusNotFound},
 		{name: "too long", path: "/api/v1/usage/api-keys/1", body: `{"keyAlias":"` + strings.Repeat("a", 129) + `"}`, want: http.StatusBadRequest},
-		{name: "control char", path: "/api/v1/usage/api-keys/1", body: "{\"keyAlias\":\"bad\\u0001alias\"}", want: http.StatusBadRequest},
+		{name: "control char", path: "/api/v1/usage/api-keys/1", body: `{"keyAlias":"bad\u0001alias"}`, want: http.StatusBadRequest},
 	} {
-		resp := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPatch, tc.path, bytes.NewBufferString(tc.body))
-		req.Header.Set(requestIntentHeaderName, requestIntentHeaderValueFetch)
-		req.Header.Set("Content-Type", "application/json")
-		router.ServeHTTP(resp, req)
+		resp := serveCredentialMutation(router, http.MethodPatch, tc.path, tc.body)
 		if resp.Code != tc.want {
 			t.Fatalf("%s: expected status %d, got %d body=%s", tc.name, tc.want, resp.Code, resp.Body.String())
 		}
@@ -247,11 +228,10 @@ func openCPAAPIKeyAPITestDatabase(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("OpenDatabase returned error: %v", err)
 	}
-	t.Cleanup(func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
-	})
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql database: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
 }
