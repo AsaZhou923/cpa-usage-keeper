@@ -1,33 +1,23 @@
-package service
+package test
 
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/repository"
+	keeperservice "cpa-usage-keeper/internal/service"
 
 	"gorm.io/gorm"
 )
 
 func TestFindActiveCPAAPIKeyByValueTrimsInputAndQueriesActiveRow(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "api-keys-service.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	t.Cleanup(func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
-	})
+	db := openUsageServiceTestDatabase(t)
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456", "sk-beta123456"}, time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("seed API keys: %v", err)
 	}
-	provider := NewCPAAPIKeyService(db)
+	provider := keeperservice.NewCPAAPIKeyService(db)
 
 	row, err := provider.FindActiveCPAAPIKeyByValue(context.Background(), "  sk-beta123456  ")
 	if err != nil {
@@ -39,20 +29,11 @@ func TestFindActiveCPAAPIKeyByValueTrimsInputAndQueriesActiveRow(t *testing.T) {
 }
 
 func TestFindActiveCPAAPIKeyByValueRejectsEmptyAndMissingAsNotFound(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "api-keys-service.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	t.Cleanup(func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
-	})
+	db := openUsageServiceTestDatabase(t)
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456"}, time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("seed API keys: %v", err)
 	}
-	provider := NewCPAAPIKeyService(db)
+	provider := keeperservice.NewCPAAPIKeyService(db)
 
 	for _, apiKey := range []string{"   ", "sk-missing"} {
 		if _, err := provider.FindActiveCPAAPIKeyByValue(context.Background(), apiKey); !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -62,23 +43,14 @@ func TestFindActiveCPAAPIKeyByValueRejectsEmptyAndMissingAsNotFound(t *testing.T
 }
 
 func TestFindActiveCPAAPIKeyByIDReturnsOnlyActiveRows(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "api-keys-service.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	t.Cleanup(func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
-	})
+	db := openUsageServiceTestDatabase(t)
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456", "sk-beta123456"}, time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("seed API keys: %v", err)
 	}
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456"}, time.Date(2026, 5, 13, 11, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("mark stale API key deleted: %v", err)
 	}
-	provider := NewCPAAPIKeyService(db)
+	provider := keeperservice.NewCPAAPIKeyService(db)
 
 	row, err := provider.FindActiveCPAAPIKeyByID(context.Background(), 1)
 	if err != nil {
@@ -93,20 +65,11 @@ func TestFindActiveCPAAPIKeyByIDReturnsOnlyActiveRows(t *testing.T) {
 }
 
 func TestUpdateCPAAPIKeyAliasAcceptsParsedInt64ID(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "api-keys-service.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	t.Cleanup(func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
-	})
+	db := openUsageServiceTestDatabase(t)
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456"}, time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("seed API keys: %v", err)
 	}
-	provider := NewCPAAPIKeyService(db)
+	provider := keeperservice.NewCPAAPIKeyService(db)
 
 	row, err := provider.UpdateCPAAPIKeyAlias(context.Background(), int64(1), "Primary Key")
 	if err != nil {

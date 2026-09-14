@@ -1,32 +1,19 @@
-package service
+package test
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/repository"
+	keeperservice "cpa-usage-keeper/internal/service"
 )
 
 func TestUsageIdentityServiceAddsCredentialHealthToPagedRows(t *testing.T) {
-	previousLocal := time.Local
-	location, err := time.LoadLocation("UTC")
-	if err != nil {
-		t.Fatalf("load location: %v", err)
-	}
-	t.Cleanup(func() { time.Local = previousLocal })
-	time.Local = location
+	db := openUsageServiceTestDatabase(t)
 
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-identity-health-service.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
-
-	now := time.Now().In(time.Local).Add(-time.Minute).Truncate(time.Second)
+	now := time.Now().Add(-time.Minute).Truncate(time.Second)
 	if err := db.Create(&[]entities.UsageIdentity{
 		{Name: "Provider Team", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "shared-auth", Type: "claude", Provider: "Claude", CreatedAt: now, UpdatedAt: now},
 		{Name: "Auth File", AuthType: entities.UsageIdentityAuthTypeAuthFile, AuthTypeName: "oauth", Identity: "shared-auth", Type: "codex", Provider: "Codex", CreatedAt: now, UpdatedAt: now},
@@ -47,8 +34,8 @@ func TestUsageIdentityServiceAddsCredentialHealthToPagedRows(t *testing.T) {
 	t.Cleanup(cache.Close)
 
 	authType := entities.UsageIdentityAuthTypeAIProvider
-	provider := NewUsageIdentityServiceWithRecentCache(db, cache)
-	result, err := provider.ListActiveUsageIdentitiesPage(context.Background(), ListUsageIdentitiesRequest{AuthType: &authType, Page: 1, PageSize: 10})
+	provider := keeperservice.NewUsageIdentityServiceWithRecentCache(db, cache)
+	result, err := provider.ListActiveUsageIdentitiesPage(context.Background(), keeperservice.ListUsageIdentitiesRequest{AuthType: &authType, Page: 1, PageSize: 10})
 	if err != nil {
 		t.Fatalf("ListActiveUsageIdentitiesPage returned error: %v", err)
 	}
@@ -72,11 +59,7 @@ func TestUsageIdentityServiceAddsCredentialHealthToPagedRows(t *testing.T) {
 }
 
 func TestUsageIdentityServiceRunsDisplayNameChangeCallbackAfterAliasUpdate(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-identity-callback.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openUsageServiceTestDatabase(t)
 	now := time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC)
 	if err := repository.ReplaceUsageIdentitiesForAuthType(context.Background(), db, []entities.UsageIdentity{{
 		Name:     "Upstream Auth",
@@ -87,7 +70,7 @@ func TestUsageIdentityServiceRunsDisplayNameChangeCallbackAfterAliasUpdate(t *te
 		t.Fatalf("seed usage identity: %v", err)
 	}
 	var callbackRows []entities.UsageIdentity
-	provider := NewUsageIdentityServiceWithOptions(db, nil, UsageIdentityServiceOptions{
+	provider := keeperservice.NewUsageIdentityServiceWithOptions(db, nil, keeperservice.UsageIdentityServiceOptions{
 		OnDisplayNameChanged: func(identity entities.UsageIdentity) {
 			callbackRows = append(callbackRows, identity)
 		},
