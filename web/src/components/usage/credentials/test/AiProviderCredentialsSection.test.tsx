@@ -88,6 +88,8 @@ describe('AiProviderCredentialsSection', () => {
     expect(html).toContain('61.75%')
     expect(html).toContain('usage_stats.credentials_last_used')
     expect(html).toContain('usage_stats.credentials_stats_updated')
+    expect(html).toContain('05/10 10:00')
+    expect(html).toContain('05/10 10:02')
     expect(html).toContain('data-provider-brand-icon="claude"')
     expect(html.indexOf('data-provider-brand-icon="claude"')).toBeLessThan(html.indexOf('Provider Key'))
     expect(html).toContain('role="img"')

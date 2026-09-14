@@ -77,6 +77,7 @@ describe('AuthFileCredentialsSection title', () => {
     })
     try {
       const row = createRow({
+        identity: { id: '1', identity: 'auth-1', is_deleted: false, last_used_at: '2026-05-10T10:00:00Z', stats_updated_at: '2026-05-10T10:02:00Z' },
         displayName: 'Auth File',
         totalRequests: 2,
         successCount: 2,
@@ -102,6 +103,9 @@ describe('AuthFileCredentialsSection title', () => {
 
       expect(html).toContain('usage_stats.credentials_health_cache_rate_5h')
       expect(html).toContain('37.50%')
+      expect(html).toContain('05/10 10:00')
+      expect(html).toContain('05/10 10:02')
+      expect(html).not.toContain('usage_stats.credentials_quota_usage_mode_label')
     } finally {
       vi.unstubAllGlobals()
     }
@@ -128,6 +132,8 @@ describe('AuthFileCredentialsSection title', () => {
     expect(html.match(/usage_stats\.cache_rate/g)).toHaveLength(1)
     expect(html).toContain('usage_stats.credentials_column_name')
     expect(html).toContain('usage_stats.credentials_column_quota')
+    expect(html).toContain('usage_stats.credentials_quota_usage_mode_label')
+    expect(html.indexOf('usage_stats.credentials_quota_usage_mode_label')).toBeLessThan(html.indexOf('usage_stats.credentials_sort_label'))
     expect(html).toContain('1.23K')
     expect(html).toContain('97.24%')
     expect(html).toContain('data-provider-brand-icon="codex"')
@@ -564,6 +570,7 @@ describe('AuthFileCredentialsSection inspection controls', () => {
       onRefreshStatus: async () => undefined,
     }))
 
+    expect(html).toMatch(/role="progressbar"[^>]*aria-valuenow="0"[^>]*aria-valuemin="0"[^>]*aria-valuemax="100"/)
     expect(html).toContain('aria-label="usage_stats.credentials_auto_refresh_settings')
     expect(html).toContain('title="usage_stats.credentials_auto_refresh_settings')
   })
