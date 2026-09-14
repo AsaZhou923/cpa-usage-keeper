@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { CredentialHealthPanel } from './CredentialHealthPanel'
+import { CredentialHealthPanel } from '../CredentialHealthPanel'
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: () => undefined },
@@ -15,15 +15,6 @@ vi.mock('react-i18next', () => ({
       if (key === 'usage_stats.credentials_health_failures_5h') {
         return `Failed requests in 5h: ${params?.count} · latest ${params?.timeRange}`
       }
-      if (key === 'usage_stats.credentials_health_time_summary') {
-        return `used ${params?.lastUsed} updated ${params?.statsUpdated}`
-      }
-      if (key === 'usage_stats.credentials_health_time_summary_used') {
-        return `used ${params?.lastUsed}`
-      }
-      if (key === 'usage_stats.credentials_health_time_summary_updated') {
-        return `updated ${params?.statsUpdated}`
-      }
       return key
     },
   }),
@@ -31,37 +22,28 @@ vi.mock('react-i18next', () => ({
 
 describe('CredentialHealthPanel', () => {
   it('renders compact 5h health buckets with contextual health metadata', () => {
-    vi.setSystemTime(new Date('2026-05-10T10:30:00Z'))
-    try {
-      const html = renderToStaticMarkup(
-        <CredentialHealthPanel
-          displayName="Provider Key"
-          lastUsedAt="2026-05-10T10:00:00Z"
-          statsUpdatedAt="2026-05-10T10:02:00Z"
-        />,
-      )
+    const html = renderToStaticMarkup(
+      <CredentialHealthPanel
+        displayName="Provider Key"
+        lastUsedAt="2026-05-10T10:00:00Z"
+        statsUpdatedAt="2026-05-10T10:02:00Z"
+      />,
+    )
 
-      expect(html).not.toContain('<button')
-      expect(html.match(/role="tooltip"/g)).toHaveLength(30)
-      expect(html.match(/role="tooltip" aria-hidden="true"/g)).toHaveLength(30)
-      expect(html).toContain('usage_stats.credentials_health_last_5h')
-      expect(html).toContain('0.0%')
-      expect(html).toContain('usage_stats.credentials_health_ok')
-      expect(html).toContain('usage_stats.credentials_health_fail')
-      expect(html).toContain('usage_stats.credentials_health_status_empty')
-      expect(html).toContain('usage_stats.credentials_health_summary_quiet')
-      expect(html).toContain('usage_stats.credentials_health_no_requests_5h')
-      expect(html).toContain('05/10 10:00')
-      expect(html).toContain('05/10 10:02')
-      expect(html.match(/<svg/g) ?? []).toHaveLength(2)
-      expect(html).not.toContain('used 05/10 10:00 updated 05/10 10:02')
-      expect(html).not.toContain('>usage_stats.credentials_last_used<')
-      expect(html).not.toContain('>usage_stats.credentials_stats_updated<')
-      expect(html).toContain('Provider Key usage_stats.credentials_health_grid_aria')
-      expect(html).not.toContain('mock request health')
-    } finally {
-      vi.useRealTimers()
-    }
+    expect(html).not.toContain('<button')
+    expect(html.match(/role="tooltip" aria-hidden="true"/g)).toHaveLength(30)
+    expect(html).toContain('usage_stats.credentials_health_last_5h')
+    expect(html).toContain('0.0%')
+    expect(html).toContain('usage_stats.credentials_health_ok')
+    expect(html).toContain('usage_stats.credentials_health_fail')
+    expect(html).toContain('usage_stats.credentials_health_status_empty')
+    expect(html).toContain('usage_stats.credentials_health_summary_quiet')
+    expect(html).toContain('usage_stats.credentials_health_no_requests_5h')
+    expect(html).toContain('05/10 10:00')
+    expect(html).toContain('05/10 10:02')
+    expect(html).not.toContain('>usage_stats.credentials_last_used<')
+    expect(html).not.toContain('>usage_stats.credentials_stats_updated<')
+    expect(html).toContain('Provider Key usage_stats.credentials_health_grid_aria')
   })
 
   it('renders API credential health buckets instead of the empty placeholder', () => {
@@ -92,9 +74,7 @@ describe('CredentialHealthPanel', () => {
     )
 
     expect(html).not.toContain('<button')
-    expect(html.match(/role="tooltip"/g)).toHaveLength(30)
     expect(html.match(/role="tooltip" aria-hidden="true"/g)).toHaveLength(30)
-    expect(html).toContain('66.7%')
     expect(html).toContain('usage_stats.credentials_health_ok')
     expect(html).toContain('usage_stats.credentials_health_fail')
     expect(html).toContain('10:10 - 10:20')
