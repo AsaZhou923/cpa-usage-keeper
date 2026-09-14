@@ -1,5 +1,6 @@
+// @vitest-environment happy-dom
+
 import React from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { AnalysisResponse } from '@/lib/types';
 
@@ -19,11 +20,10 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-import { AnalysisPanel } from '../AnalysisPanel';
+import { emptyAnalysis, renderAnalysisPanel } from './analysisFixtures';
 
 const analysis: AnalysisResponse = {
-  granularity: 'hourly',
-  timezone: 'UTC',
+  ...emptyAnalysis,
   token_usage: [
     {
       bucket: '2026-07-14T08:00:00Z',
@@ -50,10 +50,6 @@ const analysis: AnalysisResponse = {
       cost_available: true,
     },
   ],
-  api_key_composition: [],
-  model_composition: [],
-  auth_files_composition: [],
-  ai_provider_composition: [],
   cost_breakdown: {
     uncached_input_cost_usd: 1,
     cache_read_cost_usd: 1.5,
@@ -62,40 +58,16 @@ const analysis: AnalysisResponse = {
     total_cost_usd: 6,
     cost_available: true,
   },
-  model_efficiency: [],
-  heatmap: {
-    api_keys: [],
-    api_key_labels: {},
-    models: [],
-    cells: [],
-  },
 };
 
 describe('AnalysisPanel cost breakdown summary', () => {
-  it('shows total tokens, total cost, and blended cost in order without a sparkline', () => {
-    const markup = renderToStaticMarkup(
-      <AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />,
-    );
-    const summaryStart = markup.indexOf('costRatePanel');
-    const detailsStart = markup.indexOf('costMetricGrid', summaryStart);
-    const summaryMarkup = markup.slice(summaryStart, detailsStart);
-
-    expect(summaryStart).toBeGreaterThan(-1);
-    expect(detailsStart).toBeGreaterThan(summaryStart);
-    expect(summaryMarkup.match(/costRateMetric/g)).toHaveLength(3);
-    expect(summaryMarkup).toContain('usage_stats.total_tokens');
-    expect(summaryMarkup).toContain('usage_stats.total_cost');
-    expect(summaryMarkup).toContain('usage_stats.analysis_cost_per_million_tokens');
-    expect(summaryMarkup.indexOf('usage_stats.total_tokens')).toBeLessThan(
-      summaryMarkup.indexOf('usage_stats.total_cost'),
-    );
-    expect(summaryMarkup.indexOf('usage_stats.total_cost')).toBeLessThan(
-      summaryMarkup.indexOf('usage_stats.analysis_cost_per_million_tokens'),
-    );
-    expect(summaryMarkup).toContain('3.00M');
-    expect(summaryMarkup).toContain('$6.00');
-    expect(summaryMarkup).toContain('$2.00');
-    expect(summaryMarkup).not.toContain('costRateSparkline');
-    expect(summaryMarkup).not.toContain('usage_stats.analysis_cost_rate_sparkline_hint');
+  it('shows total tokens, total cost, and blended cost in order', () => {
+    const container = renderAnalysisPanel({ analysis });
+    const summary = container.querySelector('[class*="costRatePanel"]')!;
+    expect([...summary.children].map((metric) => metric.textContent)).toEqual([
+      'usage_stats.total_tokens3.00M',
+      'usage_stats.total_cost$6.00',
+      'usage_stats.analysis_cost_per_million_tokens$2.00usage_stats.analysis_blended_rate',
+    ]);
   });
 });

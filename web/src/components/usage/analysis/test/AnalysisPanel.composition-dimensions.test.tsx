@@ -14,7 +14,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-import { AnalysisPanel } from '../AnalysisPanel';
+import { AnalysisTestPanel, emptyAnalysis } from './analysisFixtures';
 
 const compositionItem = {
   key: 'item',
@@ -32,29 +32,17 @@ const compositionItem = {
 };
 
 const analysis: AnalysisResponse = {
-  granularity: 'hourly',
-  timezone: 'UTC',
-  token_usage: [],
+  ...emptyAnalysis,
   api_key_composition: [compositionItem],
   model_composition: [compositionItem],
   auth_files_composition: [compositionItem],
   ai_provider_composition: [compositionItem],
-  cost_breakdown: {
-    uncached_input_cost_usd: 0,
-    cache_read_cost_usd: 0,
-    cache_write_cost_usd: 0,
-    output_cost_usd: 0,
-    total_cost_usd: 0,
-    cost_available: true,
-  },
-  model_efficiency: [],
-  heatmap: { api_keys: [], api_key_labels: {}, models: [], cells: [] },
 };
 
 describe('AnalysisPanel composition dimensions', () => {
   it('keeps all administrator dimensions by default', () => {
     const markup = renderToStaticMarkup(
-      <AnalysisPanel analysis={analysis} loading={false} isDark={false} isMobile={false} />,
+      <AnalysisTestPanel analysis={analysis} />,
     );
 
     expect(markup).toContain('usage_stats.analysis_composition_api_key_tab');
@@ -65,11 +53,8 @@ describe('AnalysisPanel composition dimensions', () => {
 
   it('renders only explicitly selected viewer dimensions', () => {
     const markup = renderToStaticMarkup(
-      <AnalysisPanel
+      <AnalysisTestPanel
         analysis={analysis}
-        loading={false}
-        isDark={false}
-        isMobile={false}
         compositionDimensions={['api_key', 'model']}
       />,
     );
