@@ -1,8 +1,10 @@
 package migration
 
 import (
+	"database/sql"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -93,65 +95,97 @@ func TestOrderedMigrationsPreservesExecutionOrder(t *testing.T) {
 }
 
 func TestOpenDatabaseRunsSchemaMigrationsAndAddsUsageEventRedisFields(t *testing.T) {
+	logs := captureMigrationLogs(t, logrus.InfoLevel)
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	seedLegacyRedisUsageTables(t, dbPath)
 
-	db := openMigratedDatabase(t, dbPath)
-	defer closeOpenedDatabase(t, db)
+	for _, stage := range []string{"initial migration", "reopen"} {
+		t.Run(stage, func(t *testing.T) {
+			db := openMigratedDatabase(t, dbPath)
+			defer closeOpenedDatabase(t, db)
 
-	if !db.Migrator().HasTable("schema_migrations") {
-		t.Fatal("expected schema_migrations table to exist")
+			if !db.Migrator().HasTable("schema_migrations") {
+				t.Fatal("expected schema_migrations table to exist")
+			}
+			for _, column := range []string{"provider", "endpoint", "auth_type", "request_id", "executor_type"} {
+				if !db.Migrator().HasColumn(&entities.UsageEvent{}, column) {
+					t.Fatalf("expected usage_events.%s column to exist", column)
+				}
+			}
+			if !db.Migrator().HasColumn(&entities.RedisUsageInbox{}, "source") {
+				t.Fatal("expected redis_usage_inboxes.source column to exist")
+			}
+			if !db.Migrator().HasTable(&entities.AuthSession{}) {
+				t.Fatal("expected auth_sessions table to exist")
+			}
+			if !db.Migrator().HasColumn(&entities.AuthSession{}, "token_hash") {
+				t.Fatal("expected auth_sessions.token_hash column to exist")
+			}
+			if db.Migrator().HasColumn(&entities.AuthSession{}, "token") {
+				t.Fatal("expected auth_sessions.token column not to exist")
+			}
+			if !db.Migrator().HasColumn(&entities.AuthSession{}, "expires_at") {
+				t.Fatal("expected auth_sessions.expires_at column to exist")
+			}
+			if !db.Migrator().HasColumn(&entities.AuthSession{}, "source") {
+				t.Fatal("expected auth_sessions.source column to exist")
+			}
+			for _, column := range []string{"login_ip", "last_seen_ip", "user_agent", "last_seen_at"} {
+				if !db.Migrator().HasColumn(&entities.AuthSession{}, column) {
+					t.Fatalf("expected auth_sessions.%s column to exist", column)
+				}
+			}
+			if !db.Migrator().HasColumn(&entities.AuthSession{}, "alias") {
+				t.Fatal("expected auth_sessions.alias column to exist")
+			}
+			if !db.Migrator().HasTable(&entities.AppSetting{}) {
+				t.Fatal("expected app_settings table to exist")
+			}
+			if db.Migrator().HasColumn(&entities.RedisUsageInbox{}, "queue_key") {
+				t.Fatal("expected redis_usage_inboxes.queue_key column not to exist")
+			}
+			if !db.Migrator().HasColumn(&entities.UsageIdentity{}, "lookup_key") {
+				t.Fatal("expected usage_identities.lookup_key column to exist")
+			}
+			for _, column := range []string{"file_name", "file_path", "alias"} {
+				if !db.Migrator().HasColumn(&entities.UsageIdentity{}, column) {
+					t.Fatalf("expected usage_identities.%s column to exist", column)
+				}
+			}
+			var versions []string
+			if err := db.Table("schema_migrations").Order("version asc").Pluck("version", &versions).Error; err != nil {
+				t.Fatalf("load schema migrations: %v", err)
+			}
+			assertStringSlicesEqual(t, sortedOrderedMigrationVersions(), versions)
+		})
 	}
-	for _, column := range []string{"provider", "endpoint", "auth_type", "request_id", "executor_type"} {
-		if !db.Migrator().HasColumn(&entities.UsageEvent{}, column) {
-			t.Fatalf("expected usage_events.%s column to exist", column)
+
+	content := logs.String()
+	for _, want := range []string{
+		"level=info",
+		"msg=\"schema migration started\"",
+		"msg=\"schema migration applied\"",
+		"version=20260503_add_usage_event_redis_fields",
+		"version=20260504_migrate_usage_identities_metadata",
+		"version=20260504_drop_legacy_metadata_tables",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected migration logs to contain %q, got:\n%s", want, content)
 		}
 	}
-	if !db.Migrator().HasColumn(&entities.RedisUsageInbox{}, "source") {
-		t.Fatal("expected redis_usage_inboxes.source column to exist")
+	if strings.Contains(content, "msg=\"schema migration skipped\"") {
+		t.Fatalf("expected info logs to hide skipped migrations, got:\n%s", content)
 	}
-	if !db.Migrator().HasTable(&entities.AuthSession{}) {
-		t.Fatal("expected auth_sessions table to exist")
+
+	logrus.SetLevel(logrus.DebugLevel)
+	db := openMigratedDatabase(t, dbPath)
+	closeOpenedDatabase(t, db)
+
+	content = logs.String()
+	want := "level=debug msg=\"schema migration skipped\" version=20260503_add_usage_event_redis_fields"
+	if !strings.Contains(content, want) {
+		t.Fatalf("expected debug migration logs to contain %q, got:\n%s", want, content)
 	}
-	if !db.Migrator().HasColumn(&entities.AuthSession{}, "token_hash") {
-		t.Fatal("expected auth_sessions.token_hash column to exist")
-	}
-	if db.Migrator().HasColumn(&entities.AuthSession{}, "token") {
-		t.Fatal("expected auth_sessions.token column not to exist")
-	}
-	if !db.Migrator().HasColumn(&entities.AuthSession{}, "expires_at") {
-		t.Fatal("expected auth_sessions.expires_at column to exist")
-	}
-	if !db.Migrator().HasColumn(&entities.AuthSession{}, "source") {
-		t.Fatal("expected auth_sessions.source column to exist")
-	}
-	for _, column := range []string{"login_ip", "last_seen_ip", "user_agent", "last_seen_at"} {
-		if !db.Migrator().HasColumn(&entities.AuthSession{}, column) {
-			t.Fatalf("expected auth_sessions.%s column to exist", column)
-		}
-	}
-	if !db.Migrator().HasColumn(&entities.AuthSession{}, "alias") {
-		t.Fatal("expected auth_sessions.alias column to exist")
-	}
-	if !db.Migrator().HasTable(&entities.AppSetting{}) {
-		t.Fatal("expected app_settings table to exist")
-	}
-	if db.Migrator().HasColumn(&entities.RedisUsageInbox{}, "queue_key") {
-		t.Fatal("expected redis_usage_inboxes.queue_key column not to exist")
-	}
-	if !db.Migrator().HasColumn(&entities.UsageIdentity{}, "lookup_key") {
-		t.Fatal("expected usage_identities.lookup_key column to exist")
-	}
-	for _, column := range []string{"file_name", "file_path", "alias"} {
-		if !db.Migrator().HasColumn(&entities.UsageIdentity{}, column) {
-			t.Fatalf("expected usage_identities.%s column to exist", column)
-		}
-	}
-	var versions []string
-	if err := db.Table("schema_migrations").Order("version asc").Pluck("version", &versions).Error; err != nil {
-		t.Fatalf("load schema migrations: %v", err)
-	}
-	assertStringSlicesEqual(t, sortedOrderedMigrationVersions(), versions)
 }
 
 func TestRunNormalizesLegacyStorageTimesToProjectTimezone(t *testing.T) {
@@ -219,99 +253,18 @@ func TestRunNormalizesLegacyStorageTimesToProjectTimezone(t *testing.T) {
 	assertRawMigrationTime(t, db, "schema_migrations", "applied_at", "version = '20260511_add_usage_identity_base_url'", "2026-05-12T21:47:39.744240399+08:00")
 }
 
-func TestOpenDatabaseMigrationsAreIdempotent(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "legacy.db")
-	seedLegacyRedisUsageTables(t, dbPath)
-
-	db := openMigratedDatabase(t, dbPath)
-	closeOpenedDatabase(t, db)
-
-	db = openMigratedDatabase(t, dbPath)
-	defer closeOpenedDatabase(t, db)
-
-	var count int64
-	if err := db.Table("schema_migrations").Count(&count).Error; err != nil {
-		t.Fatalf("count schema migrations: %v", err)
-	}
-	expectedCount := int64(len(orderedMigrations()))
-	if count != expectedCount {
-		t.Fatalf("expected %d applied migrations after reopening database, got %d", expectedCount, count)
-	}
-}
-
-func TestOpenDatabaseLogsSchemaMigrations(t *testing.T) {
-	logs := captureMigrationLogs(t, logrus.InfoLevel)
-	dbPath := filepath.Join(t.TempDir(), "legacy.db")
-	seedLegacyRedisUsageTables(t, dbPath)
-
-	db := openMigratedDatabase(t, dbPath)
-	closeOpenedDatabase(t, db)
-
-	db = openMigratedDatabase(t, dbPath)
-	closeOpenedDatabase(t, db)
-
-	content := logs.String()
-	for _, want := range []string{
-		"level=info",
-		"msg=\"schema migration started\"",
-		"msg=\"schema migration applied\"",
-		"version=20260503_add_usage_event_redis_fields",
-		"version=20260504_migrate_usage_identities_metadata",
-		"version=20260504_drop_legacy_metadata_tables",
-	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("expected migration logs to contain %q, got:\n%s", want, content)
-		}
-	}
-	if strings.Contains(content, "msg=\"schema migration skipped\"") {
-		t.Fatalf("expected info logs to hide skipped migrations, got:\n%s", content)
-	}
-
-	logrus.SetLevel(logrus.DebugLevel)
-	db = openMigratedDatabase(t, dbPath)
-	closeOpenedDatabase(t, db)
-
-	content = logs.String()
-	want := "level=debug msg=\"schema migration skipped\" version=20260503_add_usage_event_redis_fields"
-	if !strings.Contains(content, want) {
-		t.Fatalf("expected debug migration logs to contain %q, got:\n%s", want, content)
-	}
-}
-
 func assertRawMigrationTime(t *testing.T, db *gorm.DB, table string, field string, where string, want string) {
 	t.Helper()
-	var got *string
-	if err := db.Raw(fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1", field, table, where)).Scan(&got).Error; err != nil {
+	var got sql.NullString
+	if err := db.Raw(fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1", field, table, where)).Row().Scan(&got); err != nil {
 		t.Fatalf("read %s.%s: %v", table, field, err)
 	}
-	if want == "" {
-		if got != nil {
-			t.Fatalf("expected %s.%s to stay NULL, got %q", table, field, *got)
-		}
-		return
-	}
-	if got == nil || *got != want {
-		if got == nil {
-			t.Fatalf("expected %s.%s = %q, got NULL", table, field, want)
-		}
-		t.Fatalf("expected %s.%s = %q, got %q", table, field, want, *got)
+	if got.Valid != (want != "") || got.String != want {
+		t.Fatalf("expected %s.%s = %q (NULL if empty), got %+v", table, field, want, got)
 	}
 }
 
-func TestRunKeepsDefaultMigrationsTransactionalWhenRecordingFails(t *testing.T) {
-	db := openDatabaseWithFailingMigrationRecord(t, "20260620_create_auth_sessions")
-	defer closeOpenedDatabase(t, db)
-
-	err := Run(db)
-	if err == nil {
-		t.Fatal("expected migration error")
-	}
-	if db.Migrator().HasTable(&entities.AuthSession{}) {
-		t.Fatal("expected failed auth session migration to roll back created table")
-	}
-}
-
-func TestRunLogsSchemaMigrationErrors(t *testing.T) {
+func TestRunRollsBackAndLogsSchemaMigrationErrors(t *testing.T) {
 	logs := captureMigrationLogs(t, logrus.InfoLevel)
 	db := openDatabaseWithFailingMigrationRecord(t, "20260620_create_auth_sessions")
 	defer closeOpenedDatabase(t, db)
@@ -319,6 +272,10 @@ func TestRunLogsSchemaMigrationErrors(t *testing.T) {
 	err := Run(db)
 	if err == nil {
 		t.Fatal("expected migration error")
+	}
+
+	if db.Migrator().HasTable(&entities.AuthSession{}) {
+		t.Fatal("expected failed auth session migration to roll back created table")
 	}
 
 	content := logs.String()
@@ -377,9 +334,6 @@ func TestRunAddsSourceToExistingAuthSessions(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
-	if !db.Migrator().HasColumn(&entities.AuthSession{}, "Source") {
-		t.Fatal("expected auth_sessions.source column to exist after migration")
-	}
 	var source string
 	if err := db.Table("auth_sessions").Select("source").Where("token_hash = ?", "legacy-token-hash").Scan(&source).Error; err != nil {
 		t.Fatalf("load migrated source: %v", err)
@@ -440,9 +394,6 @@ func TestRunAddsModelPriceMultiplierDefaultToExistingPricing(t *testing.T) {
 		t.Fatalf("Run returned error: %v", err)
 	}
 
-	if !db.Migrator().HasColumn("model_price_settings", "price_multiplier") {
-		t.Fatal("expected model_price_settings.price_multiplier column to exist after migration")
-	}
 	assertSQLiteColumnDefault(t, db, "model_price_settings", "price_multiplier", "1")
 	var multiplier float64
 	if err := db.Table("model_price_settings").Select("price_multiplier").Where("model = ?", "claude-sonnet").Scan(&multiplier).Error; err != nil {
@@ -582,7 +533,7 @@ func assertSQLiteColumnDefault(t *testing.T, db *gorm.DB, table string, column s
 	t.Helper()
 	type columnInfo struct {
 		Name       string
-		DefaultRaw *string `gorm:"column:dflt_value"`
+		DefaultRaw sql.NullString `gorm:"column:dflt_value"`
 	}
 	var columns []columnInfo
 	if err := db.Raw(fmt.Sprintf("PRAGMA table_info(%s)", table)).Scan(&columns).Error; err != nil {
@@ -592,11 +543,8 @@ func assertSQLiteColumnDefault(t *testing.T, db *gorm.DB, table string, column s
 		if info.Name != column {
 			continue
 		}
-		if info.DefaultRaw == nil || *info.DefaultRaw != wantDefault {
-			if info.DefaultRaw == nil {
-				t.Fatalf("expected %s.%s default %q, got NULL", table, column, wantDefault)
-			}
-			t.Fatalf("expected %s.%s default %q, got %q", table, column, wantDefault, *info.DefaultRaw)
+		if !info.DefaultRaw.Valid || info.DefaultRaw.String != wantDefault {
+			t.Fatalf("expected %s.%s default %q, got %+v", table, column, wantDefault, info.DefaultRaw)
 		}
 		return
 	}
@@ -605,12 +553,7 @@ func assertSQLiteColumnDefault(t *testing.T, db *gorm.DB, table string, column s
 
 func assertStringSlicesEqual(t *testing.T, want []string, got []string) {
 	t.Helper()
-	if len(got) != len(want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("expected versions %v, got %v", want, got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("expected versions %v, got %v", want, got)
-		}
 	}
 }
