@@ -4,6 +4,7 @@ import (
 	"cpa-usage-keeper/internal/repository/dto"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -300,7 +301,7 @@ func TestCleanupRedisUsageInboxRemovesOldProcessedAndFailedRows(t *testing.T) {
 		remainingIDs = append(remainingIDs, row.ID)
 	}
 	expectedIDs := []int64{rows[1].ID, rows[4].ID, rows[5].ID}
-	if fmt.Sprint(remainingIDs) != fmt.Sprint(expectedIDs) {
+	if !slices.Equal(remainingIDs, expectedIDs) {
 		t.Fatalf("expected remaining ids %v, got %v", expectedIDs, remainingIDs)
 	}
 }

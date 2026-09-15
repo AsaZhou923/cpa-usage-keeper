@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,12 +27,9 @@ type sqliteTableColumn struct {
 func TestUsageEventArchiveSchemaMatchesHotColumnsWithoutSecondaryIndexes(t *testing.T) {
 	db := openTestDatabase(t)
 
-	if !db.Migrator().HasTable("usage_events_archive") {
-		t.Fatal("expected fresh database to create usage_events_archive")
-	}
 	hotColumns := loadSQLiteTableColumns(t, db, "usage_events")
 	archiveColumns := loadSQLiteTableColumns(t, db, "usage_events_archive")
-	if fmt.Sprint(hotColumns) != fmt.Sprint(archiveColumns) {
+	if !slices.Equal(hotColumns, archiveColumns) {
 		t.Fatalf("usage event archive schema mismatch:\n hot=%+v\n archive=%+v", hotColumns, archiveColumns)
 	}
 	storageColumnNames := strings.Split(strings.ReplaceAll(entities.UsageEventStorageColumns, " ", ""), ",")
@@ -38,7 +37,7 @@ func TestUsageEventArchiveSchemaMatchesHotColumnsWithoutSecondaryIndexes(t *test
 	for _, column := range hotColumns {
 		hotColumnNames = append(hotColumnNames, column.Name)
 	}
-	if fmt.Sprint(storageColumnNames) != fmt.Sprint(hotColumnNames) {
+	if !slices.Equal(storageColumnNames, hotColumnNames) {
 		t.Fatalf("usage event archive copy columns mismatch:\n copy=%v\n schema=%v", storageColumnNames, hotColumnNames)
 	}
 
@@ -93,11 +92,11 @@ func TestArchiveExpiredUsageEventsPreservesOriginalRowAndHotSequence(t *testing.
 		t.Fatalf("expected one archived usage event, got %+v", result)
 	}
 
-	var archived entities.UsageEventArchive
-	if err := db.Where("id = ?", original.ID).Take(&archived).Error; err != nil {
+	var archived entities.UsageEvent
+	if err := db.Table("usage_events_archive").Where("id = ?", original.ID).Take(&archived).Error; err != nil {
 		t.Fatalf("load archived usage event: %v", err)
 	}
-	if archived.ID != original.ID || archived.EventKey != original.EventKey || archived.RequestID != original.RequestID || archived.TotalTokens != original.TotalTokens {
+	if !reflect.DeepEqual(archived, original) {
 		t.Fatalf("archive row did not preserve original values: original=%+v archive=%+v", original, archived)
 	}
 	var oldHotCount int64
@@ -193,9 +192,7 @@ func TestArchiveExpiredUsageEventsProcessesMoreThanOneBatch(t *testing.T) {
 	}
 }
 
-func loadSQLiteTableColumns(t *testing.T, db interface {
-	Raw(string, ...any) *gorm.DB
-}, table string) []sqliteTableColumn {
+func loadSQLiteTableColumns(t *testing.T, db *gorm.DB, table string) []sqliteTableColumn {
 	t.Helper()
 	var columns []sqliteTableColumn
 	if err := db.Raw("PRAGMA table_info(" + table + ")").Scan(&columns).Error; err != nil {
