@@ -1,7 +1,6 @@
 package migration
 
 import (
-	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -120,10 +119,10 @@ func TestRemoveUsageIdentityQuotaFieldsMigrationDropsUnusedColumnsAndPreservesRo
 	}
 
 	var row struct {
-		Prefix        sql.NullString
-		AccountID     sql.NullString
-		ProjectID     sql.NullString
-		PlanType      sql.NullString
+		Prefix        string
+		AccountID     string
+		ProjectID     string
+		PlanType      string
 		TotalRequests int64
 		SuccessCount  int64
 		FailureCount  int64
@@ -131,7 +130,7 @@ func TestRemoveUsageIdentityQuotaFieldsMigrationDropsUnusedColumnsAndPreservesRo
 	if err := db.Raw(`SELECT prefix, account_id, project_id, plan_type, total_requests, success_count, failure_count FROM usage_identities WHERE identity = ?`, "codex-auth").Scan(&row).Error; err != nil {
 		t.Fatalf("load preserved usage identity row: %v", err)
 	}
-	if row.Prefix.String != "codex-prefix" || row.AccountID.String != "acct_123" || row.ProjectID.String != "project_123" || row.PlanType.String != "team" {
+	if row.Prefix != "codex-prefix" || row.AccountID != "acct_123" || row.ProjectID != "project_123" || row.PlanType != "team" {
 		t.Fatalf("expected metadata to be preserved, got %+v", row)
 	}
 	if row.TotalRequests != 10 || row.SuccessCount != 8 || row.FailureCount != 2 {

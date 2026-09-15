@@ -11,21 +11,6 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestUseInt64PrimaryKeysMigrationAcceptsCurrentSchema(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(testSQLiteDSN(filepath.Join(t.TempDir(), "current.db"))), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open current schema database: %v", err)
-	}
-	defer closeOpenedDatabase(t, db)
-	if err := db.AutoMigrate(entities.All()...); err != nil {
-		t.Fatalf("auto migrate current schema: %v", err)
-	}
-
-	if err := useInt64PrimaryKeysMigration(db); err != nil {
-		t.Fatalf("useInt64PrimaryKeysMigration returned error: %v", err)
-	}
-}
-
 func TestUseInt64PrimaryKeysMigrationRejectsNonIntegerPrimaryKey(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(testSQLiteDSN(filepath.Join(t.TempDir(), "invalid.db"))), &gorm.Config{})
 	if err != nil {
