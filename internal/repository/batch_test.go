@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"reflect"
 	"testing"
 
 	"cpa-usage-keeper/internal/entities"
@@ -27,22 +28,8 @@ type narrowInsertBatchModel struct {
 }
 
 func TestInsertBatchSizeCachesModelColumnCount(t *testing.T) {
-	model := entities.UsageIdentity{}
-	first := insertBatchSize(model)
-	if insertBatchColumnCountCacheEntries() == 0 {
-		t.Fatal("expected insert batch size to cache column count")
+	insertBatchSize(entities.UsageIdentity{})
+	if _, ok := insertBatchColumnCountCache.Load(reflect.TypeFor[entities.UsageIdentity]()); !ok {
+		t.Fatal("expected insert batch size to cache the UsageIdentity column count")
 	}
-	second := insertBatchSize(model)
-	if second != first {
-		t.Fatalf("expected cached batch size %d, got %d", first, second)
-	}
-}
-
-func insertBatchColumnCountCacheEntries() int {
-	count := 0
-	insertBatchColumnCountCache.Range(func(_, _ any) bool {
-		count++
-		return true
-	})
-	return count
 }
