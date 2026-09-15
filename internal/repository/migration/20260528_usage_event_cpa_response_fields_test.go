@@ -39,12 +39,6 @@ func TestAddUsageEventCPAResponseFieldsMigrationAddsColumns(t *testing.T) {
 		t.Fatalf("add usage event CPA response fields should be idempotent: %v", err)
 	}
 
-	for _, column := range []string{"ttft_ms", "service_tier"} {
-		if !db.Migrator().HasColumn("usage_events", column) {
-			t.Fatalf("expected usage_events.%s column to exist", column)
-		}
-	}
-
 	var ttftMS sql.NullInt64
 	var serviceTier string
 	if err := db.Raw(`SELECT ttft_ms, service_tier FROM usage_events WHERE id = ?`, int64(1)).Row().Scan(&ttftMS, &serviceTier); err != nil {

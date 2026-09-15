@@ -38,12 +38,6 @@ func TestModelPricePricingStyleMigrationAddsDefaults(t *testing.T) {
 		t.Fatalf("add pricing style migration should be idempotent: %v", err)
 	}
 
-	for _, column := range []string{"pricing_style", "cache_creation_price_per1_m"} {
-		if !db.Migrator().HasColumn("model_price_settings", column) {
-			t.Fatalf("expected model_price_settings.%s column to exist", column)
-		}
-	}
-
 	var row struct {
 		PricingStyle            string
 		CachePricePer1M         float64

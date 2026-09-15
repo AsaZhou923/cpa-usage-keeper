@@ -38,10 +38,6 @@ func TestAddUsageEventExecutorTypeMigrationAddsColumn(t *testing.T) {
 		t.Fatalf("add usage event executor_type should be idempotent: %v", err)
 	}
 
-	if !db.Migrator().HasColumn("usage_events", "executor_type") {
-		t.Fatal("expected usage_events.executor_type column to exist")
-	}
-
 	var executorType string
 	if err := db.Raw(`SELECT executor_type FROM usage_events WHERE id = ?`, int64(1)).Row().Scan(&executorType); err != nil {
 		t.Fatalf("scan executor_type: %v", err)

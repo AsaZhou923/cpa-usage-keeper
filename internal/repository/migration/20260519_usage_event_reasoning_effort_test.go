@@ -38,10 +38,6 @@ func TestAddUsageEventReasoningEffortMigrationAddsDefaultedColumn(t *testing.T) 
 		t.Fatalf("add usage event reasoning effort should be idempotent: %v", err)
 	}
 
-	if !db.Migrator().HasColumn("usage_events", "reasoning_effort") {
-		t.Fatal("expected usage_events.reasoning_effort column to exist")
-	}
-
 	var reasoningEffort string
 	if err := db.Raw(`SELECT reasoning_effort FROM usage_events WHERE id = ?`, int64(1)).Row().Scan(&reasoningEffort); err != nil {
 		t.Fatalf("scan reasoning effort: %v", err)

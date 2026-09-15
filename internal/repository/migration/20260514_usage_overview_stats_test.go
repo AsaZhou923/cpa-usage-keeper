@@ -2,6 +2,7 @@ package migration
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -22,52 +23,33 @@ func TestCreateUsageOverviewStatsMigrationCreatesTablesAndIndexes(t *testing.T) 
 		t.Fatalf("create usage overview stats should be idempotent: %v", err)
 	}
 
-	for _, table := range []string{
-		"usage_overview_hourly_stats",
-		"usage_overview_daily_stats",
-		"usage_overview_health_stats",
-		"usage_overview_aggregation_checkpoints",
+	rollupColumns := []string{
+		"id", "bucket_start", "api_group_key", "model", "auth_index", "model_alias",
+		"request_count", "success_count", "failure_count", "input_tokens", "output_tokens",
+		"reasoning_tokens", "cached_tokens", "cache_read_tokens", "cache_creation_tokens",
+		"total_tokens", "created_at", "updated_at",
+	}
+	for _, tc := range []struct {
+		table   string
+		columns []string
+	}{
+		{"usage_overview_hourly_stats", rollupColumns},
+		{"usage_overview_daily_stats", rollupColumns},
+		{"usage_overview_health_stats", []string{"id", "bucket_start", "span_seconds", "api_group_key", "success_count", "failure_count", "created_at", "updated_at"}},
+		{"usage_overview_aggregation_checkpoints", []string{"id", "name", "last_aggregated_usage_event_id", "stats_updated_at", "created_at", "updated_at"}},
 	} {
-		if !db.Migrator().HasTable(table) {
-			t.Fatalf("expected table %s to exist", table)
+		columnTypes, err := db.Migrator().ColumnTypes(tc.table)
+		if err != nil {
+			t.Fatalf("load %s columns: %v", tc.table, err)
 		}
-	}
-
-	for _, column := range []string{
-		"id",
-		"bucket_start",
-		"api_group_key",
-		"model",
-		"auth_index",
-		"model_alias",
-		"request_count",
-		"success_count",
-		"failure_count",
-		"input_tokens",
-		"output_tokens",
-		"reasoning_tokens",
-		"cached_tokens",
-		"cache_read_tokens",
-		"cache_creation_tokens",
-		"total_tokens",
-		"created_at",
-		"updated_at",
-	} {
-		if !db.Migrator().HasColumn("usage_overview_hourly_stats", column) {
-			t.Fatalf("expected usage_overview_hourly_stats.%s column to exist", column)
+		var names []string
+		for _, column := range columnTypes {
+			names = append(names, column.Name())
 		}
-		if !db.Migrator().HasColumn("usage_overview_daily_stats", column) {
-			t.Fatalf("expected usage_overview_daily_stats.%s column to exist", column)
-		}
-	}
-	for _, column := range []string{"id", "bucket_start", "span_seconds", "api_group_key", "success_count", "failure_count", "created_at", "updated_at"} {
-		if !db.Migrator().HasColumn("usage_overview_health_stats", column) {
-			t.Fatalf("expected usage_overview_health_stats.%s column to exist", column)
-		}
-	}
-	for _, column := range []string{"id", "name", "last_aggregated_usage_event_id", "stats_updated_at", "created_at", "updated_at"} {
-		if !db.Migrator().HasColumn("usage_overview_aggregation_checkpoints", column) {
-			t.Fatalf("expected usage_overview_aggregation_checkpoints.%s column to exist", column)
+		for _, column := range tc.columns {
+			if !slices.Contains(names, column) {
+				t.Fatalf("expected %s.%s column to exist", tc.table, column)
+			}
 		}
 	}
 
@@ -97,9 +79,5 @@ func TestCreateUsageOverviewStatsMigrationCreatesTablesAndIndexes(t *testing.T) 
 
 func migrationSQLiteIndexExists(t *testing.T, db *gorm.DB, indexName string) bool {
 	t.Helper()
-	var count int64
-	if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?", indexName).Scan(&count).Error; err != nil {
-		t.Fatalf("check sqlite index %s: %v", indexName, err)
-	}
-	return count == 1
+	return sqliteIndexExists(t, db, indexName)
 }

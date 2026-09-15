@@ -44,12 +44,6 @@ func TestAddUsageIdentitySyncMetadataFieldsMigrationAddsNullableColumns(t *testi
 		t.Fatalf("add usage identity sync metadata fields should be idempotent: %v", err)
 	}
 
-	for _, column := range []string{"priority", "disabled", "note"} {
-		if !db.Migrator().HasColumn(&entities.UsageIdentity{}, column) {
-			t.Fatalf("expected usage_identities.%s column to exist", column)
-		}
-	}
-
 	var priority sql.NullInt64
 	var disabled sql.NullBool
 	var note sql.NullString

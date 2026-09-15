@@ -18,17 +18,13 @@ func TestUsageOverviewRollupDimensionsMigrationRebuildsRollupSchema(t *testing.T
 	if err := createUsageOverviewStatsMigration(db); err != nil {
 		t.Fatalf("create overview stats: %v", err)
 	}
-	if err := db.Exec(`DROP INDEX uniq_usage_overview_hourly_stats_bucket_api_model_auth_alias`).Error; err != nil {
-		t.Fatalf("drop fresh hourly unique index: %v", err)
-	}
-	if err := db.Exec(`DROP INDEX uniq_usage_overview_daily_stats_bucket_api_model_auth_alias`).Error; err != nil {
-		t.Fatalf("drop fresh daily unique index: %v", err)
-	}
-	if err := db.Exec(`CREATE UNIQUE INDEX uniq_usage_overview_hourly_stats_bucket_api_model ON usage_overview_hourly_stats (bucket_start, api_group_key, model)`).Error; err != nil {
-		t.Fatalf("create legacy hourly unique index: %v", err)
-	}
-	if err := db.Exec(`CREATE UNIQUE INDEX uniq_usage_overview_daily_stats_bucket_api_model ON usage_overview_daily_stats (bucket_start, api_group_key, model)`).Error; err != nil {
-		t.Fatalf("create legacy daily unique index: %v", err)
+	for _, unit := range []string{"hourly", "daily"} {
+		if err := db.Exec("DROP INDEX uniq_usage_overview_" + unit + "_stats_bucket_api_model_auth_alias").Error; err != nil {
+			t.Fatalf("drop %s unique index: %v", unit, err)
+		}
+		if err := db.Exec("CREATE UNIQUE INDEX uniq_usage_overview_" + unit + "_stats_bucket_api_model ON usage_overview_" + unit + "_stats (bucket_start, api_group_key, model)").Error; err != nil {
+			t.Fatalf("create legacy %s unique index: %v", unit, err)
+		}
 	}
 	seedUsageOverviewRollupTables(t, db)
 
