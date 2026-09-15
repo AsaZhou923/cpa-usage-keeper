@@ -2,6 +2,7 @@ package migration
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,6 +17,10 @@ func TestOpenDatabaseAddsUsagePerformanceIndexes(t *testing.T) {
 	db := openMigratedDatabase(t, dbPath)
 	defer closeOpenedDatabase(t, db)
 
+	var indexNames []string
+	if err := db.Raw("SELECT name FROM sqlite_master WHERE type = 'index'").Scan(&indexNames).Error; err != nil {
+		t.Fatalf("load indexes: %v", err)
+	}
 	for _, indexName := range []string{
 		"idx_usage_events_timestamp_id",
 		"idx_usage_events_api_group_key_timestamp",
@@ -30,7 +35,7 @@ func TestOpenDatabaseAddsUsagePerformanceIndexes(t *testing.T) {
 		"idx_usage_identities_auth_type_name_id",
 		"idx_usage_identities_auth_type_type",
 	} {
-		if !sqliteIndexExists(t, db, indexName) {
+		if !slices.Contains(indexNames, indexName) {
 			t.Fatalf("expected index %s to exist", indexName)
 		}
 	}
@@ -63,7 +68,7 @@ func TestOpenDatabaseAddsUsagePerformanceIndexes(t *testing.T) {
 		"idx_usage_identities_last_aggregated_usage_event_id",
 		"idx_usage_identities_deleted_at",
 	} {
-		if sqliteIndexExists(t, db, indexName) {
+		if slices.Contains(indexNames, indexName) {
 			t.Fatalf("expected redundant index %s to be removed", indexName)
 		}
 	}
@@ -75,37 +80,6 @@ func TestOpenDatabaseAddsUsagePerformanceIndexes(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected performance index migration to be recorded once, got %d", count)
 	}
-}
-
-func TestUsagePerformanceIndexMigrationFailsWhenRequiredSchemaIsMissing(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(testSQLiteDSN(filepath.Join(t.TempDir(), "legacy.db"))), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open incomplete legacy database: %v", err)
-	}
-	defer closeOpenedDatabase(t, db)
-	if err := db.Exec(`CREATE TABLE usage_events (
-		id integer PRIMARY KEY AUTOINCREMENT,
-		event_key text,
-		timestamp datetime
-	)`).Error; err != nil {
-		t.Fatalf("create incomplete usage_events table: %v", err)
-	}
-
-	err = Run(db)
-	if err == nil {
-		t.Fatal("expected migration to fail when required schema is missing")
-	}
-	if !strings.Contains(err.Error(), "missing required schema for performance index migration") {
-		t.Fatalf("expected missing schema error, got %v", err)
-	}
-}
-
-func TestUsagePerformanceIndexesSupportRepresentativeQueryPlans(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "legacy.db")
-	seedPerformanceIndexMigrationDatabase(t, dbPath)
-
-	db := openMigratedDatabase(t, dbPath)
-	defer closeOpenedDatabase(t, db)
 
 	assertQueryPlanUsesIndex(t, db, "idx_usage_events_timestamp_id", `
 		EXPLAIN QUERY PLAN SELECT id FROM usage_events
@@ -156,6 +130,29 @@ func TestUsagePerformanceIndexesSupportRepresentativeQueryPlans(t *testing.T) {
 		WHERE auth_type = ? AND type IN (?, ?)`, 2, "anthropic", "openai")
 }
 
+func TestUsagePerformanceIndexMigrationFailsWhenRequiredSchemaIsMissing(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(testSQLiteDSN(filepath.Join(t.TempDir(), "legacy.db"))), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open incomplete legacy database: %v", err)
+	}
+	defer closeOpenedDatabase(t, db)
+	if err := db.Exec(`CREATE TABLE usage_events (
+		id integer PRIMARY KEY AUTOINCREMENT,
+		event_key text,
+		timestamp datetime
+	)`).Error; err != nil {
+		t.Fatalf("create incomplete usage_events table: %v", err)
+	}
+
+	err = Run(db)
+	if err == nil {
+		t.Fatal("expected migration to fail when required schema is missing")
+	}
+	if !strings.Contains(err.Error(), "missing required schema for performance index migration") {
+		t.Fatalf("expected missing schema error, got %v", err)
+	}
+}
+
 func sqliteIndexExists(t *testing.T, db *gorm.DB, indexName string) bool {
 	t.Helper()
 	var count int64
@@ -168,9 +165,6 @@ func sqliteIndexExists(t *testing.T, db *gorm.DB, indexName string) bool {
 func assertQueryPlanUsesIndex(t *testing.T, db *gorm.DB, indexName string, query string, args ...any) {
 	t.Helper()
 	var rows []struct {
-		ID     int
-		Parent int
-		Unused int
 		Detail string
 	}
 	if err := db.Raw(query, args...).Scan(&rows).Error; err != nil {

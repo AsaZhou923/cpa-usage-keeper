@@ -18,12 +18,8 @@ func TestOpenDatabaseRemovesPrefixGeneratedUsageIdentities(t *testing.T) {
 	defer closeOpenedDatabase(t, db)
 
 	for _, prefix := range []string{"gemini", "claude", "codex", "vertex", "openai"} {
-		var prefixCount int64
-		if err := db.Model(&entities.UsageIdentity{}).Where("auth_type = ? AND identity = ?", entities.UsageIdentityAuthTypeAIProvider, prefix).Count(&prefixCount).Error; err != nil {
-			t.Fatalf("count prefix usage identity %q: %v", prefix, err)
-		}
-		if prefixCount != 0 {
-			t.Fatalf("expected fixed prefix usage identity %q to be removed, got %d", prefix, prefixCount)
+		if count := countUsageIdentities(t, db, entities.UsageIdentityAuthTypeAIProvider, prefix); count != 0 {
+			t.Fatalf("expected fixed prefix %q to be removed, got %d", prefix, count)
 		}
 	}
 
@@ -39,59 +35,6 @@ func TestOpenDatabaseRemovesPrefixGeneratedUsageIdentities(t *testing.T) {
 		if countUsageIdentities(t, db, entities.UsageIdentityAuthTypeAIProvider, identity) != 0 {
 			t.Fatalf("expected unmatched raw provider identity %q to be deleted", identity)
 		}
-	}
-}
-
-func TestOpenDatabaseMigratesAIProviderRawIdentitiesToAuthIndex(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "ai-provider-auth-index.db")
-	seedAIProviderAuthIndexMigrationDatabase(t, dbPath)
-
-	db := openMigratedDatabase(t, dbPath)
-	defer closeOpenedDatabase(t, db)
-
-	if countUsageIdentities(t, db, entities.UsageIdentityAuthTypeAIProvider, "sk-claude-old") != 0 {
-		t.Fatal("expected raw API key identity to be removed after auth-index migration")
-	}
-	migrated := loadUsageIdentity(t, db, entities.UsageIdentityAuthTypeAIProvider, "authidx-claude-1")
-	if migrated.LookupKey != "sk-claude-old" || migrated.Name != "Claude" || migrated.Type != "claude" || migrated.Provider != "Claude" {
-		t.Fatalf("unexpected migrated AI provider identity metadata: %+v", migrated)
-	}
-	if migrated.TotalRequests != 2 || migrated.SuccessCount != 1 || migrated.FailureCount != 1 || migrated.InputTokens != 12 || migrated.OutputTokens != 14 || migrated.ReasoningTokens != 3 || migrated.CachedTokens != 4 || migrated.TotalTokens != 33 || migrated.LastAggregatedUsageEventID != 2 {
-		t.Fatalf("expected migrated identity stats to be rebuilt by auth_index, got %+v", migrated)
-	}
-	if migrated.FirstUsedAt == nil || !migrated.FirstUsedAt.Equal(time.Date(2026, 5, 5, 8, 0, 0, 0, time.UTC)) {
-		t.Fatalf("unexpected first_used_at after migration: %+v", migrated.FirstUsedAt)
-	}
-	if migrated.LastUsedAt == nil || !migrated.LastUsedAt.Equal(time.Date(2026, 5, 5, 9, 0, 0, 0, time.UTC)) {
-		t.Fatalf("unexpected last_used_at after migration: %+v", migrated.LastUsedAt)
-	}
-
-	authFile := loadUsageIdentity(t, db, entities.UsageIdentityAuthTypeAuthFile, "auth-file-index")
-	if authFile.Identity != "auth-file-index" || authFile.AuthTypeName != "oauth" {
-		t.Fatalf("expected auth file identity to remain untouched, got %+v", authFile)
-	}
-	nonAPIKey := loadUsageIdentity(t, db, entities.UsageIdentityAuthTypeAIProvider, "non-apikey-identity")
-	if nonAPIKey.AuthTypeName != "oauth" {
-		t.Fatalf("expected non-apikey usage identity not to be converted by auth-index migration, got %+v", nonAPIKey)
-	}
-}
-
-func TestOpenDatabaseMergesAIProviderRawIdentityIntoExistingAuthIndex(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "ai-provider-auth-index-merge.db")
-	seedAIProviderAuthIndexMigrationDatabase(t, dbPath)
-
-	db := openMigratedDatabase(t, dbPath)
-	defer closeOpenedDatabase(t, db)
-
-	if countUsageIdentities(t, db, entities.UsageIdentityAuthTypeAIProvider, "sk-duplicate") != 0 {
-		t.Fatal("expected duplicate raw API key identity to be physically deleted")
-	}
-	merged := loadUsageIdentity(t, db, entities.UsageIdentityAuthTypeAIProvider, "authidx-existing")
-	if merged.LookupKey != "sk-duplicate" || merged.Name != "Gemini" || merged.Type != "gemini" || merged.Provider != "Gemini" {
-		t.Fatalf("expected existing auth-index row to be filled from old raw row, got %+v", merged)
-	}
-	if merged.TotalRequests != 1 || merged.TotalTokens != 21 || merged.LastAggregatedUsageEventID != 3 {
-		t.Fatalf("expected merged row stats to be rebuilt by auth_index, got %+v", merged)
 	}
 }
 
@@ -136,51 +79,76 @@ func TestOpenDatabaseKeepsNewestAIProviderRawIdentityWhenMultipleRowsMapToSameAu
 	}
 }
 
-func TestOpenDatabaseDeletesAIProviderRawIdentitiesWithoutUniqueProviderMatch(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "ai-provider-auth-index-delete.db")
+func TestOpenDatabaseMigratesAIProviderRawIdentitiesIdempotently(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ai-provider-auth-index.db")
 	seedAIProviderAuthIndexMigrationDatabase(t, dbPath)
+	for _, stage := range []string{"initial migration", "reopen"} {
+		t.Run(stage, func(t *testing.T) {
+			db := openMigratedDatabase(t, dbPath)
+			defer closeOpenedDatabase(t, db)
 
-	db := openMigratedDatabase(t, dbPath)
-	defer closeOpenedDatabase(t, db)
+			if countUsageIdentities(t, db, entities.UsageIdentityAuthTypeAIProvider, "sk-claude-old") != 0 {
+				t.Fatal("expected raw API key identity to be removed after auth-index migration")
+			}
+			migrated := loadUsageIdentity(t, db, entities.UsageIdentityAuthTypeAIProvider, "authidx-claude-1")
+			if migrated.LookupKey != "sk-claude-old" || migrated.Name != "Claude" || migrated.Type != "claude" || migrated.Provider != "Claude" {
+				t.Fatalf("unexpected migrated AI provider identity metadata: %+v", migrated)
+			}
+			if migrated.TotalRequests != 2 || migrated.SuccessCount != 1 || migrated.FailureCount != 1 || migrated.InputTokens != 12 || migrated.OutputTokens != 14 || migrated.ReasoningTokens != 3 || migrated.CachedTokens != 4 || migrated.TotalTokens != 33 || migrated.LastAggregatedUsageEventID != 2 {
+				t.Fatalf("expected migrated identity stats to be rebuilt by auth_index, got %+v", migrated)
+			}
+			if migrated.FirstUsedAt == nil || !migrated.FirstUsedAt.Equal(time.Date(2026, 5, 5, 8, 0, 0, 0, time.UTC)) {
+				t.Fatalf("unexpected first_used_at after migration: %+v", migrated.FirstUsedAt)
+			}
+			if migrated.LastUsedAt == nil || !migrated.LastUsedAt.Equal(time.Date(2026, 5, 5, 9, 0, 0, 0, time.UTC)) {
+				t.Fatalf("unexpected last_used_at after migration: %+v", migrated.LastUsedAt)
+			}
 
-	for _, identity := range []string{"sk-ambiguous", "sk-provider-mismatch", "sk-no-events"} {
-		if countUsageIdentities(t, db, entities.UsageIdentityAuthTypeAIProvider, identity) != 0 {
-			t.Fatalf("expected raw identity %q to be physically deleted", identity)
-		}
-	}
-	for _, identity := range []string{"authidx-ambiguous-a", "authidx-ambiguous-b", "authidx-wrong-provider"} {
-		if countUsageIdentities(t, db, entities.UsageIdentityAuthTypeAIProvider, identity) != 0 {
-			t.Fatalf("expected auth-index identity %q not to be created from ambiguous or mismatched events", identity)
-		}
-	}
-}
+			authFile := loadUsageIdentity(t, db, entities.UsageIdentityAuthTypeAuthFile, "auth-file-index")
+			if authFile.Identity != "auth-file-index" || authFile.AuthTypeName != "oauth" {
+				t.Fatalf("expected auth file identity to remain untouched, got %+v", authFile)
+			}
+			nonAPIKey := loadUsageIdentity(t, db, entities.UsageIdentityAuthTypeAIProvider, "non-apikey-identity")
+			if nonAPIKey.AuthTypeName != "oauth" {
+				t.Fatalf("expected non-apikey usage identity not to be converted by auth-index migration, got %+v", nonAPIKey)
+			}
 
-func TestOpenDatabaseAIProviderAuthIndexMigrationIsIdempotent(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "ai-provider-auth-index-idempotent.db")
-	seedAIProviderAuthIndexMigrationDatabase(t, dbPath)
+			if countUsageIdentities(t, db, entities.UsageIdentityAuthTypeAIProvider, "sk-duplicate") != 0 {
+				t.Fatal("expected duplicate raw API key identity to be physically deleted")
+			}
+			merged := loadUsageIdentity(t, db, entities.UsageIdentityAuthTypeAIProvider, "authidx-existing")
+			if merged.LookupKey != "sk-duplicate" || merged.Name != "Gemini" || merged.Type != "gemini" || merged.Provider != "Gemini" {
+				t.Fatalf("expected existing auth-index row to be filled from old raw row, got %+v", merged)
+			}
+			if merged.TotalRequests != 1 || merged.TotalTokens != 21 || merged.LastAggregatedUsageEventID != 3 {
+				t.Fatalf("expected merged row stats to be rebuilt by auth_index, got %+v", merged)
+			}
 
-	db := openMigratedDatabase(t, dbPath)
-	first := loadUsageIdentity(t, db, entities.UsageIdentityAuthTypeAIProvider, "authidx-claude-1")
-	closeOpenedDatabase(t, db)
+			for _, identity := range []string{"sk-ambiguous", "sk-provider-mismatch", "sk-no-events"} {
+				if countUsageIdentities(t, db, entities.UsageIdentityAuthTypeAIProvider, identity) != 0 {
+					t.Fatalf("expected raw identity %q to be physically deleted", identity)
+				}
+			}
+			for _, identity := range []string{"authidx-ambiguous-a", "authidx-ambiguous-b", "authidx-wrong-provider"} {
+				if countUsageIdentities(t, db, entities.UsageIdentityAuthTypeAIProvider, identity) != 0 {
+					t.Fatalf("expected auth-index identity %q not to be created from ambiguous or mismatched events", identity)
+				}
+			}
 
-	db = openMigratedDatabase(t, dbPath)
-	defer closeOpenedDatabase(t, db)
-	second := loadUsageIdentity(t, db, entities.UsageIdentityAuthTypeAIProvider, "authidx-claude-1")
-	if second.TotalRequests != first.TotalRequests || second.TotalTokens != first.TotalTokens || second.LastAggregatedUsageEventID != first.LastAggregatedUsageEventID {
-		t.Fatalf("expected idempotent stats, first %+v second %+v", first, second)
-	}
-	var migrationCount int64
-	if err := db.Table("schema_migrations").Where("version = ?", "20260505_migrate_ai_provider_identities_to_auth_index").Count(&migrationCount).Error; err != nil {
-		t.Fatalf("count auth-index migration: %v", err)
-	}
-	if migrationCount != 1 {
-		t.Fatalf("expected auth-index migration to be recorded once, got %d", migrationCount)
-	}
-	var identityCount int64
-	if err := db.Model(&entities.UsageIdentity{}).Count(&identityCount).Error; err != nil {
-		t.Fatalf("count usage identities after reopen: %v", err)
-	}
-	if identityCount != 4 {
-		t.Fatalf("expected stable usage identity count after reopen, got %d", identityCount)
+			var migrationCount int64
+			if err := db.Table("schema_migrations").Where("version = ?", "20260505_migrate_ai_provider_identities_to_auth_index").Count(&migrationCount).Error; err != nil {
+				t.Fatalf("count auth-index migration: %v", err)
+			}
+			if migrationCount != 1 {
+				t.Fatalf("expected auth-index migration to be recorded once, got %d", migrationCount)
+			}
+			var identityCount int64
+			if err := db.Model(&entities.UsageIdentity{}).Count(&identityCount).Error; err != nil {
+				t.Fatalf("count usage identities after reopen: %v", err)
+			}
+			if identityCount != 4 {
+				t.Fatalf("expected stable usage identity count after reopen, got %d", identityCount)
+			}
+		})
 	}
 }
