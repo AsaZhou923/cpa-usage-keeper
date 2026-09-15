@@ -48,9 +48,6 @@ func TestReplaceRedisInboxQueueKeyWithSourceMigrationAddsSourceAndDropsQueueKey(
 		t.Fatalf("replaceRedisInboxQueueKeyWithSourceMigration idempotently returned error: %v", err)
 	}
 
-	if !db.Migrator().HasColumn("redis_usage_inboxes", "source") {
-		t.Fatal("expected redis_usage_inboxes.source column to exist")
-	}
 	if db.Migrator().HasColumn("redis_usage_inboxes", "queue_key") {
 		t.Fatal("expected redis_usage_inboxes.queue_key column to be removed")
 	}

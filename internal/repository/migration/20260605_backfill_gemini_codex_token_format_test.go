@@ -22,15 +22,13 @@ func TestBackfillGeminiCodexTokenFormatMigrationNormalizesEventsAndAggregates(t 
 	db := openGeminiCodexTokenBackfillTestDatabase(t)
 	seedGeminiCodexTokenBackfillRows(t, db)
 
-	if err := backfillGeminiCodexTokenFormatMigration(db); err != nil {
-		t.Fatalf("backfill Gemini Codex token format: %v", err)
+	// 首次修复和重复执行都须得到同一组明确预期值。
+	for range 2 {
+		if err := backfillGeminiCodexTokenFormatMigration(db); err != nil {
+			t.Fatalf("backfill tokens: %v", err)
+		}
+		assertGeminiCodexTokenBackfillRows(t, db)
 	}
-	assertGeminiCodexTokenBackfillRows(t, db)
-
-	if err := backfillGeminiCodexTokenFormatMigration(db); err != nil {
-		t.Fatalf("backfill Gemini Codex token format should be idempotent: %v", err)
-	}
-	assertGeminiCodexTokenBackfillRows(t, db)
 }
 
 func openGeminiCodexTokenBackfillTestDatabase(t *testing.T) *gorm.DB {
@@ -83,7 +81,7 @@ func seedGeminiCodexTokenBackfillRows(t *testing.T, db *gorm.DB) {
 	}).Error; err != nil {
 		t.Fatalf("seed usage events: %v", err)
 	}
-	if err := db.Create([]entities.UsageOverviewHourlyStat{
+	hourly := []entities.UsageOverviewHourlyStat{
 		{ID: 1, BucketStart: time.Date(2026, 6, 1, 10, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gemini-pro", AuthIndex: "gemini-auth", ModelAlias: "", OutputTokens: 17, ReasoningTokens: 6, TotalTokens: 42, CreatedAt: now, UpdatedAt: now},
 		{ID: 2, BucketStart: time.Date(2026, 6, 1, 11, 0, 0, 0, now.Location()), APIGroupKey: "oauth-key", Model: "gemini-pro", AuthIndex: "gemini-cli-auth", ModelAlias: "", OutputTokens: 2, ReasoningTokens: 1, TotalTokens: 8, CreatedAt: now, UpdatedAt: now},
 		{ID: 3, BucketStart: time.Date(2026, 6, 1, 10, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gpt-5", AuthIndex: "openai-auth", ModelAlias: "", OutputTokens: 7, ReasoningTokens: 3, TotalTokens: 21, CreatedAt: now, UpdatedAt: now},
@@ -92,21 +90,19 @@ func seedGeminiCodexTokenBackfillRows(t *testing.T, db *gorm.DB) {
 		{ID: 6, BucketStart: time.Date(2026, 6, 1, 10, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gemini-pro", AuthIndex: "dirty-gemini-auth", ModelAlias: "", OutputTokens: 5, ReasoningTokens: 4, TotalTokens: 21, CreatedAt: now, UpdatedAt: now},
 		{ID: 7, BucketStart: time.Date(2026, 6, 1, 10, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gemini-pro", AuthIndex: "unknown-auth-gemini", ModelAlias: "", OutputTokens: 5, ReasoningTokens: 4, TotalTokens: 21, CreatedAt: now, UpdatedAt: now},
 		{ID: 8, BucketStart: time.Date(2026, 6, 1, 10, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gemini-pro", AuthIndex: "dirty-overview-auth", ModelAlias: "", OutputTokens: 5, ReasoningTokens: 4, TotalTokens: 21, CreatedAt: now, UpdatedAt: now},
-	}).Error; err != nil {
+	}
+	if err := db.Create(&hourly).Error; err != nil {
 		t.Fatalf("seed hourly stats: %v", err)
 	}
-	if err := db.Create([]entities.UsageOverviewDailyStat{
-		{ID: 1, BucketStart: time.Date(2026, 6, 1, 0, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gemini-pro", AuthIndex: "gemini-auth", ModelAlias: "", OutputTokens: 17, ReasoningTokens: 6, TotalTokens: 42, CreatedAt: now, UpdatedAt: now},
-		{ID: 2, BucketStart: time.Date(2026, 6, 1, 0, 0, 0, 0, now.Location()), APIGroupKey: "oauth-key", Model: "gemini-pro", AuthIndex: "gemini-cli-auth", ModelAlias: "", OutputTokens: 2, ReasoningTokens: 1, TotalTokens: 8, CreatedAt: now, UpdatedAt: now},
-		{ID: 3, BucketStart: time.Date(2026, 6, 1, 0, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gpt-5", AuthIndex: "openai-auth", ModelAlias: "", OutputTokens: 7, ReasoningTokens: 3, TotalTokens: 21, CreatedAt: now, UpdatedAt: now},
-		{ID: 4, BucketStart: time.Date(2026, 6, 1, 0, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gemini-pro", AuthIndex: "missing-gemini-auth", ModelAlias: "", OutputTokens: 5, ReasoningTokens: 4, TotalTokens: 21, CreatedAt: now, UpdatedAt: now},
-		{ID: 5, BucketStart: time.Date(2026, 6, 1, 0, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gpt-5", AuthIndex: "missing-openai-auth", ModelAlias: "", OutputTokens: 5, ReasoningTokens: 4, TotalTokens: 21, CreatedAt: now, UpdatedAt: now},
-		{ID: 6, BucketStart: time.Date(2026, 6, 1, 0, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gemini-pro", AuthIndex: "dirty-gemini-auth", ModelAlias: "", OutputTokens: 5, ReasoningTokens: 4, TotalTokens: 21, CreatedAt: now, UpdatedAt: now},
-		{ID: 7, BucketStart: time.Date(2026, 6, 1, 0, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gemini-pro", AuthIndex: "unknown-auth-gemini", ModelAlias: "", OutputTokens: 5, ReasoningTokens: 4, TotalTokens: 21, CreatedAt: now, UpdatedAt: now},
-		{ID: 8, BucketStart: time.Date(2026, 6, 1, 0, 0, 0, 0, now.Location()), APIGroupKey: "api-key", Model: "gemini-pro", AuthIndex: "dirty-overview-auth", ModelAlias: "", OutputTokens: 5, ReasoningTokens: 4, TotalTokens: 21, CreatedAt: now, UpdatedAt: now},
-	}).Error; err != nil {
+	daily := make([]entities.UsageOverviewDailyStat, len(hourly))
+	for i, row := range hourly {
+		daily[i] = entities.UsageOverviewDailyStat(row)
+		daily[i].BucketStart = time.Date(2026, 6, 1, 0, 0, 0, 0, now.Location())
+	}
+	if err := db.Create(&daily).Error; err != nil {
 		t.Fatalf("seed daily stats: %v", err)
 	}
+
 	if err := db.Create(&entities.UsageOverviewAggregationCheckpoint{ID: 1, Name: "overview", LastAggregatedUsageEventID: 12, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatalf("seed overview checkpoint: %v", err)
 	}
@@ -127,31 +123,25 @@ func assertGeminiCodexTokenBackfillRows(t *testing.T, db *gorm.DB) {
 	assertGeminiBackfillEventTokens(t, db, "gemini-provider-unknown-auth-type", 9, 4, 21)
 	assertGeminiBackfillEventTokens(t, db, "gemini-dirty-overview-key", 9, 4, 21)
 
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_hourly_stats", 1, 20, 6, 42)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_hourly_stats", 2, 3, 1, 8)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_hourly_stats", 3, 7, 3, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_hourly_stats", 4, 9, 4, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_hourly_stats", 5, 5, 4, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_hourly_stats", 6, 5, 4, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_hourly_stats", 7, 9, 4, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_hourly_stats", 8, 5, 4, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_daily_stats", 1, 20, 6, 42)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_daily_stats", 2, 3, 1, 8)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_daily_stats", 3, 7, 3, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_daily_stats", 4, 9, 4, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_daily_stats", 5, 5, 4, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_daily_stats", 6, 5, 4, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_daily_stats", 7, 9, 4, 21)
-	assertGeminiBackfillAggregateTokens(t, db, "usage_overview_daily_stats", 8, 5, 4, 21)
+	for _, table := range []string{"usage_overview_hourly_stats", "usage_overview_daily_stats"} {
+		assertGeminiBackfillAggregateTokens(t, db, table, 1, 20, 6, 42)
+		assertGeminiBackfillAggregateTokens(t, db, table, 2, 3, 1, 8)
+		assertGeminiBackfillAggregateTokens(t, db, table, 3, 7, 3, 21)
+		assertGeminiBackfillAggregateTokens(t, db, table, 4, 9, 4, 21)
+		assertGeminiBackfillAggregateTokens(t, db, table, 5, 5, 4, 21)
+		assertGeminiBackfillAggregateTokens(t, db, table, 6, 5, 4, 21)
+		assertGeminiBackfillAggregateTokens(t, db, table, 7, 9, 4, 21)
+		assertGeminiBackfillAggregateTokens(t, db, table, 8, 5, 4, 21)
+	}
 	assertGeminiBackfillAggregateCount(t, db, "usage_overview_hourly_stats", 8)
 	assertGeminiBackfillAggregateCount(t, db, "usage_overview_daily_stats", 8)
 
-	assertGeminiBackfillIdentityTokens(t, db, 1, 20, 6, 42)
-	assertGeminiBackfillIdentityTokens(t, db, 2, 3, 1, 8)
-	assertGeminiBackfillIdentityTokens(t, db, 3, 7, 3, 21)
-	assertGeminiBackfillIdentityTokens(t, db, 4, 4, 2, 16)
-	assertGeminiBackfillIdentityTokens(t, db, 5, 5, 4, 21)
-	assertGeminiBackfillIdentityCount(t, db, 5)
+	assertGeminiBackfillAggregateTokens(t, db, "usage_identities", 1, 20, 6, 42)
+	assertGeminiBackfillAggregateTokens(t, db, "usage_identities", 2, 3, 1, 8)
+	assertGeminiBackfillAggregateTokens(t, db, "usage_identities", 3, 7, 3, 21)
+	assertGeminiBackfillAggregateTokens(t, db, "usage_identities", 4, 4, 2, 16)
+	assertGeminiBackfillAggregateTokens(t, db, "usage_identities", 5, 5, 4, 21)
+	assertGeminiBackfillAggregateCount(t, db, "usage_identities", 5)
 }
 
 func assertGeminiBackfillEventTokens(t *testing.T, db *gorm.DB, eventKey string, output, reasoning, total int64) {
@@ -192,31 +182,5 @@ func assertGeminiBackfillAggregateCount(t *testing.T, db *gorm.DB, table string,
 	}
 	if count != expected {
 		t.Fatalf("expected %d aggregate rows in %s, got %d", expected, table, count)
-	}
-}
-
-func assertGeminiBackfillIdentityTokens(t *testing.T, db *gorm.DB, id, output, reasoning, total int64) {
-	t.Helper()
-	var row struct {
-		OutputTokens    int64
-		ReasoningTokens int64
-		TotalTokens     int64
-	}
-	if err := db.Model(&entities.UsageIdentity{}).Select("output_tokens", "reasoning_tokens", "total_tokens").Where("id = ?", id).Scan(&row).Error; err != nil {
-		t.Fatalf("load identity %d: %v", id, err)
-	}
-	if row.OutputTokens != output || row.ReasoningTokens != reasoning || row.TotalTokens != total {
-		t.Fatalf("unexpected identity %d tokens: %+v", id, row)
-	}
-}
-
-func assertGeminiBackfillIdentityCount(t *testing.T, db *gorm.DB, expected int64) {
-	t.Helper()
-	var count int64
-	if err := db.Model(&entities.UsageIdentity{}).Count(&count).Error; err != nil {
-		t.Fatalf("count usage identities: %v", err)
-	}
-	if count != expected {
-		t.Fatalf("expected %d usage identities, got %d", expected, count)
 	}
 }

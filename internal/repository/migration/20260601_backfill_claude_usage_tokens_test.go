@@ -12,16 +12,13 @@ func TestBackfillClaudeUsageTokensMigrationNormalizesEventsAndAggregates(t *test
 	db := openClaudeUsageTokenBackfillTestDatabase(t)
 	seedClaudeUsageTokenBackfillRows(t, db)
 
-	if err := backfillClaudeUsageTokensMigration(db); err != nil {
-		t.Fatalf("backfill Claude usage tokens: %v", err)
+	// 首次修复和重复执行都须得到同一组明确预期值。
+	for range 2 {
+		if err := backfillClaudeUsageTokensMigration(db); err != nil {
+			t.Fatalf("backfill tokens: %v", err)
+		}
+		assertClaudeUsageTokenBackfillRows(t, db)
 	}
-	assertClaudeUsageTokenBackfillRows(t, db)
-
-	// 迁移版本正常只执行一次；函数本身也保持幂等，避免手动重跑或测试复用时重复加 token。
-	if err := backfillClaudeUsageTokensMigration(db); err != nil {
-		t.Fatalf("backfill Claude usage tokens should be idempotent: %v", err)
-	}
-	assertClaudeUsageTokenBackfillRows(t, db)
 }
 
 func openClaudeUsageTokenBackfillTestDatabase(t *testing.T) *gorm.DB {
@@ -159,12 +156,11 @@ func assertClaudeUsageTokenBackfillRows(t *testing.T, db *gorm.DB) {
 	assertEventTokens(t, db, "apikey-zero-total-read-only", 85, 20, 0, 15, 15, 0, 105)
 	assertEventTokens(t, db, "apikey-zero-total-creation-only", 90, 20, 0, 0, 0, 10, 110)
 
-	assertAggregateTokens(t, db, "usage_overview_hourly_stats", 1, 390, 90, 5, 60, 60, 30, 485)
-	assertAggregateTokens(t, db, "usage_overview_hourly_stats", 2, 215, 50, 0, 15, 15, 0, 265)
-	assertAggregateTokens(t, db, "usage_overview_hourly_stats", 3, 100, 30, 0, 30, 20, 10, 160)
-	assertAggregateTokens(t, db, "usage_overview_daily_stats", 1, 390, 90, 5, 60, 60, 30, 485)
-	assertAggregateTokens(t, db, "usage_overview_daily_stats", 2, 215, 50, 0, 15, 15, 0, 265)
-	assertAggregateTokens(t, db, "usage_overview_daily_stats", 3, 100, 30, 0, 30, 20, 10, 160)
+	for _, table := range []string{"usage_overview_hourly_stats", "usage_overview_daily_stats"} {
+		assertAggregateTokens(t, db, table, 1, 390, 90, 5, 60, 60, 30, 485)
+		assertAggregateTokens(t, db, table, 2, 215, 50, 0, 15, 15, 0, 265)
+		assertAggregateTokens(t, db, table, 3, 100, 30, 0, 30, 20, 10, 160)
+	}
 
 	assertIdentityTokens(t, db, 1, 390, 90, 5, 60, 485)
 	assertIdentityTokens(t, db, 2, 215, 50, 0, 15, 265)
