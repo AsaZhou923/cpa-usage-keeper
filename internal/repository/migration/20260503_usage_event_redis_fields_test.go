@@ -9,59 +9,26 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestOpenDatabaseBackfillsUsageEventRedisFieldsByUsageEventKey(t *testing.T) {
+func TestOpenDatabaseBackfillsUsageEventRedisFields(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	seedLegacyRedisUsageTables(t, dbPath)
-
 	db := openMigratedDatabase(t, dbPath)
 	defer closeOpenedDatabase(t, db)
-
-	var event entities.UsageEvent
-	if err := db.Where("event_key = ?", "legacy-canonical-key").First(&event).Error; err != nil {
-		t.Fatalf("load usage event: %v", err)
-	}
-	if event.Provider != "claude" || event.Endpoint != "/v1/messages" || event.AuthType != "apikey" || event.RequestID != "req-from-raw" {
-		t.Fatalf("expected backfill by usage_event_key, got %+v", event)
-	}
-}
-
-func TestOpenDatabaseBackfillsUsageEventRedisFieldsByRawRequestIDFallback(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "legacy.db")
-	seedLegacyRedisUsageTables(t, dbPath)
-
-	db := openMigratedDatabase(t, dbPath)
-	defer closeOpenedDatabase(t, db)
-
-	var event entities.UsageEvent
-	if err := db.Where("event_key = ?", "req-fallback").First(&event).Error; err != nil {
-		t.Fatalf("load fallback usage event: %v", err)
-	}
-	if event.Provider != "fallback-provider" || event.Endpoint != "/fallback" || event.AuthType != "oauth" || event.RequestID != "req-fallback" {
-		t.Fatalf("expected fallback backfill by raw request_id, got %+v", event)
-	}
-}
-
-func TestOpenDatabaseBackfillsUsageEventRedisFieldsByRawRequestIDWhenUsageEventKeyIsBlank(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "legacy.db")
-	seedLegacyRedisUsageTables(t, dbPath)
-
-	db := openMigratedDatabase(t, dbPath)
-	defer closeOpenedDatabase(t, db)
-
-	var event entities.UsageEvent
-	if err := db.Where("event_key = ?", "req-blank-fallback").First(&event).Error; err != nil {
-		t.Fatalf("load blank fallback usage event: %v", err)
-	}
-	if event.Provider != "blank-provider" || event.Endpoint != "/blank" || event.AuthType != "oauth" || event.RequestID != "req-blank-fallback" {
-		t.Fatalf("expected blank usage_event_key to fall back by raw request_id, got %+v", event)
-	}
-
-	var emptyEvent entities.UsageEvent
-	if err := db.Where("event_key = ?", "").First(&emptyEvent).Error; err != nil {
-		t.Fatalf("load empty-key usage event: %v", err)
-	}
-	if emptyEvent.Provider != "" || emptyEvent.Endpoint != "" || emptyEvent.AuthType != "" || emptyEvent.RequestID != "" {
-		t.Fatalf("expected empty-key usage event to remain unchanged, got %+v", emptyEvent)
+	for _, tc := range []struct{ name, eventKey, provider, endpoint, authType, requestID string }{
+		{"canonical key", "legacy-canonical-key", "claude", "/v1/messages", "apikey", "req-from-raw"},
+		{"request ID fallback", "req-fallback", "fallback-provider", "/fallback", "oauth", "req-fallback"},
+		{"blank usage key fallback", "req-blank-fallback", "blank-provider", "/blank", "oauth", "req-blank-fallback"},
+		{name: "empty event key remains unchanged"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var event entities.UsageEvent
+			if err := db.Where("event_key = ?", tc.eventKey).First(&event).Error; err != nil {
+				t.Fatalf("load usage event: %v", err)
+			}
+			if event.Provider != tc.provider || event.Endpoint != tc.endpoint || event.AuthType != tc.authType || event.RequestID != tc.requestID {
+				t.Fatalf("unexpected backfill for %q: %+v", tc.eventKey, event)
+			}
+		})
 	}
 }
 
