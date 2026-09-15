@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -61,59 +62,26 @@ func TestPingOnlyAvailableForDevBuildsOrExplicitDebugMode(t *testing.T) {
 	previousVersion := version.Version
 	t.Cleanup(func() { version.Version = previousVersion })
 
-	for _, testCase := range []struct {
-		name       string
-		appVersion string
-		ginMode    string
-		wantStatus int
+	for _, tc := range []struct {
+		name, appVersion, ginMode, basePath, path string
+		want                                      int
 	}{
-		{name: "release build hides ping by default", appVersion: "v1.2.3", wantStatus: http.StatusNotFound},
-		{name: "dev build exposes ping", appVersion: "dev", wantStatus: http.StatusOK},
-		{name: "explicit gin debug exposes ping", appVersion: "v1.2.3", ginMode: gin.DebugMode, wantStatus: http.StatusOK},
+		{"release root", "v1.2.3", "", "", "/api/v1/ping", http.StatusNotFound},
+		{"dev root", "dev", "", "", "/api/v1/ping", http.StatusOK},
+		{"debug root", "v1.2.3", gin.DebugMode, "", "/api/v1/ping", http.StatusOK},
+		{"release subpath", "v1.2.3", "", "/cpa", "/cpa/api/v1/ping", http.StatusNotFound},
+		{"dev subpath", "dev", "", "/cpa", "/cpa/api/v1/ping", http.StatusOK},
+		{"debug subpath", "v1.2.3", gin.DebugMode, "/cpa", "/cpa/api/v1/ping", http.StatusOK},
+		{"unprefixed subpath", "dev", "", "/cpa", "/api/v1/ping", http.StatusNotFound},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			version.Version = testCase.appVersion
-			t.Setenv("GIN_MODE", testCase.ginMode)
-
-			router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "")
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/ping", nil)
+		t.Run(tc.name, func(t *testing.T) {
+			version.Version = tc.appVersion
+			t.Setenv("GIN_MODE", tc.ginMode)
+			router := NewRouter(nil, nil, nil, nil, AuthConfig{BasePath: tc.basePath}, nil, tc.basePath)
 			resp := httptest.NewRecorder()
-			router.ServeHTTP(resp, req)
-
-			if resp.Code != testCase.wantStatus {
-				t.Fatalf("expected status %d, got %d body=%s", testCase.wantStatus, resp.Code, resp.Body.String())
-			}
-		})
-	}
-}
-
-func TestSubpathPingOnlyAvailableForDevBuildsOrExplicitDebugMode(t *testing.T) {
-	previousVersion := version.Version
-	t.Cleanup(func() { version.Version = previousVersion })
-
-	for _, testCase := range []struct {
-		name       string
-		appVersion string
-		ginMode    string
-		path       string
-		wantStatus int
-	}{
-		{name: "release build hides prefixed ping", appVersion: "v1.2.3", path: "/cpa/api/v1/ping", wantStatus: http.StatusNotFound},
-		{name: "dev build exposes prefixed ping", appVersion: "dev", path: "/cpa/api/v1/ping", wantStatus: http.StatusOK},
-		{name: "explicit gin debug exposes prefixed ping", appVersion: "v1.2.3", ginMode: gin.DebugMode, path: "/cpa/api/v1/ping", wantStatus: http.StatusOK},
-		{name: "dev build does not expose unprefixed ping", appVersion: "dev", path: "/api/v1/ping", wantStatus: http.StatusNotFound},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			version.Version = testCase.appVersion
-			t.Setenv("GIN_MODE", testCase.ginMode)
-
-			router := NewRouter(nil, nil, nil, nil, AuthConfig{BasePath: "/cpa"}, nil, "/cpa")
-			req := httptest.NewRequest(http.MethodGet, testCase.path, nil)
-			resp := httptest.NewRecorder()
-			router.ServeHTTP(resp, req)
-
-			if resp.Code != testCase.wantStatus {
-				t.Fatalf("expected status %d, got %d body=%s", testCase.wantStatus, resp.Code, resp.Body.String())
+			router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if resp.Code != tc.want {
+				t.Fatalf("expected status %d, got %d body=%s", tc.want, resp.Code, resp.Body.String())
 			}
 		})
 	}
@@ -229,103 +197,47 @@ func TestVersionReturnsCurrentVersionAndUpdateCheckFlag(t *testing.T) {
 	}
 }
 
-func TestVersionRequiresAuthWhenAuthEnabled(t *testing.T) {
-	sessions := auth.NewSessionManager(time.Hour)
-	config := AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour}
-	router := NewRouter(nil, nil, nil, nil, config, NewAuthHandler(config, sessions), "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusUnauthorized {
-		t.Fatalf("expected status 401, got %d body=%s", resp.Code, resp.Body.String())
-	}
-}
-
-func TestVersionAllowsAdminAndAPIKeyViewerSessions(t *testing.T) {
-	previousVersion := version.Version
-	t.Cleanup(func() { version.Version = previousVersion })
-	version.Version = "v1.2.3"
-
-	for _, testCase := range []struct {
-		name        string
-		createToken func(*auth.SessionManager) (string, error)
-	}{
-		{
-			name: "admin",
-			createToken: func(sessions *auth.SessionManager) (string, error) {
-				token, _, err := sessions.Create()
-				return token, err
-			},
-		},
-		{
-			name: "api key viewer",
-			createToken: func(sessions *auth.SessionManager) (string, error) {
-				token, _, err := sessions.CreateAPIKeyViewer(42)
-				return token, err
-			},
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
+func TestVersionAuthorizesAdminAndViewerSessionsAtConfiguredBasePath(t *testing.T) {
+	for _, basePath := range []string{"", "/cpa"} {
+		t.Run("base="+basePath, func(t *testing.T) {
 			sessions := auth.NewSessionManager(time.Hour)
-			config := AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour}
-			router := NewRouter(nil, nil, nil, nil, config, NewAuthHandler(config, sessions), "")
-			token, err := testCase.createToken(sessions)
+			config := AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour, BasePath: basePath}
+			router := NewRouter(nil, nil, nil, nil, config, NewAuthHandler(config, sessions), basePath)
+			adminToken, _, err := sessions.Create()
 			if err != nil {
-				t.Fatalf("create session: %v", err)
+				t.Fatalf("create admin session: %v", err)
 			}
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
-			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-			resp := httptest.NewRecorder()
-
-			router.ServeHTTP(resp, req)
-
-			if resp.Code != http.StatusOK {
-				t.Fatalf("expected status 200, got %d body=%s", resp.Code, resp.Body.String())
+			viewerToken, _, err := sessions.CreateAPIKeyViewer(42)
+			if err != nil {
+				t.Fatalf("create API key viewer session: %v", err)
 			}
-		})
-	}
-}
 
-func TestSubpathVersionRequiresAuthAndAllowsAdminAndAPIKeyViewerSessions(t *testing.T) {
-	previousVersion := version.Version
-	t.Cleanup(func() { version.Version = previousVersion })
-	version.Version = "v1.2.3"
-
-	sessions := auth.NewSessionManager(time.Hour)
-	config := AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour, BasePath: "/cpa"}
-	router := NewRouter(nil, nil, nil, nil, config, NewAuthHandler(config, sessions), "/cpa")
-	adminToken, _, err := sessions.Create()
-	if err != nil {
-		t.Fatalf("create admin session: %v", err)
-	}
-	viewerToken, _, err := sessions.CreateAPIKeyViewer(42)
-	if err != nil {
-		t.Fatalf("create API key viewer session: %v", err)
-	}
-
-	for _, testCase := range []struct {
-		name       string
-		path       string
-		token      string
-		statusCode int
-	}{
-		{name: "unprefixed version route is not served", path: "/api/v1/version", statusCode: http.StatusNotFound},
-		{name: "prefixed version route requires auth", path: "/cpa/api/v1/version", statusCode: http.StatusUnauthorized},
-		{name: "prefixed version route allows admin", path: "/cpa/api/v1/version", token: adminToken, statusCode: http.StatusOK},
-		{name: "prefixed version route allows API key viewer", path: "/cpa/api/v1/version", token: viewerToken, statusCode: http.StatusOK},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, testCase.path, nil)
-			if testCase.token != "" {
-				req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: testCase.token})
+			for _, tc := range []struct {
+				name, token string
+				want        int
+			}{
+				{"unauthenticated", "", http.StatusUnauthorized},
+				{"admin", adminToken, http.StatusOK},
+				{"viewer", viewerToken, http.StatusOK},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					req := httptest.NewRequest(http.MethodGet, basePath+"/api/v1/version", nil)
+					if tc.token != "" {
+						req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tc.token})
+					}
+					resp := httptest.NewRecorder()
+					router.ServeHTTP(resp, req)
+					if resp.Code != tc.want {
+						t.Fatalf("expected status %d, got %d body=%s", tc.want, resp.Code, resp.Body.String())
+					}
+				})
 			}
-			resp := httptest.NewRecorder()
-			router.ServeHTTP(resp, req)
-
-			if resp.Code != testCase.statusCode {
-				t.Fatalf("expected status %d, got %d body=%s", testCase.statusCode, resp.Code, resp.Body.String())
+			if basePath != "" {
+				resp := httptest.NewRecorder()
+				router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/api/v1/version", nil))
+				if resp.Code != http.StatusNotFound {
+					t.Fatalf("unprefixed version status = %d", resp.Code)
+				}
 			}
 		})
 	}
@@ -515,47 +427,29 @@ func TestRootStaticRouteInjectsEmptyBasePath(t *testing.T) {
 	}
 }
 
-func TestStaticHTMLResponsesBypassCache(t *testing.T) {
+func TestStaticResponsesUseContentAppropriateCaching(t *testing.T) {
 	staticFS := testStaticFS(t, map[string]string{
-		"index.html":    `<html><head><script>window.__APP_BASE_PATH__ = "__APP_BASE_PATH__";</script></head><body>app</body></html>`,
+		"index.html":    `<html><body>app</body></html>`,
 		"assets/app.js": "console.log('ok')",
 	})
-
 	router := NewRouter(staticFS, nil, nil, nil, AuthConfig{}, nil, "/cpa")
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/cpa/dashboard", nil)
-	router.ServeHTTP(resp, req)
-
-	if got := resp.Header().Get("Cache-Control"); got != "no-store" {
-		t.Fatalf("expected HTML Cache-Control no-store, got %q", got)
-	}
-}
-
-func TestStaticAssetResponsesUseLongCache(t *testing.T) {
-	staticFS := testStaticFS(t, map[string]string{
-		"index.html":    `<html><head><script>window.__APP_BASE_PATH__ = "__APP_BASE_PATH__";</script></head><body>app</body></html>`,
-		"assets/app.js": "console.log('ok')",
-	})
-
-	router := NewRouter(staticFS, nil, nil, nil, AuthConfig{}, nil, "/cpa")
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/cpa/assets/app.js", nil)
-	router.ServeHTTP(resp, req)
-
-	if got := resp.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
-		t.Fatalf("expected asset Cache-Control immutable cache, got %q", got)
+	for _, tc := range []struct{ path, cache string }{
+		{"/cpa/dashboard", "no-store"},
+		{"/cpa/assets/app.js", "public, max-age=31536000, immutable"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if resp.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d", resp.Code)
+			}
+			if got := resp.Header().Get("Cache-Control"); got != tc.cache {
+				t.Fatalf("Cache-Control = %q, want %q", got, tc.cache)
+			}
+		})
 	}
 }
 
 func contains(s, sub string) bool {
-	return len(sub) == 0 || (len(s) >= len(sub) && (func() bool { return stringContains(s, sub) })())
-}
-
-func stringContains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, sub)
 }
