@@ -10,7 +10,7 @@ import (
 
 func TestFixedActivityGrainsCoverExactWindowsWithStableIntegerWidths(t *testing.T) {
 	// 准备：固定非边界参考时间，并列出三种 grain 的窗口总长与允许秒宽。
-	referenceEnd := time.Date(2026, 7, 20, 12, 34, 56, 0, time.UTC)
+	referenceEnd := time.Date(2026, 7, 20, 12, 34, 56, 789000000, time.UTC)
 	testCases := []struct {
 		name         string
 		grain        entities.UsageActivityGrain
@@ -37,35 +37,53 @@ func TestFixedActivityGrainsCoverExactWindowsWithStableIntegerWidths(t *testing.
 			if got := buckets[len(buckets)-1].End.Sub(buckets[0].Start); got != testCase.window {
 				t.Fatalf("expected exact window %s, got %s", testCase.window, got)
 			}
+			if buckets[len(buckets)-1].End.Before(referenceEnd) {
+				t.Fatalf("aligned window does not cover reference end: %v", buckets[len(buckets)-1].End)
+			}
+			seenWidths := map[int64]bool{}
 			for index, bucket := range buckets {
 				width := int64(bucket.End.Sub(bucket.Start) / time.Second)
-				if !testCase.allowedWidth[width] {
+				if bucket.End.Sub(bucket.Start)%time.Second != 0 || !testCase.allowedWidth[width] {
 					t.Fatalf("unexpected bucket %d width %d", index, width)
 				}
+				seenWidths[width] = true
 				if index > 0 && !buckets[index-1].End.Equal(bucket.Start) {
 					t.Fatalf("bucket %d is not adjacent to previous bucket", index)
 				}
+			}
+			if len(seenWidths) != len(testCase.allowedWidth) {
+				t.Fatalf("expected both allowed widths, got %v", seenWidths)
 			}
 		})
 	}
 }
 
-func TestActivityBucketEndBelongsToNextBucket(t *testing.T) {
-	// 准备：先取得任意 short bucket 的真实结束边界。
-	first, err := activity.BucketForTimestamp(entities.UsageActivityGrainShort, time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatalf("resolve first bucket: %v", err)
+func TestUsageActivityBucketForTimestampUsesHalfOpenStableBoundaries(t *testing.T) {
+	// 准备：同时覆盖 epoch 之前、epoch 边界和当前正时间的 timestamp。
+	timestamps := []time.Time{
+		time.Date(1969, 12, 31, 23, 50, 0, 0, time.UTC),
+		time.Unix(0, 0).UTC(),
+		time.Date(2026, 7, 20, 12, 34, 56, 789000000, time.UTC),
 	}
 
-	// 执行：用前一 bucket 的半开终点再次归桶。
-	next, err := activity.BucketForTimestamp(entities.UsageActivityGrainShort, first.End)
-	if err != nil {
-		t.Fatalf("resolve next bucket: %v", err)
-	}
+	for _, timestamp := range timestamps {
+		// end 是半开边界，必须进入下一桶。
+		bucket, err := activity.BucketForTimestamp(entities.UsageActivityGrainShort, timestamp)
+		if err != nil {
+			t.Fatalf("UsageActivityBucketForTimestamp(%s) returned error: %v", timestamp, err)
+		}
+		// 负时间、epoch 和正时间都必须包含在对应半开区间内。
+		if timestamp.Before(bucket.Start) || !timestamp.Before(bucket.End) {
+			t.Fatalf("timestamp %s is outside bucket %+v", timestamp, bucket)
+		}
 
-	// 断言：timestamp == bucket_end 必须稳定落入下一格。
-	if !next.Start.Equal(first.End) {
-		t.Fatalf("expected next bucket to start at previous end: first=%+v next=%+v", first, next)
+		next, err := activity.BucketForTimestamp(entities.UsageActivityGrainShort, bucket.End)
+		if err != nil {
+			t.Fatalf("boundary bucket lookup returned error: %v", err)
+		}
+		if !next.Start.Equal(bucket.End) {
+			t.Fatalf("expected end boundary to enter next bucket: current=%+v next=%+v", bucket, next)
+		}
 	}
 }
 
