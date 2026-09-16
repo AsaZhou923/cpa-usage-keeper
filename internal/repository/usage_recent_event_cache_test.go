@@ -1,22 +1,16 @@
 package repository
 
 import (
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 )
 
 func TestUsageRecentEventCacheLoadsOnlyRecentProjectionAndDerivesFallbackLabels(t *testing.T) {
 	withRepositoryTestLocation(t, "UTC")
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "recent-cache.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 
 	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	ttft := int64(120)
@@ -154,11 +148,7 @@ func TestUsageRecentEventCacheFiltersByWindowAndAPIGroupKey(t *testing.T) {
 
 func TestUsageRecentEventCacheBuildsCredentialHealthFromStartupAndAppend(t *testing.T) {
 	withRepositoryTestLocation(t, "Asia/Shanghai")
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "credential-health-cache.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 
 	now := time.Date(2026, 6, 10, 12, 34, 0, 0, time.FixedZone("CST", 8*60*60))
 	events := []entities.UsageEvent{
@@ -237,11 +227,7 @@ func TestUsageRecentEventCacheBuildsCredentialHealthFromStartupAndAppend(t *test
 
 func TestUsageRecentEventCacheCredentialHealthUsesExactIdentityMatch(t *testing.T) {
 	withRepositoryTestLocation(t, "Asia/Shanghai")
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "credential-health-exact-match.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 
 	now := time.Date(2026, 6, 10, 12, 34, 0, 0, time.FixedZone("CST", 8*60*60))
 	events := []entities.UsageEvent{
@@ -278,11 +264,7 @@ func TestUsageRecentEventCacheCredentialHealthUsesExactIdentityMatch(t *testing.
 
 func TestUsageRecentEventCacheAccumulatesCredentialHealthCacheTokens(t *testing.T) {
 	withRepositoryTestLocation(t, "Asia/Shanghai")
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "credential-health-cache-tokens.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 
 	now := time.Date(2026, 6, 10, 12, 34, 0, 0, time.FixedZone("CST", 8*60*60))
 	events := []entities.UsageEvent{
@@ -339,11 +321,7 @@ func TestUsageRecentEventCacheAccumulatesCredentialHealthCacheTokens(t *testing.
 
 func TestCredentialHealthStartupLoadStreamsRowsInBatches(t *testing.T) {
 	withRepositoryTestLocation(t, "UTC")
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "credential-health-stream.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 
 	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	events := make([]entities.UsageEvent, 0, 25)
@@ -360,16 +338,10 @@ func TestCredentialHealthStartupLoadStreamsRowsInBatches(t *testing.T) {
 		t.Fatalf("InsertUsageEvents returned error: %v", err)
 	}
 
-	var batchCount int
-	var maxBatchSize int
-	var totalRows int
+	var batchSizes []int
 	var failures int
-	err = loadCredentialHealthCacheRowsBatched(db, now.Add(-credentialHealthWindow), 10, func(rows []credentialHealthLoadRow) error {
-		batchCount++
-		if len(rows) > maxBatchSize {
-			maxBatchSize = len(rows)
-		}
-		totalRows += len(rows)
+	err := loadCredentialHealthCacheRowsBatched(db, now.Add(-credentialHealthWindow), 10, func(rows []credentialHealthLoadRow) error {
+		batchSizes = append(batchSizes, len(rows))
 		for _, row := range rows {
 			if row.Failed {
 				failures++
@@ -381,14 +353,15 @@ func TestCredentialHealthStartupLoadStreamsRowsInBatches(t *testing.T) {
 		t.Fatalf("loadCredentialHealthCacheRowsBatched returned error: %v", err)
 	}
 
-	if batchCount != 3 {
-		t.Fatalf("expected 25 rows to load in 3 batches, got %d", batchCount)
+	totalRows := 0
+	for _, size := range batchSizes {
+		if size > 10 {
+			t.Fatalf("expected startup batch size <= 10, got %v", batchSizes)
+		}
+		totalRows += size
 	}
-	if maxBatchSize > 10 {
-		t.Fatalf("expected startup load batch size to stay <= 10, got %d", maxBatchSize)
-	}
-	if totalRows != 25 {
-		t.Fatalf("expected all 25 rows to be streamed, got %d", totalRows)
+	if len(batchSizes) != 3 || totalRows != 25 {
+		t.Fatalf("expected all 25 rows in three batches, got %v", batchSizes)
 	}
 	if failures != 9 {
 		t.Fatalf("expected 9 failed rows, got %d", failures)
@@ -397,11 +370,7 @@ func TestCredentialHealthStartupLoadStreamsRowsInBatches(t *testing.T) {
 
 func TestUsageRecentEventCachePrunesInactiveCredentialHealthKeys(t *testing.T) {
 	withRepositoryTestLocation(t, "UTC")
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "credential-health-prune.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 
 	baseNow := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	currentNow := baseNow
@@ -434,29 +403,34 @@ func TestUsageRecentEventCachePrunesInactiveCredentialHealthKeys(t *testing.T) {
 	}
 }
 
-func TestUsageRecentEventCacheDefaultQueueSizeAllowsShortBursts(t *testing.T) {
-	if usageRecentEventCacheDefaultQueueSize != 100 {
-		t.Fatalf("expected recent cache default queue size 100, got %d", usageRecentEventCacheDefaultQueueSize)
-	}
-}
-
 func TestUsageRecentEventCacheTryAppendDoesNotBlockWhenQueueIsFull(t *testing.T) {
-	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
-	cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{
-		Now:       func() time.Time { return now },
-		QueueSize: 1,
-	})
-	t.Cleanup(cache.Close)
-
-	<-cache.appendSlots
-	if cache.TryAppend([]entities.UsageEvent{{APIGroupKey: "provider-b", AuthType: "oauth", Source: "b@example.com", Timestamp: now}}) {
-		t.Fatal("expected append to report queue overflow when no slot is available")
-	}
-	if len(cache.appendCh) != 0 {
-		t.Fatalf("expected overflow append not to enqueue cloned events, got queue length %d", len(cache.appendCh))
-	}
-	if _, ok := cache.Events(now.Add(-time.Minute), now.Add(time.Minute), false, ""); !ok {
-		t.Fatal("expected queue overflow not to invalidate the cache window")
+	for _, test := range []struct {
+		name           string
+		size, capacity int
+	}{
+		{name: "default burst capacity", capacity: 100},
+		{name: "custom capacity", size: 1, capacity: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+			cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return now }, QueueSize: test.size})
+			t.Cleanup(cache.Close)
+			if cap(cache.appendSlots) != test.capacity || cap(cache.appendCh) != test.capacity {
+				t.Fatalf("expected capacity %d, got slots=%d queue=%d", test.capacity, cap(cache.appendSlots), cap(cache.appendCh))
+			}
+			for range test.capacity {
+				<-cache.appendSlots
+			}
+			if cache.TryAppend([]entities.UsageEvent{{APIGroupKey: "provider-b", AuthType: "oauth", Source: "b@example.com", Timestamp: now}}) {
+				t.Fatal("expected append to report queue overflow when no slot is available")
+			}
+			if len(cache.appendCh) != 0 {
+				t.Fatalf("overflow append enqueued events: %d", len(cache.appendCh))
+			}
+			if _, ok := cache.Events(now.Add(-time.Minute), now.Add(time.Minute), false, ""); !ok {
+				t.Fatal("expected queue overflow not to invalidate the cache window")
+			}
+		})
 	}
 }
 
@@ -479,12 +453,9 @@ func TestUsageRecentEventCachePruneClearsRemovedBackingSlots(t *testing.T) {
 	if len(cache.events) != 2 {
 		t.Fatalf("expected 2 active events after pruning, got %d: %+v", len(cache.events), cache.events)
 	}
-	for index, event := range cache.events[:cap(cache.events)] {
-		if index < len(cache.events) {
-			continue
-		}
-		if event.APIGroupKey == "expired-key" || event.Model == "expired-model" || event.AuthIndex == "expired-auth" || event.IdentityFallbackLabel == "expired@example.com" || event.TTFTMS != nil {
-			t.Fatalf("expected pruned backing slot %d to be cleared, got %+v", index, event)
+	for index, event := range cache.events[len(cache.events):cap(cache.events)] {
+		if event != (RecentUsageEvent{}) {
+			t.Fatalf("expected pruned backing slot %d to be cleared, got %+v", len(cache.events)+index, event)
 		}
 	}
 }
@@ -497,12 +468,10 @@ func TestUsageRecentEventCacheCloseIsConcurrentSafe(t *testing.T) {
 		start := make(chan struct{})
 		var waitGroup sync.WaitGroup
 		for index := 0; index < 32; index++ {
-			waitGroup.Add(1)
-			go func() {
-				defer waitGroup.Done()
+			waitGroup.Go(func() {
 				<-start
 				cache.Close()
-			}()
+			})
 		}
 		close(start)
 		waitGroup.Wait()
