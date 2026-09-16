@@ -77,11 +77,7 @@ func TestUsageIdentityReplaceForAuthTypeMarksStaleRowsDeletedAndPreservesStats(t
 		t.Fatalf("ReplaceUsageIdentitiesForAuthType returned error: %v", err)
 	}
 
-	rows, err := ListUsageIdentities(ctx, db)
-	if err != nil {
-		t.Fatalf("ListUsageIdentities returned error: %v", err)
-	}
-	byIdentity := usageIdentitiesByIdentity(rows)
+	byIdentity := usageIdentitiesByIdentity(t, db)
 
 	updated := byIdentity["auth-1"]
 	if updated.Name != "New Name" || updated.Provider != "claude-code" || updated.AuthType != entities.UsageIdentityAuthTypeAuthFile || updated.IsDeleted {
@@ -115,39 +111,15 @@ func TestUsageIdentityReplaceForAuthTypeDoesNotConsumeIDsForExistingIdentities(t
 	ctx := context.Background()
 	firstSync := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
 
-	if err := ReplaceUsageIdentitiesForAuthType(ctx, db, []entities.UsageIdentity{{
-		Name:     "Auth One",
-		Identity: "auth-1",
-		Type:     "account",
-		Provider: "claude",
-	}}, entities.UsageIdentityAuthTypeAuthFile, firstSync); err != nil {
-		t.Fatalf("initial replace returned error: %v", err)
-	}
-	for i := 0; i < 5; i++ {
-		if err := ReplaceUsageIdentitiesForAuthType(ctx, db, []entities.UsageIdentity{{
-			Name:     "Auth One",
-			Identity: "auth-1",
-			Type:     "account",
-			Provider: "claude",
-		}}, entities.UsageIdentityAuthTypeAuthFile, firstSync.Add(time.Duration(i+1)*time.Minute)); err != nil {
-			t.Fatalf("repeat replace returned error: %v", err)
+	identities := []entities.UsageIdentity{{Name: "Auth One", Identity: "auth-1", Type: "account", Provider: "claude"}}
+	for i := 0; i < 6; i++ {
+		if err := ReplaceUsageIdentitiesForAuthType(ctx, db, identities, entities.UsageIdentityAuthTypeAuthFile, firstSync.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatalf("replace %d: %v", i, err)
 		}
 	}
-	if err := ReplaceUsageIdentitiesForAuthType(ctx, db, []entities.UsageIdentity{
-		{
-			Name:     "Auth One",
-			Identity: "auth-1",
-			Type:     "account",
-			Provider: "claude",
-		},
-		{
-			Name:     "Auth Two",
-			Identity: "auth-2",
-			Type:     "account",
-			Provider: "claude",
-		},
-	}, entities.UsageIdentityAuthTypeAuthFile, firstSync.Add(time.Hour)); err != nil {
-		t.Fatalf("new identity replace returned error: %v", err)
+	identities = append(identities, entities.UsageIdentity{Name: "Auth Two", Identity: "auth-2", Type: "account", Provider: "claude"})
+	if err := ReplaceUsageIdentitiesForAuthType(ctx, db, identities, entities.UsageIdentityAuthTypeAuthFile, firstSync.Add(time.Hour)); err != nil {
+		t.Fatalf("new identity replace: %v", err)
 	}
 
 	var row entities.UsageIdentity
@@ -189,11 +161,7 @@ func TestUsageIdentityReplaceForAuthTypeRefreshesProjectID(t *testing.T) {
 		t.Fatalf("ReplaceUsageIdentitiesForAuthType returned error: %v", err)
 	}
 
-	rows, err := ListUsageIdentities(ctx, db)
-	if err != nil {
-		t.Fatalf("ListUsageIdentities returned error: %v", err)
-	}
-	updated := usageIdentitiesByIdentity(rows)["gemini-auth"]
+	updated := usageIdentitiesByIdentity(t, db)["gemini-auth"]
 	if updated.ProjectID == nil || *updated.ProjectID != "new-project" {
 		t.Fatalf("expected trimmed project id to refresh, got %+v", updated)
 	}
@@ -233,11 +201,7 @@ func TestUsageIdentityReplaceForAuthTypeRevivesDeletedIdentity(t *testing.T) {
 		t.Fatalf("ReplaceUsageIdentitiesForAuthType returned error: %v", err)
 	}
 
-	rows, err := ListUsageIdentities(ctx, db)
-	if err != nil {
-		t.Fatalf("ListUsageIdentities returned error: %v", err)
-	}
-	deletedRow := usageIdentitiesByIdentity(rows)["auth-1"]
+	deletedRow := usageIdentitiesByIdentity(t, db)["auth-1"]
 	if deletedRow.IsDeleted || deletedRow.DeletedAt != nil {
 		t.Fatalf("expected incoming deleted identity to be restored active, got %+v", deletedRow)
 	}
@@ -246,76 +210,34 @@ func TestUsageIdentityReplaceForAuthTypeRevivesDeletedIdentity(t *testing.T) {
 	}
 }
 
-func TestGetActiveAuthFileUsageIdentityByAuthIndexReturnsOnlyAuthFile(t *testing.T) {
+func TestGetActiveAuthFileUsageIdentityByAuthIndex(t *testing.T) {
 	db := openTestDatabase(t)
-	ctx := context.Background()
-	if err := db.Create(&[]entities.UsageIdentity{{
-		Name:         "Provider",
-		AuthType:     entities.UsageIdentityAuthTypeAIProvider,
-		AuthTypeName: "apikey",
-		Identity:     "shared-auth-index",
-		Type:         "openai",
-		Provider:     "OpenAI",
-	}, {
-		Name:         "Auth File",
-		AuthType:     entities.UsageIdentityAuthTypeAuthFile,
-		AuthTypeName: "oauth",
-		Identity:     "shared-auth-index",
-		Type:         "codex",
-		Provider:     "Codex",
-	}}).Error; err != nil {
+	deletedAt := time.Date(2026, 5, 9, 11, 0, 0, 0, time.UTC)
+	if err := db.Create([]entities.UsageIdentity{
+		{Name: "Provider", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "shared-auth-index", Type: "openai", Provider: "OpenAI"},
+		{Name: "Auth File", AuthType: entities.UsageIdentityAuthTypeAuthFile, AuthTypeName: "oauth", Identity: "shared-auth-index", Type: "codex", Provider: "Codex"},
+		{Name: "Deleted Auth File", AuthType: entities.UsageIdentityAuthTypeAuthFile, AuthTypeName: "oauth", Identity: "deleted-auth-index", Type: "claude", Provider: "Claude", IsDeleted: true, DeletedAt: &deletedAt},
+		{Name: "Provider Only", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "provider-only-auth-index", Type: "claude", Provider: "Claude"},
+	}).Error; err != nil {
 		t.Fatalf("seed usage identities: %v", err)
 	}
-
-	identity, err := GetActiveAuthFileUsageIdentityByAuthIndex(ctx, db, " shared-auth-index ")
-	if err != nil {
-		t.Fatalf("GetActiveAuthFileUsageIdentityByAuthIndex returned error: %v", err)
-	}
-	if identity.AuthType != entities.UsageIdentityAuthTypeAuthFile || identity.Type != "codex" || identity.Name != "Auth File" {
-		t.Fatalf("expected active auth-file identity, got %+v", identity)
-	}
-}
-
-func TestGetActiveAuthFileUsageIdentityByAuthIndexIgnoresDeletedAuthFile(t *testing.T) {
-	db := openTestDatabase(t)
-	ctx := context.Background()
-	deletedAt := time.Date(2026, 5, 9, 11, 0, 0, 0, time.UTC)
-	if err := db.Create(&entities.UsageIdentity{
-		Name:         "Deleted Auth File",
-		AuthType:     entities.UsageIdentityAuthTypeAuthFile,
-		AuthTypeName: "oauth",
-		Identity:     "deleted-auth-index",
-		Type:         "claude",
-		Provider:     "Claude",
-		IsDeleted:    true,
-		DeletedAt:    &deletedAt,
-	}).Error; err != nil {
-		t.Fatalf("seed usage identity: %v", err)
-	}
-
-	_, err := GetActiveAuthFileUsageIdentityByAuthIndex(ctx, db, "deleted-auth-index")
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		t.Fatalf("expected not found for deleted auth file, got %v", err)
-	}
-}
-
-func TestGetActiveAuthFileUsageIdentityByAuthIndexIgnoresProviderOnlyIdentity(t *testing.T) {
-	db := openTestDatabase(t)
-	ctx := context.Background()
-	if err := db.Create(&entities.UsageIdentity{
-		Name:         "Provider Only",
-		AuthType:     entities.UsageIdentityAuthTypeAIProvider,
-		AuthTypeName: "apikey",
-		Identity:     "provider-only-auth-index",
-		Type:         "claude",
-		Provider:     "Claude",
-	}).Error; err != nil {
-		t.Fatalf("seed usage identity: %v", err)
-	}
-
-	_, err := GetActiveAuthFileUsageIdentityByAuthIndex(ctx, db, "provider-only-auth-index")
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		t.Fatalf("expected not found for provider-only identity, got %v", err)
+	for _, tc := range []struct {
+		index   string
+		wantErr error
+	}{
+		{" shared-auth-index ", nil},
+		{"deleted-auth-index", gorm.ErrRecordNotFound},
+		{"provider-only-auth-index", gorm.ErrRecordNotFound},
+	} {
+		t.Run(tc.index, func(t *testing.T) {
+			identity, err := GetActiveAuthFileUsageIdentityByAuthIndex(context.Background(), db, tc.index)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("lookup error = %v, want %v", err, tc.wantErr)
+			}
+			if tc.wantErr == nil && (identity.AuthType != entities.UsageIdentityAuthTypeAuthFile || identity.Type != "codex" || identity.Name != "Auth File") {
+				t.Fatalf("expected active auth-file identity, got %+v", identity)
+			}
+		})
 	}
 }
 
@@ -342,11 +264,7 @@ func TestUsageIdentityReplaceForProviderTypesMarksOnlyScopedProviderTypesDeleted
 		t.Fatalf("ReplaceUsageIdentitiesForProviderTypes returned error: %v", err)
 	}
 
-	rows, err := ListUsageIdentities(ctx, db)
-	if err != nil {
-		t.Fatalf("ListUsageIdentities returned error: %v", err)
-	}
-	byIdentity := usageIdentitiesByIdentity(rows)
+	byIdentity := usageIdentitiesByIdentity(t, db)
 
 	openAIKeep := byIdentity["openai-keep"]
 	if openAIKeep.IsDeleted || openAIKeep.Name != "OpenAI Updated" || openAIKeep.TotalRequests != 3 {
@@ -413,11 +331,7 @@ func TestUsageIdentityReplaceForProviderTypesRefreshesSourceMetadataAndPreserves
 		t.Fatalf("ReplaceUsageIdentitiesForProviderTypes returned error: %v", err)
 	}
 
-	rows, err := ListUsageIdentities(ctx, db)
-	if err != nil {
-		t.Fatalf("ListUsageIdentities returned error: %v", err)
-	}
-	updated := usageIdentitiesByIdentity(rows)["provider-auth-index"]
+	updated := usageIdentitiesByIdentity(t, db)["provider-auth-index"]
 	if updated.Prefix != "new-prefix" || updated.LookupKey != "new-key" || updated.Provider != "New Provider" {
 		t.Fatalf("expected source metadata refreshed, got %+v", updated)
 	}
@@ -459,11 +373,7 @@ func TestUsageIdentityReplaceForAuthTypePersistsSourceMetadataFields(t *testing.
 		t.Fatalf("ReplaceUsageIdentitiesForAuthType returned error: %v", err)
 	}
 
-	rows, err := ListUsageIdentities(ctx, db)
-	if err != nil {
-		t.Fatalf("ListUsageIdentities returned error: %v", err)
-	}
-	updated := usageIdentitiesByIdentity(rows)["codex-auth"]
+	updated := usageIdentitiesByIdentity(t, db)["codex-auth"]
 	if updated.AccountID == nil || *updated.AccountID != "acct_123" || updated.PlanType == nil || *updated.PlanType != "team" || updated.ActiveStart == nil || !updated.ActiveStart.Equal(activeStart) || updated.ActiveUntil == nil || !updated.ActiveUntil.Equal(activeUntil) {
 		t.Fatalf("expected auth file source metadata persisted, got %+v", updated)
 	}
@@ -558,11 +468,7 @@ func TestUsageIdentityReplaceForProviderTypesBatchesLargeUpsertAndDeletesOnlySco
 		t.Fatalf("expected %d active openai identities, got %d", len(identities), activeOpenAI)
 	}
 
-	rows, err := ListUsageIdentities(ctx, db)
-	if err != nil {
-		t.Fatalf("ListUsageIdentities returned error: %v", err)
-	}
-	byIdentity := usageIdentitiesByIdentity(rows)
+	byIdentity := usageIdentitiesByIdentity(t, db)
 
 	openAIStale := byIdentity["openai-stale"]
 	if !openAIStale.IsDeleted || openAIStale.DeletedAt == nil || !openAIStale.DeletedAt.Equal(now) {
@@ -600,11 +506,7 @@ func TestUsageIdentityReplaceForProviderTypesWithEmptyProviderTypesDoesNotDelete
 		t.Fatalf("ReplaceUsageIdentitiesForProviderTypes returned error: %v", err)
 	}
 
-	rows, err := ListUsageIdentities(ctx, db)
-	if err != nil {
-		t.Fatalf("ListUsageIdentities returned error: %v", err)
-	}
-	byIdentity := usageIdentitiesByIdentity(rows)
+	byIdentity := usageIdentitiesByIdentity(t, db)
 
 	for _, identity := range []string{"openai-active", "gemini-active"} {
 		row := byIdentity[identity]
@@ -640,11 +542,7 @@ func TestUsageIdentityReplaceForAuthTypeKeepsAlreadyDeletedRowsOutOfStaleCompare
 		t.Fatalf("ReplaceUsageIdentitiesForAuthType returned error: %v", err)
 	}
 
-	rows, err := ListUsageIdentities(ctx, db)
-	if err != nil {
-		t.Fatalf("ListUsageIdentities returned error: %v", err)
-	}
-	byIdentity := usageIdentitiesByIdentity(rows)
+	byIdentity := usageIdentitiesByIdentity(t, db)
 
 	activeStale := byIdentity["auth-active-stale"]
 	if !activeStale.IsDeleted || activeStale.DeletedAt == nil || !activeStale.DeletedAt.Equal(now) {
@@ -676,11 +574,7 @@ func TestUsageIdentityReplaceForProviderTypesKeepsAlreadyDeletedRowsOutOfStaleCo
 		t.Fatalf("ReplaceUsageIdentitiesForProviderTypes returned error: %v", err)
 	}
 
-	rows, err := ListUsageIdentities(ctx, db)
-	if err != nil {
-		t.Fatalf("ListUsageIdentities returned error: %v", err)
-	}
-	byIdentity := usageIdentitiesByIdentity(rows)
+	byIdentity := usageIdentitiesByIdentity(t, db)
 
 	activeStale := byIdentity["openai-active-stale"]
 	if !activeStale.IsDeleted || activeStale.DeletedAt == nil || !activeStale.DeletedAt.Equal(now) {
@@ -726,13 +620,8 @@ func TestUsageIdentityListActiveExcludesDeletedRows(t *testing.T) {
 		}
 	}
 	want := []string{"auth-active", "provider-active"}
-	if len(got) != len(want) {
-		t.Fatalf("expected active identities %v, got %v", want, got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("expected active identities ordered as %v, got %v", want, got)
-		}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("active identities = %v, want %v", got, want)
 	}
 }
 
@@ -750,26 +639,18 @@ func TestUsageIdentityListActivePageOrdersByTotalRequestsDesc(t *testing.T) {
 	}
 	authType := entities.UsageIdentityAuthTypeAuthFile
 
-	items, total, _, err := ListActiveUsageIdentitiesPage(context.Background(), db, ListUsageIdentitiesPageRequest{AuthType: &authType, Page: 1, PageSize: 2})
-	if err != nil {
-		t.Fatalf("list page: %v", err)
-	}
-	if total != 3 {
-		t.Fatalf("expected total 3, got %d", total)
-	}
-	if got := []string{items[0].Identity, items[1].Identity}; !reflect.DeepEqual(got, []string{"high", "middle"}) {
-		t.Fatalf("expected first page sorted by total requests desc, got %v", got)
-	}
-
-	items, total, _, err = ListActiveUsageIdentitiesPage(context.Background(), db, ListUsageIdentitiesPageRequest{AuthType: &authType, Page: 2, PageSize: 2})
-	if err != nil {
-		t.Fatalf("list second page: %v", err)
-	}
-	if total != 3 {
-		t.Fatalf("expected total 3 on second page, got %d", total)
-	}
-	if got := []string{items[0].Identity}; !reflect.DeepEqual(got, []string{"low"}) {
-		t.Fatalf("expected second page sorted by total requests desc, got %v", got)
+	for page, want := range [][]string{{"high", "middle"}, {"low"}} {
+		items, total, _, err := ListActiveUsageIdentitiesPage(context.Background(), db, ListUsageIdentitiesPageRequest{AuthType: &authType, Page: page + 1, PageSize: 2})
+		if err != nil {
+			t.Fatalf("list page %d: %v", page+1, err)
+		}
+		got := make([]string, 0, len(items))
+		for _, item := range items {
+			got = append(got, item.Identity)
+		}
+		if total != 3 || !reflect.DeepEqual(got, want) {
+			t.Fatalf("page %d = %v total=%d, want %v total=3", page+1, got, total, want)
+		}
 	}
 }
 
@@ -806,7 +687,11 @@ func TestUsageIdentityListActivePageFiltersByTypesAndReturnsUnfilteredTypeCounts
 	if total != 3 {
 		t.Fatalf("expected filtered total 3, got %d", total)
 	}
-	if got := []string{items[0].Identity, items[1].Identity, items[2].Identity}; !reflect.DeepEqual(got, []string{"claude-high", "claude-low", "anthropic"}) {
+	got := make([]string, 0, len(items))
+	for _, item := range items {
+		got = append(got, item.Identity)
+	}
+	if !reflect.DeepEqual(got, []string{"claude-high", "claude-low", "anthropic"}) {
 		t.Fatalf("expected only selected types sorted by total requests desc, got %v", got)
 	}
 	counts := usageIdentityTypeCountsByType(typeCounts)
@@ -842,7 +727,11 @@ func TestUsageIdentityListActivePageFiltersEnabledAuthFilesAndOrdersByPriority(t
 	if total != 6 {
 		t.Fatalf("expected total 6, got %d", total)
 	}
-	if got := []string{items[0].Identity, items[1].Identity, items[2].Identity, items[3].Identity, items[4].Identity, items[5].Identity}; !reflect.DeepEqual(got, []string{"priority-5-alpha", "priority-5-beta-lower", "priority-5", "priority-5-zeta", "priority-1", "default"}) {
+	got := make([]string, 0, len(items))
+	for _, item := range items {
+		got = append(got, item.Identity)
+	}
+	if !reflect.DeepEqual(got, []string{"priority-5-alpha", "priority-5-beta-lower", "priority-5", "priority-5-zeta", "priority-1", "default"}) {
 		t.Fatalf("expected enabled auth files sorted by priority desc, file name asc case-insensitively, then missing priority last, got %v", got)
 	}
 }
@@ -875,7 +764,11 @@ func TestUsageIdentityListActivePageOrdersByTotalTokensDesc(t *testing.T) {
 	if total != 3 {
 		t.Fatalf("expected total 3, got %d", total)
 	}
-	if got := []string{items[0].Identity, items[1].Identity, items[2].Identity}; !reflect.DeepEqual(got, []string{"high", "middle", "low"}) {
+	got := make([]string, 0, len(items))
+	for _, item := range items {
+		got = append(got, item.Identity)
+	}
+	if !reflect.DeepEqual(got, []string{"high", "middle", "low"}) {
 		t.Fatalf("expected page sorted by total tokens desc, got %v", got)
 	}
 }
@@ -898,28 +791,24 @@ func TestUsageIdentityListActivePageOrdersByLastUsedDesc(t *testing.T) {
 		t.Fatalf("seed usage identities: %v", err)
 	}
 
-	authFileType := entities.UsageIdentityAuthTypeAuthFile
-	authFileItems, total, _, err := ListActiveUsageIdentitiesPage(context.Background(), db, ListUsageIdentitiesPageRequest{AuthType: &authFileType, Sort: UsageIdentityPageSortLastUsedAt, Page: 1, PageSize: 10})
-	if err != nil {
-		t.Fatalf("list auth file page: %v", err)
-	}
-	if total != 4 {
-		t.Fatalf("expected auth file total 4, got %d", total)
-	}
-	if got := []string{authFileItems[0].Identity, authFileItems[1].Identity, authFileItems[2].Identity, authFileItems[3].Identity}; !reflect.DeepEqual(got, []string{"auth-recent-a", "auth-recent-b", "auth-old", "auth-never"}) {
-		t.Fatalf("expected auth files sorted by last used desc, id asc, then missing last_used_at last, got %v", got)
-	}
-
-	providerType := entities.UsageIdentityAuthTypeAIProvider
-	providerItems, total, _, err := ListActiveUsageIdentitiesPage(context.Background(), db, ListUsageIdentitiesPageRequest{AuthType: &providerType, Sort: UsageIdentityPageSortLastUsedAt, Page: 1, PageSize: 10})
-	if err != nil {
-		t.Fatalf("list provider page: %v", err)
-	}
-	if total != 2 {
-		t.Fatalf("expected provider total 2, got %d", total)
-	}
-	if got := []string{providerItems[0].Identity, providerItems[1].Identity}; !reflect.DeepEqual(got, []string{"provider-recent", "provider-never"}) {
-		t.Fatalf("expected AI providers sorted by last used desc with missing last_used_at last, got %v", got)
+	for _, tc := range []struct {
+		authType entities.UsageIdentityAuthType
+		want     []string
+	}{
+		{entities.UsageIdentityAuthTypeAuthFile, []string{"auth-recent-a", "auth-recent-b", "auth-old", "auth-never"}},
+		{entities.UsageIdentityAuthTypeAIProvider, []string{"provider-recent", "provider-never"}},
+	} {
+		items, total, _, err := ListActiveUsageIdentitiesPage(context.Background(), db, ListUsageIdentitiesPageRequest{AuthType: &tc.authType, Sort: UsageIdentityPageSortLastUsedAt, Page: 1, PageSize: 10})
+		if err != nil {
+			t.Fatalf("list auth type %v: %v", tc.authType, err)
+		}
+		got := make([]string, 0, len(items))
+		for _, item := range items {
+			got = append(got, item.Identity)
+		}
+		if total != int64(len(tc.want)) || !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("auth type %v sorted page = %v total=%d, want %v", tc.authType, got, total, tc.want)
+		}
 	}
 }
 
@@ -944,7 +833,11 @@ func TestUsageIdentityListActivePageOrdersAIProvidersByPriorityWithoutNameTieBre
 	if total != 4 {
 		t.Fatalf("expected total 4, got %d", total)
 	}
-	if got := []string{items[0].Identity, items[1].Identity, items[2].Identity, items[3].Identity}; !reflect.DeepEqual(got, []string{"priority-5-zeta", "priority-5-alpha", "priority-1", "default"}) {
+	got := make([]string, 0, len(items))
+	for _, item := range items {
+		got = append(got, item.Identity)
+	}
+	if !reflect.DeepEqual(got, []string{"priority-5-zeta", "priority-5-alpha", "priority-1", "default"}) {
 		t.Fatalf("expected AI providers sorted by priority desc and id asc without name tie-break, got %v", got)
 	}
 }
@@ -1012,13 +905,8 @@ func TestUsageIdentityListOrdersByAuthTypeNameIDAndIncludesDeletedRows(t *testin
 		"provider-alpha:deleted",
 		"provider-zulu:active",
 	}
-	if len(got) != len(want) {
-		t.Fatalf("expected %d identities, got %d: %v", len(want), len(got), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("expected identities ordered by auth_type asc, name asc, id asc including deleted rows\nwant: %v\n got: %v", want, got)
-		}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("identities ordered by auth_type, name, id = %v, want %v", got, want)
 	}
 }
 
@@ -1248,7 +1136,12 @@ func TestUsageIdentityAggregateStatsDeletedIdentityStillAggregates(t *testing.T)
 	}
 }
 
-func usageIdentitiesByIdentity(rows []entities.UsageIdentity) map[string]entities.UsageIdentity {
+func usageIdentitiesByIdentity(t *testing.T, db *gorm.DB) map[string]entities.UsageIdentity {
+	t.Helper()
+	rows, err := ListUsageIdentities(context.Background(), db)
+	if err != nil {
+		t.Fatalf("ListUsageIdentities returned error: %v", err)
+	}
 	result := make(map[string]entities.UsageIdentity, len(rows))
 	for _, row := range rows {
 		result[row.Identity] = row
