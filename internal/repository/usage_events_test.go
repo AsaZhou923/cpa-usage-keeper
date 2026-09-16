@@ -3,20 +3,15 @@ package repository
 import (
 	"cpa-usage-keeper/internal/repository/dto"
 	"math"
-	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 )
 
 func TestListUsageEventsWithFilterAppliesTimeBoundsAndPagination(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 
 	events := []entities.UsageEvent{
 		{EventKey: "event-1", APIGroupKey: "provider-a", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC), Source: "source-a", AuthIndex: "1", TotalTokens: 10},
@@ -56,11 +51,7 @@ func TestListUsageEventsWithFilterFindsProjectTimezoneStorageTimestamp(t *testin
 	time.Local = location
 	t.Cleanup(func() { time.Local = previousLocal })
 
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events-project-tz.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 
 	eventTime := time.Date(2026, 5, 12, 21, 59, 18, 353569620, location)
 	if _, _, err := InsertUsageEvents(db, []entities.UsageEvent{{EventKey: "event-project-tz", Model: "claude-sonnet", Timestamp: eventTime, TotalTokens: 10}}); err != nil {
@@ -79,11 +70,7 @@ func TestListUsageEventsWithFilterFindsProjectTimezoneStorageTimestamp(t *testin
 }
 
 func TestListUsageEventsWithFilterPagesByTimestampAndID(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events-pages.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	timestamp := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
 	events := []entities.UsageEvent{
 		{EventKey: "event-1", APIGroupKey: "provider-a", Model: "claude-sonnet", Timestamp: timestamp, Source: "source-a", AuthIndex: "1", TotalTokens: 10},
@@ -94,31 +81,28 @@ func TestListUsageEventsWithFilterPagesByTimestampAndID(t *testing.T) {
 		t.Fatalf("InsertUsageEvents returned error: %v", err)
 	}
 
-	firstPage, err := ListUsageEventsWithFilter(db, dto.UsageQueryFilter{Page: 1, PageSize: 1}, emptyPricingResolverForTest())
-	if err != nil {
-		t.Fatalf("ListUsageEventsWithFilter returned error: %v", err)
-	}
-	secondPage, err := ListUsageEventsWithFilter(db, dto.UsageQueryFilter{Page: 2, PageSize: 1}, emptyPricingResolverForTest())
-	if err != nil {
-		t.Fatalf("ListUsageEventsWithFilter returned error: %v", err)
-	}
-	if firstPage.TotalCount != 3 || firstPage.TotalPages != 3 || secondPage.TotalCount != 3 || secondPage.TotalPages != 3 {
-		t.Fatalf("unexpected page metadata: first=%+v second=%+v", firstPage, secondPage)
-	}
-	if len(firstPage.Events) != 1 || len(secondPage.Events) != 1 {
-		t.Fatalf("expected one event on each page: first=%+v second=%+v", firstPage, secondPage)
-	}
-	if firstPage.Events[0].ID <= secondPage.Events[0].ID {
-		t.Fatalf("expected id desc tie-breaker, first=%+v second=%+v", firstPage.Events[0], secondPage.Events[0])
+	var firstID int64
+	for index, wantSource := range []string{"source-b", "source-a"} {
+		page, err := ListUsageEventsWithFilter(db, dto.UsageQueryFilter{Page: index + 1, PageSize: 1}, emptyPricingResolverForTest())
+		if err != nil {
+			t.Fatalf("load page %d: %v", index+1, err)
+		}
+		if page.TotalCount != 3 || page.TotalPages != 3 || len(page.Events) != 1 {
+			t.Fatalf("unexpected page: %+v", page)
+		}
+		if page.Events[0].Source != wantSource {
+			t.Fatalf("expected source %s, got %+v", wantSource, page.Events[0])
+		}
+		if index == 0 {
+			firstID = page.Events[0].ID
+		} else if firstID <= page.Events[0].ID {
+			t.Fatalf("expected id desc tie-breaker, got first=%d second=%d", firstID, page.Events[0].ID)
+		}
 	}
 }
 
 func TestListUsageEventsWithFilterCursorPaginatesWithoutDuplicates(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events-cursor.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 
 	timestamp := time.Date(2026, 4, 16, 12, 0, 0, 123456789, time.UTC)
 	events := []entities.UsageEvent{
@@ -132,10 +116,6 @@ func TestListUsageEventsWithFilterCursorPaginatesWithoutDuplicates(t *testing.T)
 		t.Fatalf("InsertUsageEvents returned error: %v", err)
 	}
 
-	allRows, err := ListUsageEventsWithFilter(db, dto.UsageQueryFilter{Page: 1, PageSize: 20}, emptyPricingResolverForTest())
-	if err != nil {
-		t.Fatalf("load expected ordering: %v", err)
-	}
 	var loadedIDs []int64
 	filter := dto.UsageQueryFilter{CursorMode: true, PageSize: 2}
 	for batch := 0; ; batch++ {
@@ -161,27 +141,13 @@ func TestListUsageEventsWithFilterCursorPaginatesWithoutDuplicates(t *testing.T)
 		filter.CursorID = lastEvent.ID
 	}
 
-	if len(loadedIDs) != len(allRows.Events) {
-		t.Fatalf("expected %d cursor rows, got %d: %+v", len(allRows.Events), len(loadedIDs), loadedIDs)
-	}
-	seen := make(map[int64]struct{}, len(loadedIDs))
-	for index, id := range loadedIDs {
-		if _, exists := seen[id]; exists {
-			t.Fatalf("cursor pagination returned duplicate id %d: %+v", id, loadedIDs)
-		}
-		seen[id] = struct{}{}
-		if id != allRows.Events[index].ID {
-			t.Fatalf("cursor ordering mismatch at %d: got %d want %d", index, id, allRows.Events[index].ID)
-		}
+	if !slices.Equal(loadedIDs, []int64{2, 1, 3, 5, 4}) {
+		t.Fatalf("expected each seeded event exactly once in timestamp/id order, got %v", loadedIDs)
 	}
 }
 
 func TestListUsageEventsWithFilterAppliesModelAuthIndexAndResultFilters(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events-filtered.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	events := []entities.UsageEvent{
 		{EventKey: "event-1", APIGroupKey: "provider-a", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC), Source: "source-a", AuthIndex: "auth-a", Failed: false, TotalTokens: 10},
 		{EventKey: "event-2", APIGroupKey: "provider-a", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC), Source: "source-a", AuthIndex: "auth-a", Failed: true, TotalTokens: 20},
@@ -205,11 +171,7 @@ func TestListUsageEventsWithFilterAppliesModelAuthIndexAndResultFilters(t *testi
 }
 
 func TestExportUsageEventsWithFilterAppliesFiltersWithoutPagination(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events-export.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	events := []entities.UsageEvent{
 		{EventKey: "event-1", APIGroupKey: "provider-a", Model: "claude-sonnet", ExecutorType: "responses", Timestamp: time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC), Source: "source-a", AuthIndex: "auth-a", Failed: false, TotalTokens: 10},
 		{EventKey: "event-2", APIGroupKey: "provider-a", Model: "claude-sonnet", ExecutorType: "responses", Timestamp: time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC), Source: "source-a", AuthIndex: "auth-a", Failed: false, TotalTokens: 20},
@@ -238,11 +200,7 @@ func TestExportUsageEventsWithFilterAppliesFiltersWithoutPagination(t *testing.T
 }
 
 func TestListUsageEventsWithFilterAddsBackendCost(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events-cost.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	if _, err := UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{
 		Model:                "claude-sonnet",
 		PricingStyle:         entities.ModelPricingStyleClaude,
@@ -283,11 +241,7 @@ func TestListUsageEventsWithFilterAddsBackendCost(t *testing.T) {
 }
 
 func TestListUsageEventsWithFilterMarksCostUnavailableWhenPriceMissing(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events-missing-cost.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	if _, _, err := InsertUsageEvents(db, []entities.UsageEvent{{
 		EventKey:    "event-missing-cost",
 		APIGroupKey: "provider-a",
@@ -309,11 +263,7 @@ func TestListUsageEventsWithFilterMarksCostUnavailableWhenPriceMissing(t *testin
 }
 
 func TestListUsageEventsWithFilterAppliesAuthIndexFilter(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events-auth-filter.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	events := []entities.UsageEvent{
 		{EventKey: "event-1", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC), Source: "auth-1", AuthIndex: "auth-1", TotalTokens: 10},
 		{EventKey: "event-2", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC), Source: "source-alias", AuthIndex: "auth-1", TotalTokens: 20},
@@ -339,11 +289,7 @@ func TestListUsageEventsWithFilterAppliesAuthIndexFilter(t *testing.T) {
 }
 
 func TestListUsageEventsWithFilterAppliesAuthTypeWithSharedAuthIndex(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events-auth-type-filter.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	events := []entities.UsageEvent{
 		{EventKey: "oauth-shared", AuthType: "oauth", AuthIndex: "shared-auth", Model: "codex", Timestamp: time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)},
 		{EventKey: "apikey-shared", AuthType: "apikey", AuthIndex: "shared-auth", Model: "gpt-5", Timestamp: time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC)},
@@ -362,11 +308,7 @@ func TestListUsageEventsWithFilterAppliesAuthTypeWithSharedAuthIndex(t *testing.
 }
 
 func TestListUsageEventFilterOptionsWithFilterReturnsStableModels(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-events-filter-options.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	events := []entities.UsageEvent{
 		{EventKey: "event-1", APIGroupKey: "provider-a", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC), Source: "source-a", Failed: false, TotalTokens: 10},
 		{EventKey: "event-2", APIGroupKey: "provider-a", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC), Source: "source-b", Failed: true, TotalTokens: 20},
@@ -381,7 +323,7 @@ func TestListUsageEventFilterOptionsWithFilterReturnsStableModels(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ListUsageEventFilterOptionsWithFilter returned error: %v", err)
 	}
-	if len(options.Models) != 2 || options.Models[0] != "claude-sonnet" || options.Models[1] != "gpt-5" {
+	if !slices.Equal(options.Models, []string{"claude-sonnet", "gpt-5"}) {
 		t.Fatalf("expected stable model options, got %+v", options.Models)
 	}
 }
