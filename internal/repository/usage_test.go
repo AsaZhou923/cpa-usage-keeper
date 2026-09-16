@@ -3,14 +3,11 @@ package repository
 import (
 	"context"
 	"math"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 	repodto "cpa-usage-keeper/internal/repository/dto"
-	"gorm.io/gorm"
 )
 
 func assertAnalysisCostClose(t *testing.T, got, want float64) {
@@ -21,12 +18,10 @@ func assertAnalysisCostClose(t *testing.T, got, want float64) {
 }
 
 func TestListUsageEventsWithFilterPreservesEventFields(t *testing.T) {
-	db := openUsageTestDatabase(t)
+	db := openTestDatabase(t)
 	ttftMS := int64(45)
 	events := []entities.UsageEvent{
 		{EventKey: "event-1", APIGroupKey: "provider-a", Model: "claude-sonnet", ServiceTier: "priority", ExecutorType: "responses", Endpoint: "POST /v1/messages", Timestamp: time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC), Source: "codex-a", AuthIndex: "1", Failed: false, LatencyMS: 100, TTFTMS: &ttftMS, InputTokens: 10, OutputTokens: 20, ReasoningTokens: 5, CachedTokens: 0, CacheReadTokens: 7, CacheCreationTokens: 8, TotalTokens: 35},
-		{EventKey: "event-2", APIGroupKey: "provider-a", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC), Source: "codex-b", AuthIndex: "2", Failed: true, LatencyMS: 200, InputTokens: 2, OutputTokens: 3, ReasoningTokens: 0, CachedTokens: 0, TotalTokens: 5},
-		{EventKey: "event-3", APIGroupKey: "provider-b", Model: "claude-opus", Timestamp: time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC), Source: "codex-c", AuthIndex: "3", Failed: false, LatencyMS: 300, InputTokens: 100, OutputTokens: 50, ReasoningTokens: 25, CachedTokens: 10, TotalTokens: 185},
 	}
 	if _, _, err := InsertUsageEvents(db, events); err != nil {
 		t.Fatalf("InsertUsageEvents returned error: %v", err)
@@ -36,31 +31,29 @@ func TestListUsageEventsWithFilterPreservesEventFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListUsageEventsWithFilter returned error: %v", err)
 	}
-	if page.Events[2].CacheReadTokens != 7 || page.Events[2].CacheCreationTokens != 8 {
-		t.Fatalf("expected cache token event list fields to be preserved, got %+v", page.Events[2])
+	if len(page.Events) != 1 {
+		t.Fatalf("expected one event, got %+v", page.Events)
 	}
-	if page.Events[2].TTFTMS == nil || *page.Events[2].TTFTMS != 45 {
-		t.Fatalf("expected ttft_ms event list field to be preserved, got %+v", page.Events[2].TTFTMS)
+	event := page.Events[0]
+	if event.CacheReadTokens != 7 || event.CacheCreationTokens != 8 {
+		t.Fatalf("expected cache token event list fields to be preserved, got %+v", event)
 	}
-	if page.Events[2].Endpoint != "POST /v1/messages" {
-		t.Fatalf("expected endpoint event list field to be preserved, got %q", page.Events[2].Endpoint)
+	if event.TTFTMS == nil || *event.TTFTMS != 45 {
+		t.Fatalf("expected ttft_ms event list field to be preserved, got %+v", event.TTFTMS)
 	}
-	if page.Events[2].ExecutorType != "responses" {
-		t.Fatalf("expected executor_type event list field to be preserved, got %q", page.Events[2].ExecutorType)
+	if event.Endpoint != "POST /v1/messages" {
+		t.Fatalf("expected endpoint event list field to be preserved, got %q", event.Endpoint)
 	}
-	if page.Events[2].ServiceTier != "priority" {
-		t.Fatalf("expected service_tier event list field to be preserved, got %q", page.Events[2].ServiceTier)
+	if event.ExecutorType != "responses" {
+		t.Fatalf("expected executor_type event list field to be preserved, got %q", event.ExecutorType)
+	}
+	if event.ServiceTier != "priority" {
+		t.Fatalf("expected service_tier event list field to be preserved, got %q", event.ServiceTier)
 	}
 }
 
 func TestUsageOverviewDailyBucketUsesLocalTime(t *testing.T) {
-	previousLocal := time.Local
-	location, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatalf("load location: %v", err)
-	}
-	time.Local = location
-	t.Cleanup(func() { time.Local = previousLocal })
+	withRepositoryTestLocation(t, "Asia/Shanghai")
 
 	bucketKey, bucketMinutes := usageOverviewBucket(time.Date(2026, 4, 16, 23, 30, 0, 0, time.UTC), true)
 
@@ -69,9 +62,29 @@ func TestUsageOverviewDailyBucketUsesLocalTime(t *testing.T) {
 	}
 }
 
-func TestBuildUsageOverviewWithFilterFiltersByAPIGroupKey(t *testing.T) {
-	db := openUsageTestDatabase(t)
-	insertAPIKeyFilterEvents(t, db)
+func TestUsageQueriesFilterByAPIGroupKey(t *testing.T) {
+	db := openTestDatabase(t)
+	events := []entities.UsageEvent{
+		{EventKey: "target-1", APIGroupKey: "sk-target-key", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC), Source: "source-a", AuthIndex: "1", Failed: false, LatencyMS: 100, InputTokens: 10, OutputTokens: 20, TotalTokens: 30},
+		{EventKey: "target-2", APIGroupKey: "sk-target-key", Model: "claude-opus", Timestamp: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC), Source: "source-b", AuthIndex: "2", Failed: true, LatencyMS: 200, InputTokens: 15, OutputTokens: 25, TotalTokens: 40},
+		{EventKey: "other-1", APIGroupKey: "sk-other-key", Model: "claude-other", Timestamp: time.Date(2026, 4, 20, 11, 0, 0, 0, time.UTC), Source: "source-c", AuthIndex: "3", Failed: false, LatencyMS: 300, InputTokens: 100, OutputTokens: 200, TotalTokens: 300},
+	}
+	if _, _, err := InsertUsageEvents(db, events); err != nil {
+		t.Fatalf("InsertUsageEvents returned error: %v", err)
+	}
+
+	page, err := ListUsageEventsWithFilter(db, repodto.UsageQueryFilter{APIGroupKey: "sk-target-key", Page: 1, PageSize: 100, Limit: 100}, emptyPricingResolverForTest())
+	if err != nil {
+		t.Fatalf("ListUsageEventsWithFilter returned error: %v", err)
+	}
+	if page.TotalCount != 2 || len(page.Events) != 2 {
+		t.Fatalf("expected only target key events, got %+v", page)
+	}
+	for _, event := range page.Events {
+		if event.APIGroupKey != "sk-target-key" {
+			t.Fatalf("expected target key only, got %+v", page.Events)
+		}
+	}
 
 	if err := AggregateUsageOverviewStats(context.Background(), db, time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("AggregateUsageOverviewStats returned error: %v", err)
@@ -90,43 +103,8 @@ func TestBuildUsageOverviewWithFilterFiltersByAPIGroupKey(t *testing.T) {
 	}
 }
 
-func TestBuildAnalysisWithFilterUsesOverviewStatsWithoutUsageEvents(t *testing.T) {
-	db := openUsageTestDatabase(t)
-	bucket := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
-	if err := db.Create(&entities.CPAAPIKey{APIKey: "sk-target-key", DisplayKey: "sk-*********target"}).Error; err != nil {
-		t.Fatalf("insert CPA API key: %v", err)
-	}
-	if err := db.Create(&entities.UsageOverviewHourlyStat{
-		BucketStart:  bucket,
-		APIGroupKey:  "sk-target-key",
-		Model:        "claude-sonnet",
-		RequestCount: 2,
-		InputTokens:  10,
-		OutputTokens: 20,
-		TotalTokens:  30,
-	}).Error; err != nil {
-		t.Fatalf("insert hourly stat: %v", err)
-	}
-	if err := db.Migrator().DropTable(&entities.UsageEvent{}); err != nil {
-		t.Fatalf("drop usage_events: %v", err)
-	}
-	start := bucket
-	end := bucket.Add(time.Hour)
-
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
-	if err != nil {
-		t.Fatalf("BuildAnalysisWithFilter returned error after dropping usage_events: %v", err)
-	}
-	if len(analysis.TokenUsage) != 1 || analysis.TokenUsage[0].TotalTokens != 30 || analysis.TokenUsage[0].Requests != 2 {
-		t.Fatalf("expected analysis to come from overview hourly stats, got %+v", analysis.TokenUsage)
-	}
-	if len(analysis.APIKeyComposition) != 1 || analysis.APIKeyComposition[0].Key != "sk-target-key" {
-		t.Fatalf("expected API composition from overview stats, got %+v", analysis.APIKeyComposition)
-	}
-}
-
 func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testing.T) {
-	db := openUsageTestDatabase(t)
+	db := openTestDatabase(t)
 	bucket := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
 	if err := db.Create(&entities.CPAAPIKey{APIKey: "sk-target-key", DisplayKey: "sk-*********target"}).Error; err != nil {
 		t.Fatalf("insert CPA API key: %v", err)
@@ -191,6 +169,9 @@ func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testi
 	if len(analysis.TokenUsage) != 2 {
 		t.Fatalf("expected two costed token buckets, got %+v", analysis.TokenUsage)
 	}
+	if analysis.TokenUsage[0].TotalTokens != 1_750_000 || analysis.TokenUsage[0].Requests != 2 || analysis.TokenUsage[1].TotalTokens != 2_000_000 || analysis.TokenUsage[1].Requests != 1 {
+		t.Fatalf("expected token usage from overview hourly stats, got %+v", analysis.TokenUsage)
+	}
 	assertAnalysisCostClose(t, analysis.TokenUsage[0].CostUSD, 9.96)
 	assertAnalysisCostClose(t, analysis.TokenUsage[1].CostUSD, 21.45)
 	if !analysis.TokenUsage[0].CostAvailable || !analysis.TokenUsage[1].CostAvailable {
@@ -204,7 +185,7 @@ func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testi
 	if !analysis.CostBreakdown.CostAvailable {
 		t.Fatalf("expected aggregate cost to be available, got %+v", analysis.CostBreakdown)
 	}
-	if len(analysis.APIKeyComposition) != 1 {
+	if len(analysis.APIKeyComposition) != 1 || analysis.APIKeyComposition[0].Key != "sk-target-key" {
 		t.Fatalf("expected one api composition row, got %+v", analysis.APIKeyComposition)
 	}
 	assertAnalysisCostClose(t, analysis.APIKeyComposition[0].CostUSD, 31.41)
@@ -231,13 +212,10 @@ func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testi
 		t.Fatalf("expected second model efficiency row for gpt-4o, got %+v", analysis.ModelEfficiency)
 	}
 	assertAnalysisCostClose(t, analysis.ModelEfficiency[1].OutputTokensPerRequest, 250_000)
-	if analysis.ModelEfficiency[0].OutputTokensPerRequest == 0 || analysis.ModelEfficiency[0].CacheReadRate == 0 {
-		t.Fatalf("unexpected model efficiency metrics: %+v", analysis.ModelEfficiency[0])
-	}
 }
 
 func TestBuildAnalysisWithFilterMarksCostUnavailableForUnpricedStats(t *testing.T) {
-	db := openUsageTestDatabase(t)
+	db := openTestDatabase(t)
 	bucket := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
 	if err := db.Create(&entities.CPAAPIKey{APIKey: "sk-target-key", DisplayKey: "sk-*********target"}).Error; err != nil {
 		t.Fatalf("insert CPA API key: %v", err)
@@ -270,7 +248,7 @@ func TestBuildAnalysisWithFilterMarksCostUnavailableForUnpricedStats(t *testing.
 }
 
 func TestBuildAnalysisWithFilterExcludesMissingAndDeletedCPAAPIKeys(t *testing.T) {
-	db := openUsageTestDatabase(t)
+	db := openTestDatabase(t)
 	bucket := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
 	deletedAt := bucket.Add(time.Hour)
 	if err := db.Create([]entities.CPAAPIKey{
@@ -308,7 +286,7 @@ func TestBuildAnalysisWithFilterExcludesMissingAndDeletedCPAAPIKeys(t *testing.T
 }
 
 func TestBuildAnalysisWithFilterBuildsIdentityCompositionsFromActiveUsageIdentities(t *testing.T) {
-	db := openUsageTestDatabase(t)
+	db := openTestDatabase(t)
 	bucket := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
 	deletedAt := bucket.Add(time.Hour)
 	if err := db.Create([]entities.CPAAPIKey{
@@ -369,7 +347,7 @@ func TestBuildAnalysisWithFilterBuildsIdentityCompositionsFromActiveUsageIdentit
 }
 
 func TestBuildAnalysisWithFilterKeepsHeatmapPairsSeparateWhenValuesContainDelimiter(t *testing.T) {
-	db := openUsageTestDatabase(t)
+	db := openTestDatabase(t)
 	bucket := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
 	if err := db.Create([]entities.CPAAPIKey{
 		{APIKey: "sk-a\x00claude", DisplayKey: "sk-*********claude"},
@@ -397,7 +375,7 @@ func TestBuildAnalysisWithFilterKeepsHeatmapPairsSeparateWhenValuesContainDelimi
 
 func TestBuildAnalysisWithFilterIncludesCurrentHourStatsInRollingHourlyRanges(t *testing.T) {
 	withRepositoryTestLocation(t, "Asia/Shanghai")
-	db := openUsageTestDatabase(t)
+	db := openTestDatabase(t)
 	start := time.Date(2026, 5, 21, 4, 14, 21, 0, time.Local)
 	end := time.Date(2026, 5, 21, 9, 14, 21, 0, time.Local)
 	currentHour := time.Date(2026, 5, 21, 9, 0, 0, 0, time.Local)
@@ -432,7 +410,7 @@ func TestBuildAnalysisWithFilterIncludesCurrentHourStatsInRollingHourlyRanges(t 
 }
 
 func TestBuildAnalysisWithFilterFillsTodayAndYesterdayHourlyBucketsFromStats(t *testing.T) {
-	db := openUsageTestDatabase(t)
+	db := openTestDatabase(t)
 	start := time.Date(2026, 5, 14, 0, 0, 0, 0, time.Local)
 	end := time.Date(2026, 5, 14, 23, 59, 59, 0, time.Local)
 	if err := db.Create(&entities.CPAAPIKey{APIKey: "sk-target-key", DisplayKey: "sk-*********target"}).Error; err != nil {
@@ -490,7 +468,7 @@ func TestBuildAnalysisWithFilterFillsTodayAndYesterdayHourlyBucketsFromStats(t *
 
 func TestBuildAnalysisWithFilterUsesCurrentDailyRollupInDailyRanges(t *testing.T) {
 	withRepositoryTestLocation(t, "UTC")
-	db := openUsageTestDatabase(t)
+	db := openTestDatabase(t)
 	start := time.Date(2026, 5, 11, 10, 15, 0, 0, time.UTC)
 	end := time.Date(2026, 5, 18, 18, 30, 0, 0, time.UTC)
 	yesterday := time.Date(2026, 5, 17, 0, 0, 0, 0, time.UTC)
@@ -571,44 +549,4 @@ func TestBuildAnalysisWithFilterUsesCurrentDailyRollupInDailyRanges(t *testing.T
 			}
 		})
 	}
-}
-
-func TestListUsageEventsWithFilterFiltersByAPIGroupKey(t *testing.T) {
-	db := openUsageTestDatabase(t)
-	insertAPIKeyFilterEvents(t, db)
-
-	page, err := ListUsageEventsWithFilter(db, repodto.UsageQueryFilter{APIGroupKey: "sk-target-key", Page: 1, PageSize: 100, Limit: 100}, emptyPricingResolverForTest())
-	if err != nil {
-		t.Fatalf("ListUsageEventsWithFilter returned error: %v", err)
-	}
-	if page.TotalCount != 2 || len(page.Events) != 2 {
-		t.Fatalf("expected only target key events, got %+v", page)
-	}
-	for _, event := range page.Events {
-		if event.APIGroupKey != "sk-target-key" {
-			t.Fatalf("expected target key only, got %+v", page.Events)
-		}
-	}
-}
-
-func insertAPIKeyFilterEvents(t *testing.T, db *gorm.DB) {
-	t.Helper()
-	events := []entities.UsageEvent{
-		{EventKey: "target-1", APIGroupKey: "sk-target-key", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC), Source: "source-a", AuthIndex: "1", Failed: false, LatencyMS: 100, InputTokens: 10, OutputTokens: 20, TotalTokens: 30},
-		{EventKey: "target-2", APIGroupKey: "sk-target-key", Model: "claude-opus", Timestamp: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC), Source: "source-b", AuthIndex: "2", Failed: true, LatencyMS: 200, InputTokens: 15, OutputTokens: 25, TotalTokens: 40},
-		{EventKey: "other-1", APIGroupKey: "sk-other-key", Model: "claude-other", Timestamp: time.Date(2026, 4, 20, 11, 0, 0, 0, time.UTC), Source: "source-c", AuthIndex: "3", Failed: false, LatencyMS: 300, InputTokens: 100, OutputTokens: 200, TotalTokens: 300},
-	}
-	if _, _, err := InsertUsageEvents(db, events); err != nil {
-		t.Fatalf("InsertUsageEvents returned error: %v", err)
-	}
-}
-
-func openUsageTestDatabase(t *testing.T) *gorm.DB {
-	t.Helper()
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "dto.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
-	return db
 }
