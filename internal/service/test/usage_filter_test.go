@@ -1,41 +1,26 @@
-package service
+package test
 
 import (
 	"context"
 	"errors"
 	"math"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/pricing"
 	"cpa-usage-keeper/internal/repository"
 	"cpa-usage-keeper/internal/repository/dto"
+	"cpa-usage-keeper/internal/service"
 	servicedto "cpa-usage-keeper/internal/service/dto"
 	"gorm.io/gorm"
 )
 
-func emptyPricingCatalogForTest() *pricing.Catalog {
-	return pricing.NewCatalog(pricing.EmptySnapshot())
-}
-
 func TestUsageServiceGetUsageOverviewDelegatesToFilteredOverview(t *testing.T) {
-	previousLocal := time.Local
-	location, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatalf("load location: %v", err)
-	}
-	t.Cleanup(func() { time.Local = previousLocal })
-	time.Local = location
+	withUsageServiceLocation(t, "Asia/Shanghai")
 
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-service-overview.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openUsageServiceTestDatabase(t)
 	if _, err := repository.UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{
 		Model:                "claude-sonnet",
 		PromptPricePer1M:     3,
@@ -60,7 +45,7 @@ func TestUsageServiceGetUsageOverviewDelegatesToFilteredOverview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadPricingSnapshot returned error: %v", err)
 	}
-	provider := NewUsageServiceWithOptions(db, UsageServiceOptions{PricingCatalog: pricing.NewCatalog(pricingSnapshot)})
+	provider := service.NewUsageServiceWithOptions(db, service.UsageServiceOptions{PricingCatalog: pricing.NewCatalog(pricingSnapshot)})
 	overview, err := provider.GetUsageOverview(context.Background(), servicedto.UsageFilter{Range: "24h", StartTime: &start, EndTime: &end})
 	if err != nil {
 		t.Fatalf("GetUsageOverview returned error: %v", err)
@@ -81,19 +66,9 @@ func TestUsageServiceGetUsageOverviewDelegatesToFilteredOverview(t *testing.T) {
 }
 
 func TestUsageServiceGetUsageOverviewUsesRecentCacheForBoundaries(t *testing.T) {
-	previousLocal := time.Local
-	location, err := time.LoadLocation("UTC")
-	if err != nil {
-		t.Fatalf("load location: %v", err)
-	}
-	t.Cleanup(func() { time.Local = previousLocal })
-	time.Local = location
+	withUsageServiceLocation(t, "UTC")
 
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-service-overview-recent-cache.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openUsageServiceTestDatabase(t)
 
 	now := time.Date(2026, 6, 10, 12, 30, 0, 0, time.UTC)
 	start := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
@@ -110,9 +85,8 @@ func TestUsageServiceGetUsageOverviewUsesRecentCacheForBoundaries(t *testing.T) 
 		TotalTokens:  100,
 	}})
 
-	provider := NewUsageServiceWithRecentCache(db, cache, emptyPricingCatalogForTest())
-	queryNow := now
-	overview, err := provider.GetUsageOverview(context.Background(), servicedto.UsageFilter{Range: "custom", StartTime: &start, EndTime: &end, QueryNow: &queryNow})
+	provider := service.NewUsageServiceWithRecentCache(db, cache, emptyPricingCatalogForTest())
+	overview, err := provider.GetUsageOverview(context.Background(), servicedto.UsageFilter{Range: "custom", StartTime: &start, EndTime: &end, QueryNow: &now})
 	if err != nil {
 		t.Fatalf("GetUsageOverview returned error: %v", err)
 	}
@@ -122,11 +96,7 @@ func TestUsageServiceGetUsageOverviewUsesRecentCacheForBoundaries(t *testing.T) 
 }
 
 func TestUsageServiceGetUsageOverviewRealtimeUsesRecentCache(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-service-overview-realtime-cache.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openUsageServiceTestDatabase(t)
 
 	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	cache := newServiceRecentCacheFromEvents(t, db, now, []entities.UsageEvent{{
@@ -143,7 +113,7 @@ func TestUsageServiceGetUsageOverviewRealtimeUsesRecentCache(t *testing.T) {
 		t.Fatalf("drop usage_events returned error: %v", err)
 	}
 
-	provider := NewUsageServiceWithRecentCache(db, cache, emptyPricingCatalogForTest())
+	provider := service.NewUsageServiceWithRecentCache(db, cache, emptyPricingCatalogForTest())
 	realtime, err := provider.GetUsageOverviewRealtime(context.Background(), servicedto.UsageFilter{
 		RealtimeWindow:  "15m",
 		RealtimeEndTime: &now,
@@ -159,27 +129,8 @@ func TestUsageServiceGetUsageOverviewRealtimeUsesRecentCache(t *testing.T) {
 }
 
 func TestUsageServiceGetUsageOverviewRealtimeResolvesAPIKeyIDForRecentCache(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-service-overview-realtime-api-key-cache.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
-	if err := repository.SyncCPAAPIKeys(db, []string{"sk-target-key", "sk-other-key"}, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatalf("SyncCPAAPIKeys returned error: %v", err)
-	}
-	activeKeys, err := repository.ListActiveCPAAPIKeys(db)
-	if err != nil {
-		t.Fatalf("ListActiveCPAAPIKeys returned error: %v", err)
-	}
-	var targetID string
-	for _, key := range activeKeys {
-		if key.APIKey == "sk-target-key" {
-			targetID = strconv.FormatInt(key.ID, 10)
-		}
-	}
-	if targetID == "" {
-		t.Fatal("expected synced target API key")
-	}
+	db := openUsageServiceTestDatabase(t)
+	targetID := seedUsageFilterAPIKeys(t, db)
 
 	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	cache := newServiceRecentCacheFromEvents(t, db, now, []entities.UsageEvent{
@@ -187,7 +138,7 @@ func TestUsageServiceGetUsageOverviewRealtimeResolvesAPIKeyIDForRecentCache(t *t
 		{APIGroupKey: "sk-other-key", Model: "gpt-5", AuthType: "oauth", Source: "other@example.com", AuthIndex: "other-auth", Timestamp: now.Add(-1 * time.Minute), InputTokens: 100, TotalTokens: 300},
 	})
 
-	provider := NewUsageServiceWithRecentCache(db, cache, emptyPricingCatalogForTest())
+	provider := service.NewUsageServiceWithRecentCache(db, cache, emptyPricingCatalogForTest())
 	realtime, err := provider.GetUsageOverviewRealtime(context.Background(), servicedto.UsageFilter{
 		APIKeyID:        targetID,
 		RealtimeWindow:  "15m",
@@ -204,27 +155,8 @@ func TestUsageServiceGetUsageOverviewRealtimeResolvesAPIKeyIDForRecentCache(t *t
 }
 
 func TestUsageServiceResolvesAPIKeyIDForUsageQueries(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-service-api-key-filter.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
-	if err := repository.SyncCPAAPIKeys(db, []string{"sk-target-key", "sk-other-key"}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatalf("SyncCPAAPIKeys returned error: %v", err)
-	}
-	activeKeys, err := repository.ListActiveCPAAPIKeys(db)
-	if err != nil {
-		t.Fatalf("ListActiveCPAAPIKeys returned error: %v", err)
-	}
-	var targetID string
-	for _, key := range activeKeys {
-		if key.APIKey == "sk-target-key" {
-			targetID = strconv.FormatInt(key.ID, 10)
-		}
-	}
-	if targetID == "" {
-		t.Fatalf("expected synced target API key")
-	}
+	db := openUsageServiceTestDatabase(t)
+	targetID := seedUsageFilterAPIKeys(t, db)
 	if _, _, err := repository.InsertUsageEvents(db, []entities.UsageEvent{
 		{EventKey: "target-1", APIGroupKey: "sk-target-key", Model: "claude-sonnet", Timestamp: time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC), TotalTokens: 10},
 		{EventKey: "target-2", APIGroupKey: "sk-target-key", Model: "claude-opus", Timestamp: time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC), TotalTokens: 20},
@@ -239,7 +171,7 @@ func TestUsageServiceResolvesAPIKeyIDForUsageQueries(t *testing.T) {
 
 	start := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 16, 11, 0, 0, 0, time.UTC)
-	provider := NewUsageService(db, emptyPricingCatalogForTest())
+	provider := service.NewUsageService(db, emptyPricingCatalogForTest())
 	overview, err := provider.GetUsageOverview(context.Background(), servicedto.UsageFilter{APIKeyID: targetID, Range: "custom", StartTime: &start, EndTime: &end})
 	if err != nil {
 		t.Fatalf("GetUsageOverview returned error: %v", err)
@@ -264,41 +196,24 @@ func TestUsageServiceResolvesAPIKeyIDForUsageQueries(t *testing.T) {
 }
 
 func TestUsageServiceRejectsInvalidAPIKeyID(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-service-invalid-api-key-id.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
-	provider := NewUsageService(db, emptyPricingCatalogForTest())
+	db := openUsageServiceTestDatabase(t)
+	provider := service.NewUsageService(db, emptyPricingCatalogForTest())
 
-	_, err = provider.ListUsageEvents(context.Background(), servicedto.UsageFilter{APIKeyID: "not-an-id", Page: 1, PageSize: 100, Limit: 100})
-	if !errors.Is(err, ErrInvalidID) {
-		t.Fatalf("expected ErrInvalidID, got %v", err)
+	_, err := provider.ListUsageEvents(context.Background(), servicedto.UsageFilter{APIKeyID: "not-an-id", Page: 1, PageSize: 100, Limit: 100})
+	if !errors.Is(err, service.ErrInvalidID) {
+		t.Fatalf("expected service.ErrInvalidID, got %v", err)
 	}
 }
 
 func TestUsageServiceRejectsDeletedAPIKeyID(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-service-deleted-api-key-id.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
+	db := openUsageServiceTestDatabase(t)
+	key := entities.CPAAPIKey{APIKey: "sk-deleted-key", IsDeleted: true}
+	if err := db.Create(&key).Error; err != nil {
+		t.Fatalf("seed deleted API key: %v", err)
 	}
-	closeTestDatabase(t, db)
-	if err := repository.SyncCPAAPIKeys(db, []string{"sk-deleted-key"}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatalf("SyncCPAAPIKeys returned error: %v", err)
-	}
-	activeKeys, err := repository.ListActiveCPAAPIKeys(db)
-	if err != nil {
-		t.Fatalf("ListActiveCPAAPIKeys returned error: %v", err)
-	}
-	if len(activeKeys) != 1 {
-		t.Fatalf("expected one active key, got %+v", activeKeys)
-	}
-	if err := db.Model(&entities.CPAAPIKey{}).Where("id = ?", activeKeys[0].ID).Update("is_deleted", true).Error; err != nil {
-		t.Fatalf("mark api key deleted: %v", err)
-	}
-	provider := NewUsageService(db, emptyPricingCatalogForTest())
+	provider := service.NewUsageService(db, emptyPricingCatalogForTest())
 
-	_, err = provider.GetUsageOverview(context.Background(), servicedto.UsageFilter{APIKeyID: strconv.FormatInt(activeKeys[0].ID, 10)})
+	_, err := provider.GetUsageOverview(context.Background(), servicedto.UsageFilter{APIKeyID: strconv.FormatInt(key.ID, 10)})
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("expected deleted key to return record not found, got %v", err)
 	}

@@ -2,16 +2,13 @@ package test
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/repository"
 	"cpa-usage-keeper/internal/service"
 	servicedto "cpa-usage-keeper/internal/service/dto"
-	"gorm.io/gorm"
 )
 
 func TestUsageServicePreservesEventMetadataForListAndStream(t *testing.T) {
@@ -36,9 +33,6 @@ func TestUsageServicePreservesEventMetadataForListAndStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListUsageEvents returned error: %v", err)
 	}
-	if len(page.Events) != 1 || page.Events[0].ModelAlias != "sonnet-business" || page.Events[0].ServiceTier != "auto" || page.Events[0].ResponseServiceTier != "default" {
-		t.Fatalf("expected list result to preserve event metadata, got %+v", page.Events)
-	}
 
 	var streamed []servicedto.UsageEventRecord
 	if err := provider.StreamUsageEvents(context.Background(), servicedto.UsageFilter{}, func(event servicedto.UsageEventRecord) error {
@@ -47,25 +41,9 @@ func TestUsageServicePreservesEventMetadataForListAndStream(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StreamUsageEvents returned error: %v", err)
 	}
-	if len(streamed) != 1 || streamed[0].ModelAlias != "sonnet-business" || streamed[0].ServiceTier != "auto" || streamed[0].ResponseServiceTier != "default" {
-		t.Fatalf("expected stream result to preserve event metadata, got %+v", streamed)
-	}
-}
-
-func openUsageServiceTestDatabase(t *testing.T) *gorm.DB {
-	t.Helper()
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-service-test.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("get sql database: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := sqlDB.Close(); err != nil {
-			t.Fatalf("close database: %v", err)
+	for name, events := range map[string][]servicedto.UsageEventRecord{"list": page.Events, "stream": streamed} {
+		if len(events) != 1 || events[0].ModelAlias != "sonnet-business" || events[0].ServiceTier != "auto" || events[0].ResponseServiceTier != "default" {
+			t.Fatalf("%s did not preserve event metadata: %+v", name, events)
 		}
-	})
-	return db
+	}
 }
