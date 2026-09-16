@@ -3,11 +3,9 @@ package repository
 import (
 	"context"
 	"math"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/pricing"
 	"cpa-usage-keeper/internal/repository/dto"
@@ -15,11 +13,7 @@ import (
 )
 
 func TestSumUsageWindowStatsByAuthIndexUsesAuthIndexAndWindow(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-window-stats.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	if _, err := UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{Model: "priced", PromptPricePer1M: 10, CompletionPricePer1M: 20, CacheReadPricePer1M: 1}); err != nil {
 		t.Fatalf("UpsertModelPriceSetting returned error: %v", err)
 	}
@@ -43,17 +37,13 @@ func TestSumUsageWindowStatsByAuthIndexUsesAuthIndexAndWindow(t *testing.T) {
 		t.Fatalf("expected 2200000 tokens, got %d", stats.Tokens)
 	}
 	wantCost := 1.5*10 + 0.5*20 + 0.2*1
-	if stats.Cost != wantCost {
+	if math.Abs(stats.Cost-wantCost) > 1e-9 {
 		t.Fatalf("expected cost %.2f, got %.2f", wantCost, stats.Cost)
 	}
 }
 
 func TestSumUsageWindowStatsByAuthIndexCalculatesClaudeCacheReadAndCreationCost(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-window-stats-claude.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	if _, err := UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{
 		Model:                "claude-sonnet",
 		PricingStyle:         entities.ModelPricingStyleClaude,
@@ -91,11 +81,7 @@ func TestSumUsageWindowStatsByAuthIndexCalculatesClaudeCacheReadAndCreationCost(
 }
 
 func TestSumUsageWindowStatsByAuthIndexUsesHourlyStatsForLongWindow(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-window-stats-hourly.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	if _, err := UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{Model: "priced", PromptPricePer1M: 10, CompletionPricePer1M: 20, CacheReadPricePer1M: 1}); err != nil {
 		t.Fatalf("UpsertModelPriceSetting returned error: %v", err)
 	}
@@ -130,17 +116,13 @@ func TestSumUsageWindowStatsByAuthIndexUsesHourlyStatsForLongWindow(t *testing.T
 		t.Fatalf("expected hourly plus boundary tokens, got %d", stats.Tokens)
 	}
 	wantCost := 3.1*10 + 0.5*20 + 0.3*1
-	if stats.Cost != wantCost {
+	if math.Abs(stats.Cost-wantCost) > 1e-9 {
 		t.Fatalf("expected cost %.2f, got %.2f", wantCost, stats.Cost)
 	}
 }
 
 func TestSumLongUsageWindowTokenStatsDoesNotDoubleCountWhenBoundaryClips(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-window-stats-overlap.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	start := time.Date(2026, 5, 25, 14, 30, 0, 0, time.UTC)
 	end := time.Date(2026, 5, 25, 15, 20, 0, 0, time.UTC)
 	if err := db.Create(&entities.UsageEvent{AuthIndex: "auth-1", Model: "priced", Timestamp: start.Add(10 * time.Minute), TotalTokens: 1_000_000}).Error; err != nil {
@@ -158,39 +140,35 @@ func TestSumLongUsageWindowTokenStatsDoesNotDoubleCountWhenBoundaryClips(t *test
 }
 
 func TestSumUsageWindowStatsByAuthIndexIgnoresZeroWindowTimes(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-window-stats-zero-time.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	start := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
 	zero := time.Time{}
 	if err := db.Create(&entities.UsageEvent{AuthIndex: "auth-1", Model: "priced", Timestamp: start, TotalTokens: 1_000_000}).Error; err != nil {
 		t.Fatalf("seed usage event: %v", err)
 	}
 
-	stats, err := SumUsageWindowStatsByAuthIndex(context.Background(), db, "auth-1", time.Time{}, nil, emptyPricingResolverForTest())
-	if err != nil {
-		t.Fatalf("SumUsageWindowStatsByAuthIndex with zero start returned error: %v", err)
-	}
-	if stats.Tokens != 0 || stats.Cost != 0 {
-		t.Fatalf("expected zero start to return empty stats, got %+v", stats)
-	}
-	stats, err = SumUsageWindowStatsByAuthIndex(context.Background(), db, "auth-1", start, &zero, emptyPricingResolverForTest())
-	if err != nil {
-		t.Fatalf("SumUsageWindowStatsByAuthIndex with zero end returned error: %v", err)
-	}
-	if stats.Tokens != 0 || stats.Cost != 0 {
-		t.Fatalf("expected zero end to return empty stats, got %+v", stats)
+	for _, window := range []struct {
+		name  string
+		start time.Time
+		end   *time.Time
+	}{
+		{name: "zero start"},
+		{name: "zero end", start: start, end: &zero},
+	} {
+		t.Run(window.name, func(t *testing.T) {
+			stats, err := SumUsageWindowStatsByAuthIndex(context.Background(), db, "auth-1", window.start, window.end, emptyPricingResolverForTest())
+			if err != nil {
+				t.Fatalf("SumUsageWindowStatsByAuthIndex: %v", err)
+			}
+			if stats.Tokens != 0 || stats.Cost != 0 {
+				t.Fatalf("expected empty stats, got %+v", stats)
+			}
+		})
 	}
 }
 
 func TestSumUsageWindowStatsByAuthIndexTreatsMissingPriceAsZeroCost(t *testing.T) {
-	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-window-stats-missing-price.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
+	db := openTestDatabase(t)
 	start := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
 	if err := db.Create(&entities.UsageEvent{AuthType: "oauth", AuthIndex: "auth-1", Model: "missing", Timestamp: start, InputTokens: 1_000_000, TotalTokens: 1_000_000}).Error; err != nil {
 		t.Fatalf("seed usage event: %v", err)
