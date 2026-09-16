@@ -47,14 +47,8 @@ func TestDecodeRedisUsageMessageMapsPayloadToUsageEvent(t *testing.T) {
 	if event.ModelAlias == nil || *event.ModelAlias != "claude-sonnet-alias" {
 		t.Fatalf("expected model alias to decode, got %+v", event.ModelAlias)
 	}
-	if event.ReasoningEffort != "medium" {
-		t.Fatalf("expected reasoning effort to decode, got %q", event.ReasoningEffort)
-	}
-	if event.ExecutorType != "responses" {
-		t.Fatalf("expected executor type to decode, got %q", event.ExecutorType)
-	}
-	if event.ServiceTier != "standard" {
-		t.Fatalf("expected service tier to decode, got %q", event.ServiceTier)
+	if event.ReasoningEffort != "medium" || event.ExecutorType != "responses" || event.ServiceTier != "standard" {
+		t.Fatalf("unexpected request metadata: %+v", event)
 	}
 	if event.InputTokens != 10 || event.OutputTokens != 20 || event.ReasoningTokens != 3 || event.CachedTokens != 4 || event.CacheReadTokens != 5 || event.CacheCreationTokens != 6 || event.TotalTokens != 0 {
 		t.Fatalf("unexpected tokens: %+v", event)
@@ -133,27 +127,6 @@ func codexSnapshotPrimaryUsedPercent(snapshot *quota.UsageHeaderSnapshot) (float
 	return result.Usage.RateLimit.PrimaryWindow.UsedPercent, true
 }
 
-func TestDecodeRedisUsageMessageWithHeadersSkipsMalformedHeadersWithoutBlockingEvent(t *testing.T) {
-	fetchedAt := time.Date(2026, 6, 22, 11, 10, 43, 0, time.Local)
-	event, _, snapshot, err := DecodeRedisUsageMessageWithHeaders(`{
-		"timestamp":"2026-06-22T11:10:43+08:00",
-		"auth_type":"oauth",
-		"auth_index":"codex-auth",
-		"provider":"codex",
-		"request_id":"req-header-malformed",
-		"response_headers":"not-a-header-map"
-	}`, fetchedAt)
-	if err != nil {
-		t.Fatalf("DecodeRedisUsageMessageWithHeaders returned error: %v", err)
-	}
-	if event.RequestID != "req-header-malformed" || event.AuthIndex != "codex-auth" {
-		t.Fatalf("expected usage event to decode despite malformed headers, got %+v", event)
-	}
-	if snapshot != nil {
-		t.Fatalf("expected malformed headers to skip quota snapshot, got %+v", snapshot)
-	}
-}
-
 func TestDecodeRedisUsageResponseHeadersSkipsNullWithoutAllocating(t *testing.T) {
 	raw := json.RawMessage(" \nnull\t")
 	allocs := testing.AllocsPerRun(1000, func() {
@@ -167,36 +140,40 @@ func TestDecodeRedisUsageResponseHeadersSkipsNullWithoutAllocating(t *testing.T)
 	}
 }
 
-func TestDecodeRedisUsageMessageWithHeadersSkipsHeadersWithoutCompleteCodexQuota(t *testing.T) {
+func TestDecodeRedisUsageMessageWithHeadersSkipsInvalidOrIncompleteHeaders(t *testing.T) {
 	tests := []struct {
 		name    string
 		headers string
 	}{
+		{name: "malformed headers", headers: `"not-a-header-map"`},
 		{
 			name:    "ordinary response headers",
-			headers: `"Date":["Mon, 22 Jun 2026 03:10:44 GMT"]`,
+			headers: `{"Date":["Mon, 22 Jun 2026 03:10:44 GMT"]}`,
 		},
 		{
 			name:    "codex quota without reset boundary",
-			headers: `"X-Codex-Primary-Used-Percent":["4"],"X-Codex-Primary-Window-Minutes":["300"]`,
+			headers: `{"X-Codex-Primary-Used-Percent":["4"],"X-Codex-Primary-Window-Minutes":["300"]}`,
 		},
 		{
 			name:    "codex quota without window minutes",
-			headers: `"X-Codex-Primary-Used-Percent":["4"],"X-Codex-Primary-Reset-After-Seconds":["60"]`,
+			headers: `{"X-Codex-Primary-Used-Percent":["4"],"X-Codex-Primary-Reset-After-Seconds":["60"]}`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, snapshot, err := DecodeRedisUsageMessageWithHeaders(`{
+			event, _, snapshot, err := DecodeRedisUsageMessageWithHeaders(`{
 				"timestamp":"2026-06-22T11:10:43+08:00",
 				"auth_type":"oauth",
 				"auth_index":"codex-auth",
 				"provider":"codex",
 				"request_id":"req-header-ignored",
-				"response_headers":{`+tt.headers+`}
+				"response_headers":`+tt.headers+`
 			}`, time.Date(2026, 6, 22, 11, 10, 43, 0, time.Local))
 			if err != nil {
 				t.Fatalf("DecodeRedisUsageMessageWithHeaders returned error: %v", err)
+			}
+			if event.RequestID != "req-header-ignored" || event.AuthIndex != "codex-auth" {
+				t.Fatalf("expected event to decode despite unusable headers: %+v", event)
 			}
 			if snapshot != nil {
 				t.Fatalf("expected incomplete/non-codex headers to skip quota snapshot, got %+v", snapshot)
