@@ -3,16 +3,12 @@ package test
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"testing"
 	"time"
 
 	. "cpa-usage-keeper/internal/api"
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
-	"cpa-usage-keeper/internal/repository"
 	repositorydto "cpa-usage-keeper/internal/repository/dto"
 	"cpa-usage-keeper/internal/service"
 )
@@ -28,15 +24,7 @@ type overviewSeriesJSON struct {
 }
 
 func TestLongCustomDayOverviewCapsAlignedSeriesAtNinetyPoints(t *testing.T) {
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "overview-series.db")})
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("resolve sql database: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
+	db := openAPITestDatabase(t)
 
 	now := time.Now().In(time.Local)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
@@ -57,8 +45,7 @@ func TestLongCustomDayOverviewCapsAlignedSeriesAtNinetyPoints(t *testing.T) {
 		"start": {start.Format(time.DateOnly)}, "end": {today.Format(time.DateOnly)},
 	}
 	router := NewRouter(nil, nil, service.NewUsageService(db, emptyPricingCatalogForTest()), nil, AuthConfig{}, nil, "")
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview?"+query.Encode(), nil))
+	response := serveAPIGet(router, "/api/v1/usage/overview?"+query.Encode())
 	if response.Code != http.StatusOK {
 		t.Fatalf("Overview status=%d body=%s", response.Code, response.Body.String())
 	}
