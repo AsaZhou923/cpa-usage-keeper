@@ -8,6 +8,7 @@ const keyOverviewPageStyles = readSource(new URL('../../features/key-viewer/KeyV
 const keyOverviewPageSource = readSource(new URL('../KeyOverviewPage.tsx', import.meta.url))
 const keyAnalysisPageSource = readSource(new URL('../KeyAnalysisPage.tsx', import.meta.url))
 const keyViewerShellSource = readSource(new URL('../../features/key-viewer/KeyViewerShell.tsx', import.meta.url))
+const statCardsSource = readSource(new URL('../../components/usage/StatCards.tsx', import.meta.url))
 
 const usagePageEffectBlock = (needle: string) => {
   const needleIndex = usagePageSource.indexOf(needle)
@@ -22,6 +23,14 @@ const usagePageEffectBlock = (needle: string) => {
 }
 
 describe('UsagePage caller wiring', () => {
+  it('passes daily averages from both overview pages into the rendered card', () => {
+    for (const source of [usagePageSource, keyOverviewPageSource]) {
+      expect(source).toContain('dailyAverageUsage={dailyAverageCardUsage}')
+      expect(source).toContain('reserveDailyAverage={reserveDailyAverageCard}')
+    }
+    expect(statCardsSource).toContain('<DailyAverageCard usage={dailyAverageUsage} loading={loading} />')
+  })
+
   it('patches the local ranking cache by Key ID after a settings alias save', () => {
     const start = usagePageSource.indexOf('const handleSaveApiKeyAlias = useCallback')
     const end = usagePageSource.indexOf('\n  const handleRevokeAuthSession', start)

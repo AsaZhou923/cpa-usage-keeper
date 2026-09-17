@@ -627,6 +627,7 @@ describe('AuthFileCredentialsSection inspection controls', () => {
   it('renders the enabled auto refresh frequency form', () => {
     const html = renderSettings()
 
+    expect(html).toContain('credentialAutoRefreshScheduleAreaActive')
     expect(html).toContain('usage_stats.credentials_auto_refresh_settings')
     expect(html).toContain('usage_stats.credentials_auto_refresh_value')
     expect(html).toContain('usage_stats.credentials_auto_refresh_unit_hour')
@@ -652,6 +653,7 @@ describe('AuthFileCredentialsSection inspection controls', () => {
   it('keeps the schedule area mounted but collapsed when auto refresh is off', () => {
     const html = renderSettings({ enabled: false, unit: 'minute', value: '' })
 
+    expect(html).not.toContain('credentialAutoRefreshScheduleAreaActive')
     expect(html).toMatch(/credentialAutoRefreshScheduleArea[^>]*aria-hidden="true"/)
     expect(html).toMatch(/<input[^>]*type="number"[^>]*disabled=""/)
   })
