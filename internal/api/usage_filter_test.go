@@ -52,114 +52,50 @@ func TestParseUsageFilterQueryIgnoresRealtimeWindow(t *testing.T) {
 	}
 }
 
-func TestParseUsageFilterQueryTodayRangeUsesLocalDayBoundary(t *testing.T) {
-	previousLocal := time.Local
-	location, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatalf("load location: %v", err)
-	}
-	t.Cleanup(func() { time.Local = previousLocal })
-	time.Local = location
-
-	req := httptest.NewRequest("GET", "/api/v1/usage/overview?range=today", nil)
-	anchor := time.Date(2026, 4, 22, 12, 34, 56, 0, time.UTC)
-
-	filter, err := parseUsageFilterQuery(req, anchor)
-	if err != nil {
-		t.Fatalf("parseUsageFilterQuery returned error: %v", err)
-	}
-	if filter.Range != "today" {
-		t.Fatalf("expected today range to be preserved, got %+v", filter)
-	}
-	if filter.StartTime == nil || filter.EndTime == nil {
-		t.Fatalf("expected today range to resolve concrete times, got %+v", filter)
-	}
-	expectedStart := time.Date(2026, 4, 22, 0, 0, 0, 0, location)
-	expectedEnd := time.Date(2026, 4, 23, 0, 0, 0, 0, location).Add(-time.Nanosecond)
-	if !filter.StartTime.Equal(expectedStart) {
-		t.Fatalf("expected today start %s, got %s", expectedStart, *filter.StartTime)
-	}
-	if filter.StartTime.Location().String() != location.String() {
-		t.Fatalf("expected today start to keep project timezone, got %s", filter.StartTime.Location())
-	}
-	if !filter.EndTime.Equal(expectedEnd) {
-		t.Fatalf("expected today end %s, got %s", expectedEnd, *filter.EndTime)
-	}
-	if filter.EndTime.Location().String() != location.String() {
-		t.Fatalf("expected today end to keep project timezone, got %s", filter.EndTime.Location())
-	}
-}
-
-func TestParseUsageFilterQueryYesterdayRangeUsesPreviousLocalDayBoundary(t *testing.T) {
-	previousLocal := time.Local
-	location, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatalf("load location: %v", err)
-	}
-	t.Cleanup(func() { time.Local = previousLocal })
-	time.Local = location
-
-	req := httptest.NewRequest("GET", "/api/v1/usage/overview?range=yesterday", nil)
-	anchor := time.Date(2026, 4, 22, 12, 34, 56, 0, time.UTC)
-
-	filter, err := parseUsageFilterQuery(req, anchor)
-	if err != nil {
-		t.Fatalf("parseUsageFilterQuery returned error: %v", err)
-	}
-	if filter.Range != "yesterday" {
-		t.Fatalf("expected yesterday range to be preserved, got %+v", filter)
-	}
-	if filter.StartTime == nil || filter.EndTime == nil {
-		t.Fatalf("expected yesterday range to resolve concrete times, got %+v", filter)
-	}
-	expectedStart := time.Date(2026, 4, 21, 0, 0, 0, 0, location)
-	expectedEnd := time.Date(2026, 4, 22, 0, 0, 0, 0, location).Add(-time.Nanosecond)
-	if !filter.StartTime.Equal(expectedStart) {
-		t.Fatalf("expected yesterday start %s, got %s", expectedStart, *filter.StartTime)
-	}
-	if filter.StartTime.Location().String() != location.String() {
-		t.Fatalf("expected yesterday start to keep project timezone, got %s", filter.StartTime.Location())
-	}
-	if !filter.EndTime.Equal(expectedEnd) {
-		t.Fatalf("expected yesterday end %s, got %s", expectedEnd, *filter.EndTime)
-	}
-	if filter.EndTime.Location().String() != location.String() {
-		t.Fatalf("expected yesterday end to keep project timezone, got %s", filter.EndTime.Location())
-	}
-}
-
-func TestParseUsageFilterQueryTodayRangeUsesLocalDSTBoundary(t *testing.T) {
-	previousLocal := time.Local
-	location, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Fatalf("load location: %v", err)
-	}
-	t.Cleanup(func() { time.Local = previousLocal })
-	time.Local = location
-
-	req := httptest.NewRequest("GET", "/api/v1/usage/overview?range=today", nil)
-	anchor := time.Date(2026, 3, 8, 12, 0, 0, 0, location)
-
-	filter, err := parseUsageFilterQuery(req, anchor)
-	if err != nil {
-		t.Fatalf("parseUsageFilterQuery returned error: %v", err)
-	}
-	if filter.StartTime == nil || filter.EndTime == nil {
-		t.Fatalf("expected today range to resolve concrete times, got %+v", filter)
-	}
-	expectedStart := time.Date(2026, 3, 8, 0, 0, 0, 0, location)
-	expectedEnd := time.Date(2026, 3, 9, 0, 0, 0, 0, location).Add(-time.Nanosecond)
-	if !filter.StartTime.Equal(expectedStart) {
-		t.Fatalf("expected DST today start %s, got %s", expectedStart, *filter.StartTime)
-	}
-	if filter.StartTime.Location().String() != location.String() {
-		t.Fatalf("expected DST today start to keep project timezone, got %s", filter.StartTime.Location())
-	}
-	if !filter.EndTime.Equal(expectedEnd) {
-		t.Fatalf("expected DST today end %s, got %s", expectedEnd, *filter.EndTime)
-	}
-	if filter.EndTime.Location().String() != location.String() {
-		t.Fatalf("expected DST today end to keep project timezone, got %s", filter.EndTime.Location())
+func TestParseUsageFilterQueryUsesLocalCalendarBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name, zone, query, rangeVal, startDate, endDate, unit string
+		anchor                                                time.Time
+		exclusive                                             bool
+	}{
+		{name: "today", zone: "Asia/Shanghai", query: "range=today", rangeVal: "today", startDate: "2026-04-22", endDate: "2026-04-23", anchor: time.Date(2026, 4, 22, 12, 34, 56, 0, time.UTC)},
+		{name: "yesterday", zone: "Asia/Shanghai", query: "range=yesterday", rangeVal: "yesterday", startDate: "2026-04-21", endDate: "2026-04-22", anchor: time.Date(2026, 4, 22, 12, 34, 56, 0, time.UTC)},
+		{name: "DST today", zone: "America/New_York", query: "range=today", rangeVal: "today", startDate: "2026-03-08", endDate: "2026-03-09", anchor: time.Date(2026, 3, 8, 16, 0, 0, 0, time.UTC)},
+		{name: "inferred custom day", zone: "Asia/Shanghai", query: "range=custom&start=2026-04-20&end=2026-04-21", rangeVal: "custom", startDate: "2026-04-20", endDate: "2026-04-22", unit: "day", anchor: time.Date(2026, 4, 21, 4, 0, 0, 0, time.UTC), exclusive: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			location, err := time.LoadLocation(tc.zone)
+			if err != nil {
+				t.Fatalf("load location: %v", err)
+			}
+			previous := time.Local
+			time.Local = location
+			t.Cleanup(func() { time.Local = previous })
+			start, err := time.ParseInLocation(time.DateOnly, tc.startDate, location)
+			if err != nil {
+				t.Fatalf("parse expected start: %v", err)
+			}
+			end, err := time.ParseInLocation(time.DateOnly, tc.endDate, location)
+			if err != nil {
+				t.Fatalf("parse expected end: %v", err)
+			}
+			if !tc.exclusive {
+				end = end.Add(-time.Nanosecond)
+			}
+			filter, err := parseUsageFilterQuery(httptest.NewRequest("GET", "/api/v1/usage/overview?"+tc.query, nil), tc.anchor)
+			if err != nil {
+				t.Fatalf("parseUsageFilterQuery: %v", err)
+			}
+			if filter.StartTime == nil || filter.EndTime == nil || !filter.StartTime.Equal(start) || !filter.EndTime.Equal(end) {
+				t.Fatalf("expected %s..%s, got %+v", start, end, filter)
+			}
+			if filter.StartTime.Location().String() != tc.zone || filter.EndTime.Location().String() != tc.zone {
+				t.Fatalf("expected project timezone %s, got %+v", tc.zone, filter)
+			}
+			if filter.Range != tc.rangeVal || filter.CustomUnit != tc.unit || filter.EndExclusive != tc.exclusive {
+				t.Fatalf("unexpected calendar range metadata: %+v", filter)
+			}
+		})
 	}
 }
 
@@ -181,43 +117,6 @@ func TestParseUsageFilterQueryCustomRange(t *testing.T) {
 	}
 	if filter.CustomUnit != "hour" || !filter.EndExclusive {
 		t.Fatalf("expected exclusive custom hour range, got %+v", filter)
-	}
-}
-
-func TestParseUsageFilterQueryCustomDateRangeUsesLocalDayBoundary(t *testing.T) {
-	previousLocal := time.Local
-	location, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatalf("load location: %v", err)
-	}
-	t.Cleanup(func() { time.Local = previousLocal })
-	time.Local = location
-
-	req := httptest.NewRequest("GET", "/api/v1/usage/overview?range=custom&start=2026-04-20&end=2026-04-21", nil)
-
-	filter, err := parseUsageFilterQuery(req, time.Date(2026, 4, 21, 12, 0, 0, 0, location))
-	if err != nil {
-		t.Fatalf("parseUsageFilterQuery returned error: %v", err)
-	}
-	if filter.StartTime == nil || filter.EndTime == nil {
-		t.Fatalf("expected custom date range bounds, got %+v", filter)
-	}
-	expectedStart := time.Date(2026, 4, 20, 0, 0, 0, 0, location)
-	expectedEnd := time.Date(2026, 4, 22, 0, 0, 0, 0, location)
-	if !filter.StartTime.Equal(expectedStart) {
-		t.Fatalf("expected custom date start %s, got %s", expectedStart, *filter.StartTime)
-	}
-	if filter.StartTime.Location().String() != location.String() {
-		t.Fatalf("expected custom date start to keep project timezone, got %s", filter.StartTime.Location())
-	}
-	if !filter.EndTime.Equal(expectedEnd) {
-		t.Fatalf("expected custom date end %s, got %s", expectedEnd, *filter.EndTime)
-	}
-	if filter.EndTime.Location().String() != location.String() {
-		t.Fatalf("expected custom date end to keep project timezone, got %s", filter.EndTime.Location())
-	}
-	if filter.CustomUnit != "day" || !filter.EndExclusive {
-		t.Fatalf("expected exclusive custom day range, got %+v", filter)
 	}
 }
 
@@ -282,30 +181,27 @@ func TestParseUsageFilterQueryRejectsInvalidIdentityAuthType(t *testing.T) {
 	}
 }
 
-func TestParseUsageFilterQueryDefaultsEventsPagination(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/v1/usage/events?range=24h", nil)
-
-	filter, err := parseUsageFilterQuery(req, time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatalf("parseUsageFilterQuery returned error: %v", err)
-	}
-	if filter.Page != 1 || filter.PageSize != 100 || filter.Offset != 0 {
-		t.Fatalf("expected default pagination, got %+v", filter)
-	}
-}
-
-func TestParseUsageFilterQueryAcceptsEventsPaginationAndFilters(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/v1/usage/events?range=24h&page=3&page_size=100&model=%20claude-sonnet%20&source=%20source-a%20&auth_index=%202%20", nil)
-
-	filter, err := parseUsageFilterQuery(req, time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatalf("parseUsageFilterQuery returned error: %v", err)
-	}
-	if filter.Page != 3 || filter.PageSize != 100 || filter.Offset != 200 {
-		t.Fatalf("expected page 3/page size 100 offset 200, got %+v", filter)
-	}
-	if filter.Model != "claude-sonnet" || filter.Source != "source-a" || filter.AuthIndex != "2" {
-		t.Fatalf("expected trimmed server-side filters, got %+v", filter)
+func TestParseUsageFilterQueryResolvesPaginationAndFilters(t *testing.T) {
+	for _, tc := range []struct {
+		query                    string
+		page, size, offset       int
+		model, source, authIndex string
+	}{
+		{query: "", page: 1, size: 100},
+		{query: "&limit=20", page: 1, size: 20},
+		{query: "&page_size=50&limit=20", page: 1, size: 50},
+		{query: "&page=3&page_size=100&model=%20claude-sonnet%20&source=%20source-a%20&auth_index=%202%20", page: 3, size: 100, offset: 200, model: "claude-sonnet", source: "source-a", authIndex: "2"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/v1/usage/events?range=24h"+tc.query, nil)
+			filter, err := parseUsageFilterQuery(req, time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatalf("parseUsageFilterQuery: %v", err)
+			}
+			if filter.Page != tc.page || filter.PageSize != tc.size || filter.Offset != tc.offset || filter.Model != tc.model || filter.Source != tc.source || filter.AuthIndex != tc.authIndex {
+				t.Fatalf("unexpected pagination/filters: %+v, want %+v", filter, tc)
+			}
+		})
 	}
 }
 
@@ -371,30 +267,6 @@ func TestParseUsageRealtimeFilterQueryRejectsInvalidAPIKeyID(t *testing.T) {
 	_, err := parseUsageRealtimeFilterQuery(req, time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC))
 	if err == nil {
 		t.Fatal("expected invalid realtime api_key_id error")
-	}
-}
-
-func TestParseUsageFilterQueryUsesLimitAsPageSizeAlias(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/v1/usage/events?range=24h&limit=20", nil)
-
-	filter, err := parseUsageFilterQuery(req, time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatalf("parseUsageFilterQuery returned error: %v", err)
-	}
-	if filter.Page != 1 || filter.PageSize != 20 || filter.Offset != 0 {
-		t.Fatalf("expected limit alias to set page size, got %+v", filter)
-	}
-}
-
-func TestParseUsageFilterQueryPrefersPageSizeOverLimit(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/v1/usage/events?range=24h&page_size=50&limit=20", nil)
-
-	filter, err := parseUsageFilterQuery(req, time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatalf("parseUsageFilterQuery returned error: %v", err)
-	}
-	if filter.PageSize != 50 {
-		t.Fatalf("expected page_size to win over limit, got %+v", filter)
 	}
 }
 
