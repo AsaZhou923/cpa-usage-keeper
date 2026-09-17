@@ -536,7 +536,7 @@ func TestAdminSessionCannotAccessKeyOverviewRoute(t *testing.T) {
 		t.Fatalf("Create returned error: %v", err)
 	}
 	config := AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour}
-	router := NewRouter(nil, nil, &usageFilterStub{}, nil, config, NewAuthHandler(config, sessions), "")
+	router := NewRouter(nil, nil, nil, nil, config, NewAuthHandler(config, sessions), "")
 
 	resp := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/key-overview?range=24h", nil)

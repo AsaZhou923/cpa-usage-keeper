@@ -1,13 +1,15 @@
-package api
+package test
 
 import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	. "cpa-usage-keeper/internal/api"
 	"cpa-usage-keeper/internal/auth"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/repository/dto"
@@ -17,6 +19,7 @@ import (
 )
 
 type usageFilterStub struct {
+	service.UsageProvider
 	overview      *servicedto.UsageOverviewSnapshot
 	realtime      *servicedto.UsageOverviewRealtime
 	err           error
@@ -32,60 +35,31 @@ func (s *usageFilterStub) GetUsageOverview(_ context.Context, filter servicedto.
 	return s.overview, s.err
 }
 
-func (s *usageFilterStub) GetUsageActivity(context.Context, servicedto.UsageFilter) (*servicedto.UsageActivitySnapshot, error) {
-	return nil, s.err
-}
-
 func (s *usageFilterStub) GetUsageOverviewRealtime(_ context.Context, filter servicedto.UsageFilter) (*servicedto.UsageOverviewRealtime, error) {
 	s.lastRealtime = filter
 	s.realtimeCalls++
 	return s.realtime, s.err
 }
 
-func (s *usageFilterStub) ListUsageEvents(context.Context, servicedto.UsageFilter) (*servicedto.UsageEventsPage, error) {
-	return nil, s.err
+type overviewAPIKeyStub struct {
+	service.CPAAPIKeyProvider
+	row     entities.CPAAPIKey
+	findErr error
 }
 
-func (s *usageFilterStub) StreamUsageEvents(context.Context, servicedto.UsageFilter, func(servicedto.UsageEventRecord) error) error {
-	return s.err
+func (s *overviewAPIKeyStub) ListCPAAPIKeys(context.Context) ([]entities.CPAAPIKey, error) {
+	return []entities.CPAAPIKey{s.row}, nil
 }
 
-func (s *usageFilterStub) ListUsageEventFilterOptions(context.Context, servicedto.UsageFilter) (*servicedto.UsageEventFilterOptions, error) {
-	return nil, s.err
-}
-
-func (s *usageFilterStub) GetAnalysis(context.Context, servicedto.UsageFilter) (*servicedto.AnalysisSnapshot, error) {
-	return nil, s.err
-}
-
-func (s *usageFilterStub) GetAnalysisLatency(context.Context, servicedto.UsageFilter) (*servicedto.AnalysisLatencyDiagnostics, error) {
-	return nil, s.err
-}
-
-func mustParseTime(t *testing.T, value string) time.Time {
-	t.Helper()
-	parsed, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		t.Fatalf("time.Parse returned error: %v", err)
-	}
-	return parsed
+func (s *overviewAPIKeyStub) FindActiveCPAAPIKeyByID(context.Context, int64) (entities.CPAAPIKey, error) {
+	return s.row, s.findErr
 }
 
 func TestKeyOverviewIgnoresClientAPIKeyIDAndReturnsViewerOverview(t *testing.T) {
-	sessions := auth.NewSessionManager(time.Hour)
-	token, _, err := sessions.CreateAPIKeyViewer(42)
-	if err != nil {
-		t.Fatalf("CreateAPIKeyViewer returned error: %v", err)
-	}
 	provider := &usageFilterStub{overview: &servicedto.UsageOverviewSnapshot{Usage: &dto.StatisticsSnapshot{TotalRequests: 3}}}
-	keyProvider := &authCPAAPIKeyStub{row: entities.CPAAPIKey{ID: 42, DisplayKey: "sk-*********live"}}
-	config := AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour}
-	router := NewRouter(nil, nil, provider, nil, config, NewAuthHandler(config, sessions), "", OptionalProviders{CPAAPIKeys: keyProvider})
+	router, cookie := newUsageViewerRouter(t, provider)
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/key-overview?range=24h&api_key_id=not-a-number", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/key-overview?range=24h&api_key_id=not-a-number", cookie)
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d %s", resp.Code, resp.Body.String())
@@ -93,17 +67,12 @@ func TestKeyOverviewIgnoresClientAPIKeyIDAndReturnsViewerOverview(t *testing.T) 
 	if provider.lastFilter.APIKeyID != "42" || provider.lastFilter.Range != "24h" {
 		t.Fatalf("expected key overview to force viewer API key id, got %+v", provider.lastFilter)
 	}
-	if !contains(resp.Body.String(), `"total_requests":3`) {
+	if !strings.Contains(resp.Body.String(), `"total_requests":3`) {
 		t.Fatalf("unexpected response body: %s", resp.Body.String())
 	}
 }
 
 func TestKeyOverviewRealtimeIgnoresClientAPIKeyID(t *testing.T) {
-	sessions := auth.NewSessionManager(time.Hour)
-	token, _, err := sessions.CreateAPIKeyViewer(42)
-	if err != nil {
-		t.Fatalf("CreateAPIKeyViewer returned error: %v", err)
-	}
 	provider := &usageFilterStub{
 		realtime: &servicedto.UsageOverviewRealtime{
 			Window:        "60m",
@@ -115,14 +84,9 @@ func TestKeyOverviewRealtimeIgnoresClientAPIKeyID(t *testing.T) {
 			}},
 		},
 	}
-	keyProvider := &authCPAAPIKeyStub{row: entities.CPAAPIKey{ID: 42, DisplayKey: "sk-*********live"}}
-	config := AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour}
-	router := NewRouter(nil, nil, provider, nil, config, NewAuthHandler(config, sessions), "", OptionalProviders{CPAAPIKeys: keyProvider})
+	router, cookie := newUsageViewerRouter(t, provider)
 
-	realtimeResp := httptest.NewRecorder()
-	realtimeReq := httptest.NewRequest(http.MethodGet, "/api/v1/key-overview/realtime?window=60m&api_key_id=not-a-number", nil)
-	realtimeReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-	router.ServeHTTP(realtimeResp, realtimeReq)
+	realtimeResp := serveAPIGet(router, "/api/v1/key-overview/realtime?window=60m&api_key_id=not-a-number", cookie)
 
 	if realtimeResp.Code != http.StatusOK {
 		t.Fatalf("expected realtime status 200, got %d %s", realtimeResp.Code, realtimeResp.Body.String())
@@ -130,7 +94,7 @@ func TestKeyOverviewRealtimeIgnoresClientAPIKeyID(t *testing.T) {
 	if provider.lastRealtime.APIKeyID != "42" || provider.lastRealtime.RealtimeWindow != "60m" || provider.lastRealtime.RealtimeEndTime == nil {
 		t.Fatalf("expected key overview realtime to force viewer API key id and pass window, got %+v", provider.lastRealtime)
 	}
-	if !contains(realtimeResp.Body.String(), `"request_level":[{"bucket":"2026-04-22T11:00:00Z","requests_per_minute":6,"requests":12}]`) {
+	if !strings.Contains(realtimeResp.Body.String(), `"request_level":[{"bucket":"2026-04-22T11:00:00Z","requests_per_minute":6,"requests":12}]`) {
 		t.Fatalf("unexpected realtime response body: %s", realtimeResp.Body.String())
 	}
 	var realtimeBody map[string]any
@@ -142,7 +106,7 @@ func TestKeyOverviewRealtimeIgnoresClientAPIKeyID(t *testing.T) {
 		t.Fatalf("expected key overview realtime current_usage object, got %s", realtimeResp.Body.String())
 	}
 	assertAllowedJSONKeys(t, currentUsage, "key overview realtime current_usage", realtimeResp.Body.String(), "models")
-	if contains(realtimeResp.Body.String(), `"api_keys":`) || contains(realtimeResp.Body.String(), `"auth_files":`) || contains(realtimeResp.Body.String(), `"ai_providers":`) {
+	if strings.Contains(realtimeResp.Body.String(), `"api_keys":`) || strings.Contains(realtimeResp.Body.String(), `"auth_files":`) || strings.Contains(realtimeResp.Body.String(), `"ai_providers":`) {
 		t.Fatalf("expected key overview realtime to omit internal current-usage dimensions, got %s", realtimeResp.Body.String())
 	}
 	if provider.realtimeCalls != 1 {
@@ -151,21 +115,11 @@ func TestKeyOverviewRealtimeIgnoresClientAPIKeyID(t *testing.T) {
 }
 
 func TestKeyOverviewRejectsUnsupportedRanges(t *testing.T) {
-	sessions := auth.NewSessionManager(time.Hour)
-	token, _, err := sessions.CreateAPIKeyViewer(42)
-	if err != nil {
-		t.Fatalf("CreateAPIKeyViewer returned error: %v", err)
-	}
 	provider := &usageFilterStub{overview: &servicedto.UsageOverviewSnapshot{}}
-	keyProvider := &authCPAAPIKeyStub{row: entities.CPAAPIKey{ID: 42, DisplayKey: "sk-*********live"}}
-	config := AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour}
-	router := NewRouter(nil, nil, provider, nil, config, NewAuthHandler(config, sessions), "", OptionalProviders{CPAAPIKeys: keyProvider})
+	router, cookie := newUsageViewerRouter(t, provider)
 
 	for _, path := range []string{"/api/v1/key-overview?range=90d", "/api/v1/key-overview?start=2026-04-20"} {
-		resp := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-		router.ServeHTTP(resp, req)
+		resp := serveAPIGet(router, path, cookie)
 		if resp.Code != http.StatusBadRequest {
 			t.Fatalf("expected %s to return 400, got %d %s", path, resp.Code, resp.Body.String())
 		}
@@ -176,20 +130,10 @@ func TestKeyOverviewRejectsUnsupportedRanges(t *testing.T) {
 }
 
 func TestKeyOverviewReturnsConflictForExpiredCustomRange(t *testing.T) {
-	sessions := auth.NewSessionManager(time.Hour)
-	token, _, err := sessions.CreateAPIKeyViewer(42)
-	if err != nil {
-		t.Fatalf("CreateAPIKeyViewer returned error: %v", err)
-	}
 	provider := &usageFilterStub{overview: &servicedto.UsageOverviewSnapshot{}}
-	keyProvider := &authCPAAPIKeyStub{row: entities.CPAAPIKey{ID: 42, DisplayKey: "sk-*********live"}}
-	config := AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour}
-	router := NewRouter(nil, nil, provider, nil, config, NewAuthHandler(config, sessions), "", OptionalProviders{CPAAPIKeys: keyProvider})
+	router, cookie := newUsageViewerRouter(t, provider)
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/key-overview?range=custom&unit=day&start=2000-01-01&end=2000-01-02", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/key-overview?range=custom&unit=day&start=2000-01-01&end=2000-01-02", cookie)
 
 	if resp.Code != http.StatusConflict {
 		t.Fatalf("expected expired Custom range to return 409, got %d %s", resp.Code, resp.Body.String())
@@ -206,15 +150,12 @@ func TestKeyOverviewClearsInactiveViewerSession(t *testing.T) {
 		t.Fatalf("CreateAPIKeyViewer returned error: %v", err)
 	}
 	provider := &usageFilterStub{overview: &servicedto.UsageOverviewSnapshot{}}
-	keyProvider := &authCPAAPIKeyStub{findErr: context.Canceled}
+	keyProvider := &overviewAPIKeyStub{findErr: context.Canceled}
 	config := AuthConfig{Enabled: true, LoginPassword: "secret", SessionTTL: time.Hour, BasePath: "/cpa"}
 	handler := NewAuthHandler(config, sessions)
 	router := NewRouter(nil, nil, provider, nil, config, handler, "/cpa", OptionalProviders{CPAAPIKeys: keyProvider})
 
-	resp := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/cpa/api/v1/key-overview?range=24h", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/cpa/api/v1/key-overview?range=24h", &http.Cookie{Name: standardSessionCookieName, Value: token})
 
 	if resp.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status 401, got %d %s", resp.Code, resp.Body.String())
@@ -244,16 +185,13 @@ func TestUsageOverviewResponseKeepsResolvedFilterAndTimezone(t *testing.T) {
 	startDay := today.AddDate(0, 0, -6)
 	startDate := startDay.Format(time.DateOnly)
 	endDate := today.Format(time.DateOnly)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview?range=custom&unit=day&start="+startDate+"&end="+endDate, nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/overview?range=custom&unit=day&start="+startDate+"&end="+endDate)
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", resp.Code)
 	}
 	body := resp.Body.String()
-	if !contains(body, `"timezone":"Asia/Shanghai"`) || contains(body, `"range_start":`) || contains(body, `"range_end":`) {
+	if !strings.Contains(body, `"timezone":"Asia/Shanghai"`) || strings.Contains(body, `"range_start":`) || strings.Contains(body, `"range_end":`) {
 		t.Fatalf("expected overview response to retain timezone without redundant range fields, got %s", body)
 	}
 	if provider.lastFilter.StartTime == nil || !provider.lastFilter.StartTime.Equal(startDay) ||
@@ -276,21 +214,18 @@ func TestUsageOverviewRealtimeUsesCPAAPIKeyAliasLabels(t *testing.T) {
 			}},
 		},
 	}}
-	keyProvider := &authCPAAPIKeyStub{row: entities.CPAAPIKey{ID: 42, APIKey: "sk-alpha123456", KeyAlias: "Primary Key"}}
+	keyProvider := &overviewAPIKeyStub{row: entities.CPAAPIKey{ID: 42, APIKey: "sk-alpha123456", KeyAlias: "Primary Key"}}
 	router := NewRouter(nil, nil, provider, nil, AuthConfig{}, nil, "", OptionalProviders{CPAAPIKeys: keyProvider})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview/realtime?window=15m", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/overview/realtime?window=15m")
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d %s", resp.Code, resp.Body.String())
 	}
 	body := resp.Body.String()
-	if !contains(body, `"api_keys":[{"key":"42","label":"Primary Key","tokens":20,"requests":1,"share":100}]`) {
+	if !strings.Contains(body, `"api_keys":[{"key":"42","label":"Primary Key","tokens":20,"requests":1,"share":100}]`) {
 		t.Fatalf("expected realtime API key usage to use CPA API key id and alias label, got %s", body)
 	}
-	if contains(body, "sk-alpha123456") {
+	if strings.Contains(body, "sk-alpha123456") {
 		t.Fatalf("expected realtime API key usage to avoid raw key output, got %s", body)
 	}
 }
@@ -313,12 +248,12 @@ func TestUsageOverviewRealtimeAcceptsWindowAndReturnsRealtimeBlock(t *testing.T)
 			Bucket:          "2026-04-22T11:00:00Z",
 			TokensPerMinute: 120,
 			Tokens:          20,
-			CostUSD:         float64Ptr(0.123),
+			CostUSD:         new(float64(0.123)),
 		}},
 		ResponseLevel: []servicedto.RealtimeResponseLevelPoint{{
 			Bucket:       "2026-04-22T11:00:00Z",
-			TTFTP95MS:    int64Ptr(210),
-			LatencyP95MS: int64Ptr(820),
+			TTFTP95MS:    new(int64(210)),
+			LatencyP95MS: new(int64(820)),
 		}},
 		ResponseDistribution: servicedto.RealtimeResponseDistribution{
 			TTFT: servicedto.RealtimeResponseDistributionSeries{
@@ -341,7 +276,7 @@ func TestUsageOverviewRealtimeAcceptsWindowAndReturnsRealtimeBlock(t *testing.T)
 				Label:    "gpt-5",
 				Tokens:   20,
 				Requests: 1,
-				CostUSD:  float64Ptr(0.123),
+				CostUSD:  new(float64(0.123)),
 				Share:    100,
 			}},
 			APIKeys: []servicedto.RealtimeUsageTopItem{{
@@ -359,17 +294,14 @@ func TestUsageOverviewRealtimeAcceptsWindowAndReturnsRealtimeBlock(t *testing.T)
 		}},
 		CacheLevel: []servicedto.RealtimeCacheLevelPoint{{
 			Bucket:              "2026-04-22T11:00:00Z",
-			CacheReadRate:       float64Ptr(25),
+			CacheReadRate:       new(float64(25)),
 			CacheReadTokens:     5,
 			CacheCreationTokens: 2,
 			InputTokens:         20,
 		}},
 	}}
 	router := NewRouter(nil, nil, provider, nil, AuthConfig{}, nil, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview/realtime?window=30m", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/overview/realtime?window=30m")
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d %s", resp.Code, resp.Body.String())
@@ -387,58 +319,41 @@ func TestUsageOverviewRealtimeAcceptsWindowAndReturnsRealtimeBlock(t *testing.T)
 		`"request_level":[{"bucket":"2026-04-22T11:00:00Z","requests_per_minute":6,"requests":1}]`,
 		`"cache_level":[{"bucket":"2026-04-22T11:00:00Z","cache_read_rate":25,"cache_read_tokens":5,"cache_creation_tokens":2,"input_tokens":20}]`,
 	} {
-		if !contains(body, expected) {
+		if !strings.Contains(body, expected) {
 			t.Fatalf("expected realtime response to contain %s, got %s", expected, body)
 		}
 	}
-	if contains(body, "sk-alpha123456") {
+	if strings.Contains(body, "sk-alpha123456") {
 		t.Fatalf("expected realtime API key usage to redact raw key, got %s", body)
 	}
 }
 
-func TestUsageOverviewRealtimeNilProviderStillParsesWindow(t *testing.T) {
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview/realtime?window=60m", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d %s", resp.Code, resp.Body.String())
-	}
-	if !contains(resp.Body.String(), `"window":"60m"`) {
-		t.Fatalf("expected nil provider realtime response to keep requested window, got %s", resp.Body.String())
-	}
-	if !contains(resp.Body.String(), `"bucket_seconds":120`) {
-		t.Fatalf("expected nil provider realtime response to include 60m bucket seconds, got %s", resp.Body.String())
-	}
-}
-
-func TestUsageOverviewRealtimeNilProviderRejectsUnsupportedWindow(t *testing.T) {
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview/realtime?window=45m", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d %s", resp.Code, resp.Body.String())
-	}
-}
-
-func TestUsageOverviewRealtimeRejectsFiveMinuteWindow(t *testing.T) {
-	provider := &usageFilterStub{overview: &servicedto.UsageOverviewSnapshot{}}
-	router := NewRouter(nil, nil, provider, nil, AuthConfig{}, nil, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview/realtime?window=5m", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d %s", resp.Code, resp.Body.String())
-	}
-	if provider.realtimeCalls != 0 {
-		t.Fatalf("expected removed 5m realtime window not to call usage provider, got %d", provider.realtimeCalls)
+func TestUsageOverviewRealtimeValidatesWindowsWithAndWithoutProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name, window string
+		configured   bool
+	}{
+		{"nil provider accepts 60m", "60m", false},
+		{"nil provider rejects 45m", "45m", false},
+		{"provider rejects 5m", "5m", true},
+		{"provider rejects 45m", "45m", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &usageFilterStub{}
+			var usage service.UsageProvider
+			if tc.configured {
+				usage = provider
+			}
+			router := NewRouter(nil, nil, usage, nil, AuthConfig{}, nil, "")
+			resp := serveAPIGet(router, "/api/v1/usage/overview/realtime?window="+tc.window)
+			if tc.window == "60m" {
+				if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"window":"60m"`) || !strings.Contains(resp.Body.String(), `"bucket_seconds":120`) {
+					t.Fatalf("unexpected nil-provider realtime response: %d %s", resp.Code, resp.Body.String())
+				}
+			} else if resp.Code != http.StatusBadRequest || provider.realtimeCalls != 0 {
+				t.Fatalf("invalid window status=%d calls=%d body=%s", resp.Code, provider.realtimeCalls, resp.Body.String())
+			}
+		})
 	}
 }
 
@@ -456,9 +371,7 @@ func TestUsageOverviewRejectsInvalidAPIKeyID(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
-			router.ServeHTTP(resp, req)
+			resp := serveAPIGet(router, tc.path)
 
 			if resp.Code != http.StatusBadRequest {
 				t.Fatalf("expected %s to return 400, got %d %s", tc.path, resp.Code, resp.Body.String())
@@ -472,53 +385,23 @@ func TestUsageOverviewRejectsInvalidAPIKeyID(t *testing.T) {
 }
 
 func TestUsageOverviewMapsAPIKeyLookupErrors(t *testing.T) {
-	tests := []struct {
-		name       string
-		provider   *usageFilterStub
-		wantStatus int
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
 	}{
-		{name: "invalid service id", provider: &usageFilterStub{err: service.ErrInvalidID}, wantStatus: http.StatusBadRequest},
-		{name: "missing active api key", provider: &usageFilterStub{err: gorm.ErrRecordNotFound}, wantStatus: http.StatusNotFound},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name+"/overview", func(t *testing.T) {
-			router := NewRouter(nil, nil, tc.provider, nil, AuthConfig{}, nil, "")
-			resp := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview?range=24h&api_key_id=123", nil)
-			router.ServeHTTP(resp, req)
-
-			if resp.Code != tc.wantStatus {
-				t.Fatalf("expected overview status %d, got %d %s", tc.wantStatus, resp.Code, resp.Body.String())
-			}
-		})
-
-		t.Run(tc.name+"/realtime", func(t *testing.T) {
-			router := NewRouter(nil, nil, tc.provider, nil, AuthConfig{}, nil, "")
-			resp := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview/realtime?window=60m&api_key_id=123", nil)
-			router.ServeHTTP(resp, req)
-
-			if resp.Code != tc.wantStatus {
-				t.Fatalf("expected realtime status %d, got %d %s", tc.wantStatus, resp.Code, resp.Body.String())
-			}
-		})
-	}
-}
-
-func TestUsageOverviewRejectsUnsupportedRealtimeWindow(t *testing.T) {
-	provider := &usageFilterStub{overview: &servicedto.UsageOverviewSnapshot{}}
-	router := NewRouter(nil, nil, provider, nil, AuthConfig{}, nil, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview/realtime?window=45m", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
-
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d %s", resp.Code, resp.Body.String())
-	}
-	if provider.realtimeCalls != 0 {
-		t.Fatalf("expected unsupported realtime window not to call usage provider, got %d", provider.realtimeCalls)
+		{"invalid service id", service.ErrInvalidID, http.StatusBadRequest},
+		{"missing active api key", gorm.ErrRecordNotFound, http.StatusNotFound},
+	} {
+		for _, path := range []string{"/api/v1/usage/overview?range=24h&api_key_id=123", "/api/v1/usage/overview/realtime?window=60m&api_key_id=123"} {
+			t.Run(tc.name+path, func(t *testing.T) {
+				router := NewRouter(nil, nil, &usageFilterStub{err: tc.err}, nil, AuthConfig{}, nil, "")
+				resp := serveAPIGet(router, path)
+				if resp.Code != tc.status {
+					t.Fatalf("status=%d, want %d body=%s", resp.Code, tc.status, resp.Body.String())
+				}
+			})
+		}
 	}
 }
 
@@ -546,45 +429,42 @@ func TestUsageOverviewReturnsFilteredSnapshot(t *testing.T) {
 			RPM:           []float64{1.0 / 60.0},
 			TPM:           []float64{20.0 / 60.0},
 			Cost:          []float64{0.123},
-			CacheReadRate: []*float64{float64Ptr(18.18)},
+			CacheReadRate: []*float64{new(float64(18.18))},
 		},
 	}}
 	router := NewRouter(nil, nil, provider, nil, AuthConfig{}, nil, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview?range=24h", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/overview?range=24h")
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", resp.Code)
 	}
 	body := resp.Body.String()
-	if !contains(body, `"usage":`) || !contains(body, `"total_requests":1`) {
+	if !strings.Contains(body, `"usage":`) || !strings.Contains(body, `"total_requests":1`) {
 		t.Fatalf("unexpected response body: %s", body)
 	}
-	if !contains(body, `"summary":{"rpm":`) {
+	if !strings.Contains(body, `"summary":{"rpm":`) {
 		t.Fatalf("expected backend summary in response body: %s", body)
 	}
-	if !contains(body, `"cost_available":true`) {
+	if !strings.Contains(body, `"cost_available":true`) {
 		t.Fatalf("expected backend cost availability in response body: %s", body)
 	}
-	if !contains(body, `"input_tokens":11`) {
+	if !strings.Contains(body, `"input_tokens":11`) {
 		t.Fatalf("expected summary input tokens in response body: %s", body)
 	}
-	if !contains(body, `"series":{"buckets":["2026-04-22T11:00:00Z"],"requests":[1]`) {
+	if !strings.Contains(body, `"series":{"buckets":["2026-04-22T11:00:00Z"],"requests":[1]`) {
 		t.Fatalf("expected backend series in response body: %s", body)
 	}
-	if !contains(body, `"cache_read_rate":[18.18]`) {
+	if !strings.Contains(body, `"cache_read_rate":[18.18]`) {
 		t.Fatalf("expected backend cache-rate series in response body: %s", body)
 	}
-	if contains(body, `"service_health":`) {
+	if strings.Contains(body, `"service_health":`) {
 		t.Fatalf("expected overview response to omit Activity health: %s", body)
 	}
 	assertUsageOverviewResponseShape(t, body)
-	if contains(body, `"details":`) {
+	if strings.Contains(body, `"details":`) {
 		t.Fatalf("expected overview response to omit request details: %s", body)
 	}
-	if contains(body, `"apis":`) || contains(body, "sk-alpha123456") {
+	if strings.Contains(body, `"apis":`) || strings.Contains(body, "sk-alpha123456") {
 		t.Fatalf("expected overview response to omit api key dimension: %s", body)
 	}
 	if provider.overviewCalls != 1 {
@@ -611,26 +491,23 @@ func TestUsageOverviewReturnsDailyAverageSummaryFields(t *testing.T) {
 			TotalCost:             56.49,
 			CostAvailable:         false,
 			InputTokens:           7000000,
-			DailyAverageRequests:  float64Ptr(2),
-			DailyAverageTokens:    float64Ptr(1000000),
-			DailyAverageCost:      float64Ptr(8.07),
-			DailyAverageRangeDays: float64Ptr(7),
+			DailyAverageRequests:  new(float64(2)),
+			DailyAverageTokens:    new(float64(1000000)),
+			DailyAverageCost:      new(float64(8.07)),
+			DailyAverageRangeDays: new(float64(7)),
 		},
 	}}
 	router := NewRouter(nil, nil, provider, nil, AuthConfig{}, nil, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview?range=7d", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/overview?range=7d")
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", resp.Code)
 	}
 	body := resp.Body.String()
-	if !contains(body, `"daily_average_requests":2`) ||
-		!contains(body, `"daily_average_tokens":1000000`) ||
-		!contains(body, `"daily_average_cost":8.07`) ||
-		!contains(body, `"daily_average_range_days":7`) {
+	if !strings.Contains(body, `"daily_average_requests":2`) ||
+		!strings.Contains(body, `"daily_average_tokens":1000000`) ||
+		!strings.Contains(body, `"daily_average_cost":8.07`) ||
+		!strings.Contains(body, `"daily_average_range_days":7`) {
 		t.Fatalf("expected daily average summary fields in response body: %s", body)
 	}
 	assertUsageOverviewResponseShape(t, body)
@@ -638,19 +515,16 @@ func TestUsageOverviewReturnsDailyAverageSummaryFields(t *testing.T) {
 
 func TestUsageOverviewNilProviderReturnsPrunedShape(t *testing.T) {
 	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/overview", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/overview")
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", resp.Code)
 	}
 	body := resp.Body.String()
-	if !contains(body, `"summary":{"rpm":0`) || !contains(body, `"input_tokens":0`) {
+	if !strings.Contains(body, `"summary":{"rpm":0`) || !strings.Contains(body, `"input_tokens":0`) {
 		t.Fatalf("expected empty overview summary to include input_tokens, got %s", body)
 	}
-	if !contains(body, `"series":{"buckets":[]`) || !contains(body, `"cache_read_rate":[]`) {
+	if !strings.Contains(body, `"series":{"buckets":[]`) || !strings.Contains(body, `"cache_read_rate":[]`) {
 		t.Fatalf("expected empty overview series to include cache_read_rate, got %s", body)
 	}
 	assertUsageOverviewResponseShape(t, body)
@@ -664,46 +538,27 @@ func assertUsageOverviewResponseShape(t *testing.T, body string) {
 	}
 	assertAllowedJSONKeys(t, decoded, "overview response", body, "usage", "summary", "series", "timezone")
 
-	usage, ok := decoded["usage"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected usage object in response, got %s", body)
+	for _, field := range []struct {
+		name string
+		keys []string
+	}{
+		{"usage", []string{"total_requests", "success_count", "failure_count", "total_tokens"}},
+		{"summary", []string{"rpm", "tpm", "total_cost", "cost_available", "input_tokens", "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens", "daily_average_requests", "daily_average_tokens", "daily_average_cost", "daily_average_range_days"}},
+		{"series", []string{"buckets", "requests", "tokens", "rpm", "tpm", "cost", "cache_read_rate"}},
+	} {
+		object, ok := decoded[field.name].(map[string]any)
+		if !ok {
+			t.Fatalf("expected %s object in response: %s", field.name, body)
+		}
+		assertAllowedJSONKeys(t, object, "overview "+field.name, body, field.keys...)
 	}
-	assertAllowedJSONKeys(t, usage, "overview usage", body, "total_requests", "success_count", "failure_count", "total_tokens")
-
-	summary, ok := decoded["summary"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected summary object in response, got %s", body)
-	}
-	assertAllowedJSONKeys(t, summary, "overview summary", body,
-		"rpm", "tpm", "total_cost", "cost_available",
-		"input_tokens", "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens",
-		"daily_average_requests", "daily_average_tokens", "daily_average_cost", "daily_average_range_days",
-	)
-
-	series, ok := decoded["series"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected series object in response, got %s", body)
-	}
-	assertAllowedJSONKeys(t, series, "overview series", body, "buckets", "requests", "tokens", "rpm", "tpm", "cost", "cache_read_rate")
-
 }
 
 func assertAllowedJSONKeys(t *testing.T, values map[string]any, label, body string, allowedKeys ...string) {
 	t.Helper()
-	allowed := make(map[string]struct{}, len(allowedKeys))
-	for _, key := range allowedKeys {
-		allowed[key] = struct{}{}
-	}
 	for key := range values {
-		if _, ok := allowed[key]; !ok {
+		if !slices.Contains(allowedKeys, key) {
 			t.Fatalf("unexpected %s field %q in response: %s", label, key, body)
 		}
 	}
-}
-func float64Ptr(value float64) *float64 {
-	return &value
-}
-
-func int64Ptr(value int64) *int64 {
-	return &value
 }
