@@ -23,7 +23,7 @@ describe('KeyOverviewPage caller wiring', () => {
   })
 
   it('disables manual refresh only while its own request is in flight', () => {
-    expect(source).toContain('const refreshDisabled = manualRefreshLoading')
+    expect(source).toContain('const refreshDisabled = manualRefreshLoading;')
   })
 
   it('keeps existing realtime data visible during background refreshes', () => {
