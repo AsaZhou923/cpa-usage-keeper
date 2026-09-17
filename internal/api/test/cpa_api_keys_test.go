@@ -4,23 +4,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	keeperapi "cpa-usage-keeper/internal/api"
-	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/repository"
 	"cpa-usage-keeper/internal/service"
-
-	"gorm.io/gorm"
 )
 
 func TestCPAAPIKeyRoutesReturnDisplayDataWithoutRawKeys(t *testing.T) {
-	db := openCPAAPIKeyAPITestDatabase(t)
+	db := openAPITestDatabase(t)
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456", "sk-beta654321"}, time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("seed API keys: %v", err)
 	}
@@ -64,7 +60,7 @@ func TestCPAAPIKeyRoutesReturnDisplayDataWithoutRawKeys(t *testing.T) {
 }
 
 func TestCPAAPIKeySettingsRouteReturnsRawKeys(t *testing.T) {
-	db := openCPAAPIKeyAPITestDatabase(t)
+	db := openAPITestDatabase(t)
 	syncedAt := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456", "sk-beta654321"}, syncedAt); err != nil {
 		t.Fatalf("seed API keys: %v", err)
@@ -106,7 +102,7 @@ func TestCPAAPIKeySettingsRouteReturnsRawKeys(t *testing.T) {
 }
 
 func TestCPAAPIKeyRoutesNormalizeStaleDisplayKeys(t *testing.T) {
-	db := openCPAAPIKeyAPITestDatabase(t)
+	db := openAPITestDatabase(t)
 	if err := db.Create(&entities.CPAAPIKey{
 		APIKey:     "sk-BabcdefghijklmnopqrstuvwxyzmaWyTA",
 		DisplayKey: "sk-B********************************maWy",
@@ -137,7 +133,7 @@ func TestCPAAPIKeyRoutesNormalizeStaleDisplayKeys(t *testing.T) {
 }
 
 func TestCPAAPIKeyOptionsReturnActiveLabels(t *testing.T) {
-	db := openCPAAPIKeyAPITestDatabase(t)
+	db := openAPITestDatabase(t)
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456", "sk-beta654321"}, time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("seed API keys: %v", err)
 	}
@@ -169,7 +165,7 @@ func TestCPAAPIKeyOptionsReturnActiveLabels(t *testing.T) {
 }
 
 func TestUpdateCPAAPIKeyAliasUpdatesAndClearsAlias(t *testing.T) {
-	db := openCPAAPIKeyAPITestDatabase(t)
+	db := openAPITestDatabase(t)
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456"}, time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("seed API keys: %v", err)
 	}
@@ -195,7 +191,7 @@ func TestUpdateCPAAPIKeyAliasUpdatesAndClearsAlias(t *testing.T) {
 }
 
 func TestUpdateCPAAPIKeyAliasRejectsInvalidInputAndDeletedRows(t *testing.T) {
-	db := openCPAAPIKeyAPITestDatabase(t)
+	db := openAPITestDatabase(t)
 	if err := repository.SyncCPAAPIKeys(db, []string{"sk-alpha123456"}, time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("seed API keys: %v", err)
 	}
@@ -220,18 +216,4 @@ func TestUpdateCPAAPIKeyAliasRejectsInvalidInputAndDeletedRows(t *testing.T) {
 			t.Fatalf("%s: expected status %d, got %d body=%s", tc.name, tc.want, resp.Code, resp.Body.String())
 		}
 	}
-}
-
-func openCPAAPIKeyAPITestDatabase(t *testing.T) *gorm.DB {
-	t.Helper()
-	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "api-keys.db")})
-	if err != nil {
-		t.Fatalf("OpenDatabase returned error: %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("get sql database: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	return db
 }
