@@ -3,9 +3,9 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { CLIPROXYAPI_REPOSITORY_URL, GITHUB_PROFILE_URL, GITHUB_REPOSITORY_URL } from '@/utils/constants';
-import { AppFooter, footerVersionLabel, loadFooterVersion } from './AppFooter';
+import { AppFooter, footerVersionLabel, loadFooterVersion } from '../AppFooter';
 
-const appStyles = readFileSync(new URL('../App.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const appStyles = readFileSync(new URL('../../App.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 describe('AppFooter', () => {
   it('renders project links, powered by line, and version label', () => {

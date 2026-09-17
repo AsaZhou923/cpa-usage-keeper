@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getCurrentOverviewUsage, getDailyAverageCardUsage, getOverviewDisplayLoading, isDailyAverageRange } from './overview';
+import { getCurrentOverviewUsage, getDailyAverageCardUsage, getOverviewDisplayLoading, isDailyAverageRange } from '../overview';
 
 describe('shared usage overview helpers', () => {
   it('keeps loading visible only while the overview has no usage payload', () => {
