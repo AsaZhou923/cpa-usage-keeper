@@ -1,18 +1,20 @@
-package api
+package test
 
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	. "cpa-usage-keeper/internal/api"
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/service"
 )
 
-type usageIdentitiesStub struct {
+type identityMetadataStub struct {
+	service.UsageIdentityProvider
 	items            []entities.UsageIdentity
 	activeItems      []entities.UsageIdentity
 	pagedActiveItems []entities.UsageIdentity
@@ -20,35 +22,20 @@ type usageIdentitiesStub struct {
 	pagedTypeCounts  []service.UsageIdentityTypeCount
 	pagedHealth      []service.UsageCredentialHealthSnapshot
 	pagedActiveReq   *service.ListUsageIdentitiesRequest
-	err              error
 }
 
-func (s usageIdentitiesStub) ListUsageIdentities(context.Context) ([]entities.UsageIdentity, error) {
-	return s.items, s.err
-}
-
-func (s usageIdentitiesStub) ListActiveUsageIdentities(context.Context) ([]entities.UsageIdentity, error) {
+func (s identityMetadataStub) ListActiveUsageIdentities(context.Context) ([]entities.UsageIdentity, error) {
 	if s.activeItems != nil {
-		return s.activeItems, s.err
+		return s.activeItems, nil
 	}
-	return s.items, s.err
+	return s.items, nil
 }
 
-func (s usageIdentitiesStub) ListActiveUsageIdentitiesPage(_ context.Context, request service.ListUsageIdentitiesRequest) (service.ListUsageIdentitiesResponse, error) {
+func (s identityMetadataStub) ListActiveUsageIdentitiesPage(_ context.Context, request service.ListUsageIdentitiesRequest) (service.ListUsageIdentitiesResponse, error) {
 	if s.pagedActiveReq != nil {
 		*s.pagedActiveReq = request
 	}
-	if s.pagedActiveItems != nil || s.pagedActiveTotal != 0 {
-		return service.ListUsageIdentitiesResponse{Items: s.pagedActiveItems, Total: s.pagedActiveTotal, TypeCounts: s.pagedTypeCounts, CredentialHealth: s.pagedHealth}, s.err
-	}
-	return service.ListUsageIdentitiesResponse{Items: s.items, Total: int64(len(s.items)), TypeCounts: s.pagedTypeCounts}, s.err
-}
-
-func (s usageIdentitiesStub) UpdateUsageIdentityAlias(context.Context, int64, string) (entities.UsageIdentity, error) {
-	if len(s.items) == 0 {
-		return entities.UsageIdentity{}, s.err
-	}
-	return s.items[0], s.err
+	return service.ListUsageIdentitiesResponse{Items: s.pagedActiveItems, Total: s.pagedActiveTotal, TypeCounts: s.pagedTypeCounts, CredentialHealth: s.pagedHealth}, nil
 }
 
 func TestUsageIdentitiesRouteReturnsMetadataStatsAndActiveRows(t *testing.T) {
@@ -68,9 +55,9 @@ func TestUsageIdentitiesRouteReturnsMetadataStatsAndActiveRows(t *testing.T) {
 		Type:                       "auth-file",
 		Provider:                   "anthropic",
 		Prefix:                     "claude-team",
-		Priority:                   apiIntPtr(4),
-		Disabled:                   apiBoolPtr(true),
-		Note:                       apiStringPtr("desktop note"),
+		Priority:                   new(4),
+		Disabled:                   new(true),
+		Note:                       new("desktop note"),
 		TotalRequests:              10,
 		SuccessCount:               8,
 		FailureCount:               2,
@@ -100,23 +87,20 @@ func TestUsageIdentitiesRouteReturnsMetadataStatsAndActiveRows(t *testing.T) {
 		CreatedAt:    createdAt,
 		UpdatedAt:    updatedAt,
 	}
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: usageIdentitiesStub{
+	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: identityMetadataStub{
 		items:       []entities.UsageIdentity{activeIdentity, deletedIdentity},
 		activeItems: []entities.UsageIdentity{activeIdentity},
 	}})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/identities", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/identities")
 
 	body := resp.Body.String()
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", resp.Code, body)
 	}
-	if !contains(body, `"identities":[`) || !contains(body, `"id":"1"`) || !contains(body, `"identity":"2"`) {
+	if !strings.Contains(body, `"identities":[`) || !strings.Contains(body, `"id":"1"`) || !strings.Contains(body, `"identity":"2"`) {
 		t.Fatalf("expected auth file identity row in response, got %s", body)
 	}
-	if contains(body, "Deleted Provider") || contains(body, "sk-deleted-provider-secret") || contains(body, `"deleted_at"`) {
+	if strings.Contains(body, "Deleted Provider") || strings.Contains(body, "sk-deleted-provider-secret") || strings.Contains(body, `"deleted_at"`) {
 		t.Fatalf("expected deleted identities to be filtered from response, got %s", body)
 	}
 	for _, expected := range []string{
@@ -143,11 +127,11 @@ func TestUsageIdentitiesRouteReturnsMetadataStatsAndActiveRows(t *testing.T) {
 		`"stats_updated_at":"2026-05-04T10:00:00Z"`,
 		`"is_deleted":false`,
 	} {
-		if !contains(body, expected) {
+		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %s in response body: %s", expected, body)
 		}
 	}
-	if contains(body, `"cached_tokens"`) {
+	if strings.Contains(body, `"cached_tokens"`) {
 		t.Fatalf("did not expect legacy cached_tokens in response body: %s", body)
 	}
 }
@@ -158,7 +142,7 @@ func TestUsageIdentitiesRouteReturnsPublishedMetadataFields(t *testing.T) {
 	accountID := "acct_123"
 	planType := "team"
 	baseURL := "https://api.openai.com/v1"
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: usageIdentitiesStub{items: []entities.UsageIdentity{{
+	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: identityMetadataStub{items: []entities.UsageIdentity{{
 		ID:           1,
 		Name:         "Codex Account",
 		AuthType:     entities.UsageIdentityAuthTypeAuthFile,
@@ -168,18 +152,15 @@ func TestUsageIdentitiesRouteReturnsPublishedMetadataFields(t *testing.T) {
 		Provider:     "Codex",
 		Prefix:       "codex-prefix",
 		BaseURL:      baseURL,
-		Priority:     apiIntPtr(1),
+		Priority:     new(1),
 		Disabled:     nil,
-		Note:         apiStringPtr("codex note"),
+		Note:         new("codex note"),
 		AccountID:    &accountID,
 		ActiveStart:  &activeStart,
 		ActiveUntil:  &activeUntil,
 		PlanType:     &planType,
 	}}}})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/identities", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/identities")
 
 	body := resp.Body.String()
 	if resp.Code != http.StatusOK {
@@ -194,7 +175,7 @@ func TestUsageIdentitiesRouteReturnsPublishedMetadataFields(t *testing.T) {
 		`"disabled":false`,
 		`"note":"codex note"`,
 	} {
-		if !contains(body, expected) {
+		if !strings.Contains(body, expected) {
 			t.Fatalf("expected API response to include %s, got %s", expected, body)
 		}
 	}
@@ -203,47 +184,15 @@ func TestUsageIdentitiesRouteReturnsPublishedMetadataFields(t *testing.T) {
 		`"account_id"`,
 		`"plan_type"`,
 	} {
-		if contains(body, forbidden) {
+		if strings.Contains(body, forbidden) {
 			t.Fatalf("expected API response not to include %s, got %s", forbidden, body)
-		}
-	}
-}
-
-func TestUsageIdentitiesRouteOmitsFileFieldsForAIProvider(t *testing.T) {
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: usageIdentitiesStub{items: []entities.UsageIdentity{{
-		ID:           1,
-		Name:         "Claude API Key",
-		AuthType:     entities.UsageIdentityAuthTypeAIProvider,
-		AuthTypeName: "apikey",
-		Identity:     "sk-ai-provider-secret",
-		Type:         "claude",
-		Provider:     "Claude",
-		FileName:     apiStringPtr("should-not-return.json"),
-		FilePath:     apiStringPtr("/data/auths/should-not-return.json"),
-	}}}})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/identities", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
-
-	body := resp.Body.String()
-	if resp.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", resp.Code, body)
-	}
-	for _, forbidden := range []string{
-		`"file_name"`,
-		`"file_path"`,
-		`should-not-return.json`,
-	} {
-		if contains(body, forbidden) {
-			t.Fatalf("expected AI provider response not to include %s, got %s", forbidden, body)
 		}
 	}
 }
 
 func TestUsageIdentitiesPageRouteFiltersByAuthTypeAndPaginates(t *testing.T) {
 	captured := service.ListUsageIdentitiesRequest{}
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: usageIdentitiesStub{
+	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: identityMetadataStub{
 		pagedActiveReq:   &captured,
 		pagedActiveTotal: 25,
 		pagedActiveItems: []entities.UsageIdentity{{
@@ -254,14 +203,11 @@ func TestUsageIdentitiesPageRouteFiltersByAuthTypeAndPaginates(t *testing.T) {
 			Identity:     "codex-auth",
 			Type:         "codex",
 			Provider:     "Codex",
-			FileName:     apiStringPtr("codex-user.json"),
-			FilePath:     apiStringPtr("/data/auths/codex-user.json"),
+			FileName:     new("codex-user.json"),
+			FilePath:     new("/data/auths/codex-user.json"),
 		}},
 	}})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/identities/page?auth_type=1&page=2&page_size=10&active_only=true&sort=priority", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/identities/page?auth_type=1&page=2&page_size=10&active_only=true&sort=priority")
 
 	body := resp.Body.String()
 	if resp.Code != http.StatusOK {
@@ -271,7 +217,7 @@ func TestUsageIdentitiesPageRouteFiltersByAuthTypeAndPaginates(t *testing.T) {
 		t.Fatalf("expected auth_type/page/page_size/active_only/sort request, got %+v", captured)
 	}
 	for _, expected := range []string{`"identities":[`, `"id":"11"`, `"file_name":"codex-user.json"`, `"file_path":"/data/auths/codex-user.json"`, `"total_count":25`, `"page":2`, `"page_size":10`, `"total_pages":3`} {
-		if !contains(body, expected) {
+		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %s in response body: %s", expected, body)
 		}
 	}
@@ -279,7 +225,7 @@ func TestUsageIdentitiesPageRouteFiltersByAuthTypeAndPaginates(t *testing.T) {
 
 func TestUsageIdentitiesPageRouteAcceptsRepeatedTypesAndReturnsTypeCounts(t *testing.T) {
 	captured := service.ListUsageIdentitiesRequest{}
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: usageIdentitiesStub{
+	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: identityMetadataStub{
 		pagedActiveReq:   &captured,
 		pagedActiveTotal: 3,
 		pagedTypeCounts: []service.UsageIdentityTypeCount{
@@ -297,10 +243,7 @@ func TestUsageIdentitiesPageRouteAcceptsRepeatedTypesAndReturnsTypeCounts(t *tes
 			Provider:     "Claude Team",
 		}},
 	}})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/identities/page?auth_type=2&type=claude&type=%20openai%20&type=&page=1&page_size=10", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/identities/page?auth_type=2&type=claude&type=%20openai%20&type=&page=1&page_size=10")
 
 	body := resp.Body.String()
 	if resp.Code != http.StatusOK {
@@ -310,7 +253,7 @@ func TestUsageIdentitiesPageRouteAcceptsRepeatedTypesAndReturnsTypeCounts(t *tes
 		t.Fatalf("expected auth_type and repeated type filters, got %+v", captured)
 	}
 	for _, expected := range []string{`"type_counts":[`, `"type":"claude"`, `"count":2`, `"type":"anthropic"`, `"count":1`, `"type":"openai"`, `"count":4`} {
-		if !contains(body, expected) {
+		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %s in response body: %s", expected, body)
 		}
 	}
@@ -320,7 +263,7 @@ func TestUsageIdentitiesPageRouteReturnsCredentialHealthSnapshot(t *testing.T) {
 	windowStart := time.Date(2026, 6, 15, 8, 0, 0, 0, time.UTC)
 	windowEnd := time.Date(2026, 6, 15, 13, 0, 0, 0, time.UTC)
 	bucketStart := time.Date(2026, 6, 15, 12, 40, 0, 0, time.UTC)
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: usageIdentitiesStub{
+	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: identityMetadataStub{
 		pagedActiveTotal: 1,
 		pagedActiveItems: []entities.UsageIdentity{{
 			ID:           12,
@@ -350,10 +293,7 @@ func TestUsageIdentitiesPageRouteReturnsCredentialHealthSnapshot(t *testing.T) {
 			}},
 		}},
 	}})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/identities/page?auth_type=2&page=1&page_size=10", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/identities/page?auth_type=2&page=1&page_size=10")
 
 	body := resp.Body.String()
 	if resp.Code != http.StatusOK {
@@ -372,88 +312,47 @@ func TestUsageIdentitiesPageRouteReturnsCredentialHealthSnapshot(t *testing.T) {
 		`"cache_read_tokens":250`,
 		`"buckets":[{"start_time":"2026-06-15T12:40:00Z","end_time":"2026-06-15T12:50:00Z","success":2,"failure":1,"rate":0.6666666667}]`,
 	} {
-		if !contains(body, expected) {
+		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %s in response body: %s", expected, body)
 		}
-	}
-}
-
-func TestUsageIdentitiesRouteReturnsProviderDisplayName(t *testing.T) {
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: usageIdentitiesStub{items: []entities.UsageIdentity{{
-		ID:           1,
-		Name:         "Provider Name",
-		Prefix:       "Team Prefix",
-		AuthType:     entities.UsageIdentityAuthTypeAIProvider,
-		AuthTypeName: "apikey",
-		Identity:     "provider-auth-index",
-		Type:         "openai",
-		Provider:     "OpenAI",
-	}}}})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/identities", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
-
-	body := resp.Body.String()
-	if resp.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", resp.Code, body)
-	}
-	if !contains(body, `"displayName":"Team Prefix"`) {
-		t.Fatalf("expected displayName with prefix, got %s", body)
-	}
-	if !contains(body, `"prefix":"Team Prefix"`) {
-		t.Fatalf("expected published prefix field, got %s", body)
 	}
 }
 
 func TestUsageIdentitiesRoutePublishesAIProviderAuthIndexWithoutLookupKey(t *testing.T) {
 	authIndex := "provider-auth-index"
 	lookupKey := "sk-live-secret-value"
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: usageIdentitiesStub{items: []entities.UsageIdentity{
-		{ID: 1, Name: "Provider Name", Prefix: "Team Prefix", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: authIndex, LookupKey: lookupKey, Type: "openai", Provider: "OpenAI"},
+	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: identityMetadataStub{items: []entities.UsageIdentity{
+		{ID: 1, Name: "Provider Name", Prefix: "Team Prefix", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: authIndex, LookupKey: lookupKey, Type: "openai", Provider: "OpenAI", FileName: new("should-not-return.json"), FilePath: new("/data/auths/should-not-return.json")},
 	}}})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/usage/identities", nil)
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveAPIGet(router, "/api/v1/usage/identities")
 
 	body := resp.Body.String()
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", resp.Code, body)
 	}
-	if contains(body, lookupKey) {
-		t.Fatalf("expected AI provider lookup key to stay hidden, got %s", body)
+	for _, hidden := range []string{lookupKey, `"file_name"`, `"file_path"`, "should-not-return.json"} {
+		if strings.Contains(body, hidden) {
+			t.Fatalf("AI provider response leaked %q: %s", hidden, body)
+		}
 	}
-	if !contains(body, `"identity":"`+authIndex+`"`) {
+	if !strings.Contains(body, `"prefix":"Team Prefix"`) {
+		t.Fatalf("missing published prefix: %s", body)
+	}
+	if !strings.Contains(body, `"identity":"`+authIndex+`"`) {
 		t.Fatalf("expected AI provider auth-index %q in response body: %s", authIndex, body)
 	}
-	if !contains(body, `"name":"Provider Name"`) || !contains(body, `"provider":"OpenAI"`) || !contains(body, `"displayName":"Team Prefix"`) {
+	if !strings.Contains(body, `"name":"Provider Name"`) || !strings.Contains(body, `"provider":"OpenAI"`) || !strings.Contains(body, `"displayName":"Team Prefix"`) {
 		t.Fatalf("expected AI provider display fields to use usage_identities values directly, got %s", body)
 	}
 }
 
 func TestUsageIdentityReplacesLegacyMetadataRoutes(t *testing.T) {
-	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: usageIdentitiesStub{}})
+	router := NewRouter(nil, nil, nil, nil, AuthConfig{}, nil, "", OptionalProviders{UsageIdentity: identityMetadataStub{}})
 	for _, path := range []string{"/api/v1/auth-files", "/api/v1/provider-metadata"} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		resp := httptest.NewRecorder()
-
-		router.ServeHTTP(resp, req)
+		resp := serveAPIGet(router, path)
 
 		if resp.Code != http.StatusNotFound {
 			t.Fatalf("expected %s to return 404, got %d: %s", path, resp.Code, resp.Body.String())
 		}
 	}
-}
-
-func apiStringPtr(value string) *string {
-	return &value
-}
-
-func apiIntPtr(value int) *int {
-	return &value
-}
-
-func apiBoolPtr(value bool) *bool {
-	return &value
 }
