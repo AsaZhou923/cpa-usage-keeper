@@ -5,9 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,11 +15,8 @@ import (
 	"cpa-usage-keeper/internal/quota"
 	"cpa-usage-keeper/internal/repository"
 	"cpa-usage-keeper/internal/repository/dto"
-	servicedto "cpa-usage-keeper/internal/service/dto"
 	"github.com/sirupsen/logrus"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 )
 
 const redisUsageInboxTestSource = "redis_pull:usage"
@@ -78,197 +73,125 @@ func (r *aggregationAwareUsageHeaderQuotaAppender) TryAppendUsageHeaderSnapshots
 func (r *aggregationAwareUsageHeaderQuotaAppender) NotifyUsageIdentitiesChanged() {}
 
 func TestProcessRedisUsageInboxPersistsEventsWithoutSnapshot(t *testing.T) {
-	// 准备：生产异步路径显式注入 notifier，即使消息本身没有 header snapshot。
-	db := openSyncTestDatabase(t)
-	rows, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source:     redisUsageInboxTestSource,
-		RawMessage: `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","endpoint":"/v1/messages","auth_type":"api_key","model":"sonnet","request_id":"process-only","tokens":{"input_tokens":1,"output_tokens":2}}`,
-		PoppedAt:   time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}})
-	if err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
-	notifier := &recordingUsageHeaderQuotaAppender{allowed: true}
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{
-		BaseURL:                  "https://cpa.example.com",
-		UsageAggregationNotifier: notifier,
-		UsageHeaderQuota:         notifier,
-	})
+	for _, asynchronous := range []bool{false, true} {
+		t.Run(fmt.Sprintf("asynchronous=%t", asynchronous), func(t *testing.T) {
+			db := openSyncTestDatabase(t)
+			rows := seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","endpoint":"/v1/messages","auth_type":"api_key","model":"sonnet","request_id":"process-only","tokens":{"input_tokens":1,"output_tokens":2}}`)
+			notifier := &recordingUsageHeaderQuotaAppender{allowed: true}
+			options := SyncServiceOptions{BaseURL: "https://cpa.example.com"}
+			if asynchronous {
+				options.UsageAggregationNotifier = notifier
+				options.UsageHeaderQuota = notifier
+			}
+			service := NewSyncServiceWithOptions(db, options)
 
-	// 执行：处理一条不包含 header snapshot 的正常 usage inbox。
-	result, err := service.ProcessRedisUsageInbox(context.Background())
-	if err != nil {
-		t.Fatalf("ProcessRedisUsageInbox returned error: %v", err)
-	}
-	if result == nil || result.Status != "completed" || result.InsertedEvents != 1 {
-		t.Fatalf("unexpected process result: %+v", result)
-	}
-	var event entities.UsageEvent
-	if err := db.First(&event).Error; err != nil {
-		t.Fatalf("load usage event: %v", err)
-	}
-	if event.EventKey != "process-only" {
-		t.Fatalf("expected Redis event without snapshot run id, got %+v", event)
-	}
-	if event.Provider != "claude" || event.Endpoint != "/v1/messages" || event.AuthType != "apikey" || event.RequestID != "process-only" {
-		t.Fatalf("expected Redis identity fields to persist, got %+v", event)
-	}
-	var inbox entities.RedisUsageInbox
-	if err := db.First(&inbox, rows[0].ID).Error; err != nil {
-		t.Fatalf("load inbox row: %v", err)
-	}
-	if inbox.Status != repository.RedisUsageInboxStatusProcessed || inbox.UsageEventKey != "process-only" {
-		t.Fatalf("expected processed inbox row without snapshot link, got %+v", inbox)
-	}
-	// 断言：有 notifier 的生产路径只发送事件通知，不在前台创建 Overview checkpoint。
-	var checkpointCount int64
-	if err := db.Model(&entities.UsageAggregationCheckpoint{}).Where("name = ?", entities.UsageAggregationCheckpointOverview).Count(&checkpointCount).Error; err != nil {
-		t.Fatalf("count overview aggregation checkpoint: %v", err)
-	}
-	if checkpointCount != 0 {
-		t.Fatalf("expected process path to leave overview aggregation to runner, got %d checkpoints", checkpointCount)
+			result, err := service.ProcessRedisUsageInbox(context.Background())
+			if err != nil {
+				t.Fatalf("ProcessRedisUsageInbox returned error: %v", err)
+			}
+			if result == nil || result.Empty || result.Status != "completed" || result.InsertedEvents != 1 || result.DedupedEvents != 0 || result.ProcessedRows != 1 || result.BatchFull {
+				t.Fatalf("unexpected process result: %+v", result)
+			}
+			var event entities.UsageEvent
+			if err := db.First(&event).Error; err != nil {
+				t.Fatalf("load usage event: %v", err)
+			}
+			if event.EventKey != "process-only" {
+				t.Fatalf("expected Redis event without snapshot run id, got %+v", event)
+			}
+			if event.Provider != "claude" || event.Endpoint != "/v1/messages" || event.AuthType != "apikey" || event.RequestID != "process-only" {
+				t.Fatalf("expected Redis identity fields to persist, got %+v", event)
+			}
+			var inbox entities.RedisUsageInbox
+			if err := db.First(&inbox, rows[0].ID).Error; err != nil {
+				t.Fatalf("load inbox row: %v", err)
+			}
+			if inbox.Status != repository.RedisUsageInboxStatusProcessed || inbox.UsageEventKey != "process-only" {
+				t.Fatalf("expected processed inbox row without snapshot link, got %+v", inbox)
+			}
+			// 断言：有 notifier 的生产路径只发送事件通知，不在前台创建 Overview checkpoint。
+			if asynchronous {
+				var checkpointCount int64
+				if err := db.Model(&entities.UsageAggregationCheckpoint{}).Where("name = ?", entities.UsageAggregationCheckpointOverview).Count(&checkpointCount).Error; err != nil {
+					t.Fatalf("count overview aggregation checkpoint: %v", err)
+				}
+				if checkpointCount != 0 {
+					t.Fatalf("expected process path to leave overview aggregation to runner, got %d checkpoints", checkpointCount)
+				}
+				if notifier.eventCalls != 1 || notifier.calls != 0 {
+					t.Fatalf("expected only event notification, got events=%d headers=%d", notifier.eventCalls, notifier.calls)
+				}
+			}
+		})
 	}
 }
 
 func TestProcessRedisUsageInboxNotifiesRecentCacheAfterTransactionCommit(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	if _, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source:     redisUsageInboxTestSource,
-		RawMessage: `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","auth_type":"oauth","source":"auth-user@example.com","auth_index":"auth-1","model":"sonnet","request_id":"notify-cache","tokens":{"input_tokens":1,"output_tokens":2}}`,
-		PoppedAt:   time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}}); err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
-	cache := &recordingRecentUsageAppender{allowed: true}
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{
-		BaseURL:           "https://cpa.example.com",
-		RecentUsageEvents: cache,
-	})
+	for _, allowed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("accepted=%t", allowed), func(t *testing.T) {
+			db := openSyncTestDatabase(t)
+			seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","auth_type":"oauth","source":"auth-user@example.com","auth_index":"auth-1","model":"sonnet","request_id":"notify-cache","tokens":{"input_tokens":1,"output_tokens":2}}`)
+			cache := &recordingRecentUsageAppender{allowed: allowed}
+			service := NewSyncServiceWithOptions(db, SyncServiceOptions{
+				BaseURL:           "https://cpa.example.com",
+				RecentUsageEvents: cache,
+			})
 
-	result, err := service.ProcessRedisUsageInbox(context.Background())
-	if err != nil {
-		t.Fatalf("ProcessRedisUsageInbox returned error: %v", err)
-	}
-	if result == nil || result.InsertedEvents != 1 {
-		t.Fatalf("unexpected process result: %+v", result)
-	}
-	if cache.calls != 1 || len(cache.events) != 1 {
-		t.Fatalf("expected one recent cache notification, got calls=%d events=%+v", cache.calls, cache.events)
-	}
-	if cache.events[0].EventKey != "notify-cache" || cache.events[0].AuthIndex != "auth-1" {
-		t.Fatalf("unexpected notified event: %+v", cache.events[0])
-	}
-}
-
-func TestProcessRedisUsageInboxDoesNotNotifyRecentCacheOnRollback(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	if _, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source:     redisUsageInboxTestSource,
-		RawMessage: `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","model":"sonnet","request_id":"rollback-cache-notify","tokens":{"input_tokens":1,"output_tokens":2}}`,
-		PoppedAt:   time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}}); err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
-	if err := db.Exec(`CREATE TRIGGER fail_recent_cache_mark BEFORE UPDATE OF status ON redis_usage_inboxes WHEN NEW.status = 'processed' BEGIN SELECT RAISE(ABORT, 'processed mark failed'); END;`).Error; err != nil {
-		t.Fatalf("create failure trigger: %v", err)
-	}
-	cache := &recordingRecentUsageAppender{allowed: true}
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{
-		BaseURL:           "https://cpa.example.com",
-		RecentUsageEvents: cache,
-	})
-
-	// 执行本地 inbox 处理，触发事务回滚路径。
-	result, err := service.ProcessRedisUsageInbox(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "processed mark failed") {
-		t.Fatalf("expected transaction failure, got %v", err)
-	}
-	// 事务失败也应返回本轮取出的 inbox 行数，避免 runner 日志丢失批次信号。
-	if result == nil || result.Status != "failed" || result.ProcessedRows != 1 || result.BatchFull {
-		t.Fatalf("expected failed result with one processed row, got %+v", result)
-	}
-	if cache.calls != 0 || len(cache.events) != 0 {
-		t.Fatalf("expected no cache notification on rollback, got calls=%d events=%+v", cache.calls, cache.events)
+			result, err := service.ProcessRedisUsageInbox(context.Background())
+			if err != nil {
+				t.Fatalf("ProcessRedisUsageInbox returned error: %v", err)
+			}
+			if result == nil || result.Status != "completed" || result.InsertedEvents != 1 {
+				t.Fatalf("unexpected process result: %+v", result)
+			}
+			if cache.calls != 1 || len(cache.events) != 1 {
+				t.Fatalf("expected one recent cache notification, got calls=%d events=%+v", cache.calls, cache.events)
+			}
+			if cache.events[0].EventKey != "notify-cache" || cache.events[0].AuthIndex != "auth-1" {
+				t.Fatalf("unexpected notified event: %+v", cache.events[0])
+			}
+		})
 	}
 }
 
 func TestProcessRedisUsageInboxReturnsBatchSignalWhenTransactionCannotStart(t *testing.T) {
-	// 准备独立测试数据库，避免关闭连接影响其它用例。
 	db := openSyncTestDatabase(t)
-	// 写入一条不需要 identity 查询的消息，使下一次数据库访问发生在事务开始阶段。
 	seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","model":"sonnet","request_id":"transaction-start-fails","tokens":{"input_tokens":1,"output_tokens":2}}`)
-	// callbackClosed 保护测试回调只关闭一次底层连接。
-	callbackClosed := false
-	// callbackName 使用测试专属名称，避免污染同一进程里的其它 GORM 回调。
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("load sql database: %v", err)
+	}
 	callbackName := "test:close_db_after_redis_inbox_list"
-	// 注册查询后回调，在取出 redis_usage_inboxes 后关闭底层连接。
+
+	// 取出 inbox 后关闭数据库，确保故障发生在真正开始事务时。
 	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		// 只在目标表查询后触发，避免关闭迁移或 seed 阶段使用的连接。
-		if callbackClosed || tx.Statement == nil || tx.Statement.Table != "redis_usage_inboxes" {
-			// 非目标查询不做任何处理。
-			return
-		}
-		// 标记已关闭，防止后续回调重复关闭连接。
-		callbackClosed = true
-		// 取出底层 sql.DB，用来模拟事务开始前连接不可用。
-		sqlDB, dbErr := tx.DB()
-		// 如果底层连接可取出，就关闭它制造事务启动失败。
-		if dbErr == nil {
-			// 关闭连接只作用于本测试临时数据库。
-			_ = sqlDB.Close()
+		if tx.Statement.Table == "redis_usage_inboxes" {
+			if err := sqlDB.Close(); err != nil {
+				t.Errorf("close database before transaction: %v", err)
+			}
 		}
 	}); err != nil {
 		t.Fatalf("register query callback returned error: %v", err)
 	}
-	// 测试退出时尽力移除 callback，保持 GORM 回调链干净。
 	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
-	// 构造 sync service，走真实 ProcessRedisUsageInbox 链路。
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
-	// 执行处理，事务启动应因连接关闭而失败。
 	result, err := service.ProcessRedisUsageInbox(context.Background())
-	// 失败必须暴露给调用方，避免静默丢消息。
 	if err == nil {
 		t.Fatalf("expected transaction start failure, got nil")
 	}
-	// 即使事务未能开始，也应返回本轮取出的 inbox 行数。
 	if result == nil || result.Status != "failed" || result.ProcessedRows != 1 || result.BatchFull {
 		t.Fatalf("expected failed result with one processed row, got %+v", result)
 	}
 }
 
-func TestProcessRedisUsageInboxIgnoresRecentCacheOverflow(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	if _, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source:     redisUsageInboxTestSource,
-		RawMessage: `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","model":"sonnet","request_id":"cache-overflow","tokens":{"input_tokens":1,"output_tokens":2}}`,
-		PoppedAt:   time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}}); err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
-	cache := &recordingRecentUsageAppender{allowed: false}
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{
-		BaseURL:           "https://cpa.example.com",
-		RecentUsageEvents: cache,
-	})
-
-	result, err := service.ProcessRedisUsageInbox(context.Background())
-	if err != nil {
-		t.Fatalf("ProcessRedisUsageInbox should ignore cache overflow, got %v", err)
-	}
-	if result == nil || result.Status != "completed" || result.InsertedEvents != 1 {
-		t.Fatalf("unexpected process result: %+v", result)
-	}
-	if cache.calls != 1 {
-		t.Fatalf("expected cache append attempt, got %d", cache.calls)
-	}
-}
-
 func TestProcessRedisUsageInboxNotifiesUsageHeaderQuotaAfterTransactionCommit(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	if _, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source: redisUsageInboxTestSource,
-		RawMessage: `{
+	for _, allowed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("accepted=%t", allowed), func(t *testing.T) {
+			db := openSyncTestDatabase(t)
+			if _, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
+				Source: redisUsageInboxTestSource,
+				RawMessage: `{
 			"timestamp":"2026-06-22T11:10:43+08:00",
 			"provider":"codex",
 			"auth_type":"oauth",
@@ -283,33 +206,35 @@ func TestProcessRedisUsageInboxNotifiesUsageHeaderQuotaAfterTransactionCommit(t 
 				"X-Codex-Primary-Reset-After-Seconds":["60"]
 			}
 		}`,
-		PoppedAt: time.Date(2026, 6, 22, 11, 10, 43, 0, time.Local),
-	}}); err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
-	appender := &recordingUsageHeaderQuotaAppender{allowed: true}
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{
-		BaseURL:                  "https://cpa.example.com",
-		UsageAggregationNotifier: appender,
-		UsageHeaderQuota:         appender,
-	})
+				PoppedAt: time.Date(2026, 6, 22, 11, 10, 43, 0, time.Local),
+			}}); err != nil {
+				t.Fatalf("seed inbox row: %v", err)
+			}
+			appender := &recordingUsageHeaderQuotaAppender{allowed: allowed}
+			service := NewSyncServiceWithOptions(db, SyncServiceOptions{
+				BaseURL:                  "https://cpa.example.com",
+				UsageAggregationNotifier: appender,
+				UsageHeaderQuota:         appender,
+			})
 
-	result, err := service.ProcessRedisUsageInbox(context.Background())
-	if err != nil {
-		t.Fatalf("ProcessRedisUsageInbox returned error: %v", err)
-	}
-	if result == nil || result.InsertedEvents != 1 {
-		t.Fatalf("unexpected process result: %+v", result)
-	}
-	if appender.calls != 1 || len(appender.snapshots) != 1 {
-		t.Fatalf("expected one usage header quota notification, got calls=%d snapshots=%+v", appender.calls, appender.snapshots)
-	}
-	snapshot := appender.snapshots[0]
-	if snapshot.AuthType != "oauth" || snapshot.AuthIndex != "codex-auth" || snapshot.Provider != "codex" {
-		t.Fatalf("unexpected snapshot identity: %+v", snapshot)
-	}
-	if codexSnapshotPlan(snapshot) != "pro" {
-		t.Fatalf("expected decoded Codex snapshot, got %#v", snapshot.CacheOutput)
+			result, err := service.ProcessRedisUsageInbox(context.Background())
+			if err != nil {
+				t.Fatalf("ProcessRedisUsageInbox returned error: %v", err)
+			}
+			if result == nil || result.Status != "completed" || result.InsertedEvents != 1 {
+				t.Fatalf("unexpected process result: %+v", result)
+			}
+			if appender.eventCalls != 1 || appender.calls != 1 || len(appender.snapshots) != 1 {
+				t.Fatalf("expected one usage header quota notification, got calls=%d snapshots=%+v", appender.calls, appender.snapshots)
+			}
+			snapshot := appender.snapshots[0]
+			if snapshot.AuthType != "oauth" || snapshot.AuthIndex != "codex-auth" || snapshot.Provider != "codex" {
+				t.Fatalf("unexpected snapshot identity: %+v", snapshot)
+			}
+			if codexSnapshotPlan(snapshot) != "pro" {
+				t.Fatalf("expected decoded Codex snapshot, got %#v", snapshot.CacheOutput)
+			}
+		})
 	}
 }
 
@@ -515,7 +440,7 @@ func TestProcessRedisUsageInboxIgnoresIncompleteUsageHeaderQuotaSnapshotDuringCo
 	}
 }
 
-func TestProcessRedisUsageInboxDoesNotNotifyUsageHeaderQuotaOnRollback(t *testing.T) {
+func TestProcessRedisUsageInboxRollsBackEventsAndNotificationsWhenProcessedMarkFails(t *testing.T) {
 	db := openSyncTestDatabase(t)
 	if _, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
 		Source: redisUsageInboxTestSource,
@@ -541,60 +466,28 @@ func TestProcessRedisUsageInboxDoesNotNotifyUsageHeaderQuotaOnRollback(t *testin
 		t.Fatalf("create failure trigger: %v", err)
 	}
 	appender := &recordingUsageHeaderQuotaAppender{allowed: true}
+	cache := &recordingRecentUsageAppender{allowed: true}
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{
 		BaseURL:                  "https://cpa.example.com",
 		UsageAggregationNotifier: appender,
 		UsageHeaderQuota:         appender,
-	})
-
-	_, err := service.ProcessRedisUsageInbox(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "processed mark failed") {
-		t.Fatalf("expected transaction failure, got %v", err)
-	}
-	if appender.calls != 0 || len(appender.snapshots) != 0 {
-		t.Fatalf("expected no usage header quota notification on rollback, got calls=%d snapshots=%+v", appender.calls, appender.snapshots)
-	}
-}
-
-func TestProcessRedisUsageInboxNotifiesAggregationRunnerWithoutWaiting(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	if _, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source: redisUsageInboxTestSource,
-		RawMessage: `{
-			"timestamp":"2026-06-22T11:10:43+08:00",
-			"provider":"codex",
-			"auth_type":"oauth",
-			"auth_index":"codex-auth",
-			"model":"gpt-5.5",
-			"request_id":"header-quota-overflow",
-			"tokens":{"input_tokens":1,"output_tokens":2},
-			"response_headers":{
-				"X-Codex-Primary-Used-Percent":["4"],
-				"X-Codex-Primary-Window-Minutes":["300"],
-				"X-Codex-Primary-Reset-After-Seconds":["60"]
-			}
-		}`,
-		PoppedAt: time.Date(2026, 6, 22, 11, 10, 43, 0, time.Local),
-	}}); err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
-	appender := &recordingUsageHeaderQuotaAppender{allowed: false}
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{
-		BaseURL:                  "https://cpa.example.com",
-		UsageAggregationNotifier: appender,
-		UsageHeaderQuota:         appender,
+		RecentUsageEvents:        cache,
 	})
 
 	result, err := service.ProcessRedisUsageInbox(context.Background())
-	if err != nil {
-		t.Fatalf("ProcessRedisUsageInbox should return after notifier call, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "processed mark failed") {
+		t.Fatalf("expected transaction failure, got %v", err)
 	}
-	if result == nil || result.Status != "completed" || result.InsertedEvents != 1 {
-		t.Fatalf("unexpected process result: %+v", result)
+	if appender.eventCalls != 0 || appender.calls != 0 || len(appender.snapshots) != 0 {
+		t.Fatalf("expected no usage header quota notification on rollback, got calls=%d snapshots=%+v", appender.calls, appender.snapshots)
 	}
-	if appender.eventCalls != 1 || appender.calls != 1 {
-		t.Fatalf("expected one aggregation notification and one rejected header append, got events=%d headers=%d", appender.eventCalls, appender.calls)
+	if result == nil || result.Status != "failed" || result.ProcessedRows != 1 || result.BatchFull {
+		t.Fatalf("expected failed result with one processed row, got %+v", result)
 	}
+	if cache.calls != 0 || len(cache.events) != 0 {
+		t.Fatalf("expected no recent cache notification on rollback, got %+v", cache)
+	}
+	assertUsageEventCount(t, db, 0)
 }
 
 func TestProcessRedisUsageInboxNotifiesEventsWithoutUsageHeaderQuotaSnapshot(t *testing.T) {
@@ -625,33 +518,6 @@ func TestProcessRedisUsageInboxNotifiesEventsWithoutUsageHeaderQuotaSnapshot(t *
 	}
 }
 
-func TestProcessRedisUsageInboxRollsBackEventsWhenProcessedMarkFails(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	if _, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source:     redisUsageInboxTestSource,
-		RawMessage: `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","model":"sonnet","request_id":"rollback-on-mark-failure","tokens":{"input_tokens":1,"output_tokens":2}}`,
-		PoppedAt:   time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}}); err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
-	if err := db.Exec(`CREATE TRIGGER fail_processed_mark BEFORE UPDATE OF status ON redis_usage_inboxes WHEN NEW.status = 'processed' BEGIN SELECT RAISE(ABORT, 'processed mark failed'); END;`).Error; err != nil {
-		t.Fatalf("create failure trigger: %v", err)
-	}
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
-
-	_, err := service.ProcessRedisUsageInbox(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "processed mark failed") {
-		t.Fatalf("expected processed mark failure, got %v", err)
-	}
-	var eventCount int64
-	if err := db.Model(&entities.UsageEvent{}).Count(&eventCount).Error; err != nil {
-		t.Fatalf("count usage events: %v", err)
-	}
-	if eventCount != 0 {
-		t.Fatalf("expected usage event insert to roll back when inbox mark fails, got %d", eventCount)
-	}
-}
-
 func TestProcessRedisUsageInboxSkipsAggregationWhenInboxAndEventsAreEmpty(t *testing.T) {
 	db := openSyncTestDatabase(t)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
@@ -660,7 +526,7 @@ func TestProcessRedisUsageInboxSkipsAggregationWhenInboxAndEventsAreEmpty(t *tes
 	if err != nil {
 		t.Fatalf("ProcessRedisUsageInbox returned error: %v", err)
 	}
-	if result == nil || !result.Empty || result.Status != "empty" {
+	if result == nil || !result.Empty || result.Status != "empty" || result.ProcessedRows != 0 || result.BatchFull {
 		t.Fatalf("unexpected empty process result: %+v", result)
 	}
 	var checkpointCount int64
@@ -701,40 +567,9 @@ func TestProcessRedisUsageInboxLeavesOverviewCatchUpToRunnerWhenInboxIsEmpty(t *
 	}
 }
 
-func TestProcessRedisUsageInboxDoesNotFetchMetadata(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	rows, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source:     redisUsageInboxTestSource,
-		RawMessage: `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","model":"sonnet","request_id":"redis-no-metadata","tokens":{"input_tokens":1,"output_tokens":2}}`,
-		PoppedAt:   time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}})
-	if err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
-	// 不配置 metadata fetcher，证明 Redis usage 核心能够独立完成处理。
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
-
-	result, err := service.ProcessRedisUsageInbox(context.Background())
-	if err != nil {
-		t.Fatalf("ProcessRedisUsageInbox returned error: %v", err)
-	}
-	if result == nil || result.Status != "completed" || result.InsertedEvents != 1 {
-		t.Fatalf("unexpected process result: %+v", result)
-	}
-	var inbox entities.RedisUsageInbox
-	if err := db.First(&inbox, rows[0].ID).Error; err != nil {
-		t.Fatalf("load inbox row: %v", err)
-	}
-	if inbox.Status != repository.RedisUsageInboxStatusProcessed || inbox.UsageEventKey != "redis-no-metadata" {
-		t.Fatalf("expected inbox row processed, got %+v", inbox)
-	}
-}
-
 func TestProcessRedisUsageInboxNormalizesClaudeTokensForOAuthProvider(t *testing.T) {
 	db := openSyncTestDatabase(t)
-	_, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source: redisUsageInboxTestSource,
-		RawMessage: `{
+	seedRedisInboxMessagesForTest(t, db, `{
 			"timestamp":"2026-04-27T08:00:00Z",
 			"provider":"claude",
 			"auth_type":"oauth",
@@ -749,12 +584,7 @@ func TestProcessRedisUsageInboxNormalizesClaudeTokensForOAuthProvider(t *testing
 				"cache_creation_tokens":10,
 				"total_tokens":160
 			}
-		}`,
-		PoppedAt: time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}})
-	if err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
+		}`)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
 	result, err := service.ProcessRedisUsageInbox(context.Background())
@@ -782,9 +612,7 @@ func TestProcessRedisUsageInboxNormalizesAPIKeyTokensByUsageIdentityType(t *test
 	}).Error; err != nil {
 		t.Fatalf("seed usage identity: %v", err)
 	}
-	_, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source: redisUsageInboxTestSource,
-		RawMessage: `{
+	seedRedisInboxMessagesForTest(t, db, `{
 			"timestamp":"2026-04-27T08:00:00Z",
 			"provider":"Team Display Name",
 			"auth_type":"api_key",
@@ -798,12 +626,7 @@ func TestProcessRedisUsageInboxNormalizesAPIKeyTokensByUsageIdentityType(t *test
 				"cache_creation_tokens":10,
 				"total_tokens":160
 			}
-		}`,
-		PoppedAt: time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}})
-	if err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
+		}`)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
 	if _, err := service.ProcessRedisUsageInbox(context.Background()); err != nil {
@@ -827,9 +650,7 @@ func TestProcessRedisUsageInboxNormalizesGeminiFamilyToCodexTokenFormat(t *testi
 	}).Error; err != nil {
 		t.Fatalf("seed usage identity: %v", err)
 	}
-	_, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source: redisUsageInboxTestSource,
-		RawMessage: `{
+	seedRedisInboxMessagesForTest(t, db, `{
 			"timestamp":"2026-04-27T08:00:00Z",
 			"provider":"Google Account",
 			"auth_type":"oauth",
@@ -843,12 +664,7 @@ func TestProcessRedisUsageInboxNormalizesGeminiFamilyToCodexTokenFormat(t *testi
 				"cached_tokens":5,
 				"total_tokens":21
 			}
-		}`,
-		PoppedAt: time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}})
-	if err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
+		}`)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
 	if _, err := service.ProcessRedisUsageInbox(context.Background()); err != nil {
@@ -862,14 +678,7 @@ func TestProcessRedisUsageInboxNormalizesGeminiFamilyToCodexTokenFormat(t *testi
 
 func TestProcessRedisUsageInboxDoesNotFallbackWhenUsageTypeLookupErrors(t *testing.T) {
 	db := openSyncTestDatabase(t)
-	rows, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source:     redisUsageInboxTestSource,
-		RawMessage: `{"timestamp":"2026-04-27T08:00:00Z","provider":"Team Display Name","auth_type":"apikey","auth_index":"provider-auth-index","model":"claude-sonnet","request_id":"type-lookup-error","tokens":{"input_tokens":100,"output_tokens":30,"cache_read_tokens":20,"cache_creation_tokens":10,"total_tokens":160}}`,
-		PoppedAt:   time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}})
-	if err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
+	rows := seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-27T08:00:00Z","provider":"Team Display Name","auth_type":"apikey","auth_index":"provider-auth-index","model":"claude-sonnet","request_id":"type-lookup-error","tokens":{"input_tokens":100,"output_tokens":30,"cache_read_tokens":20,"cache_creation_tokens":10,"total_tokens":160}}`)
 	if err := db.Migrator().DropTable(&entities.UsageIdentity{}); err != nil {
 		t.Fatalf("drop usage identity table: %v", err)
 	}
@@ -918,8 +727,7 @@ func TestBuildUsageEventTypeResolverBatchesAPIKeyIdentityLookup(t *testing.T) {
 	usageIdentityQueries := 0
 	callbackName := "test:capture_usage_identity_type_lookup_batches"
 	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		sql := tx.Statement.SQL.String()
-		if strings.Contains(sql, "FROM `usage_identities`") || strings.Contains(sql, `FROM "usage_identities"`) {
+		if tx.Statement.Table == "usage_identities" {
 			usageIdentityQueries++
 		}
 	}); err != nil {
@@ -980,14 +788,7 @@ func TestProcessRedisUsageInboxFallsBackToDeletedUsageIdentityType(t *testing.T)
 	}).Error; err != nil {
 		t.Fatalf("seed deleted usage identity: %v", err)
 	}
-	_, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source:     redisUsageInboxTestSource,
-		RawMessage: `{"timestamp":"2026-04-27T08:00:00Z","provider":"Deleted Team","auth_type":"apikey","auth_index":"deleted-auth-index","model":"claude-sonnet","request_id":"deleted-identity-claude","tokens":{"input_tokens":100,"output_tokens":30,"cache_read_tokens":20,"cache_creation_tokens":10,"total_tokens":160}}`,
-		PoppedAt:   time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC),
-	}})
-	if err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
+	seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-27T08:00:00Z","provider":"Deleted Team","auth_type":"apikey","auth_index":"deleted-auth-index","model":"claude-sonnet","request_id":"deleted-identity-claude","tokens":{"input_tokens":100,"output_tokens":30,"cache_read_tokens":20,"cache_creation_tokens":10,"total_tokens":160}}`)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
 	if _, err := service.ProcessRedisUsageInbox(context.Background()); err != nil {
@@ -1075,57 +876,6 @@ func seedRedisInboxMessagesForTest(t *testing.T, db *gorm.DB, messages ...string
 	return rows
 }
 
-func processRedisUsageInboxForTest(t *testing.T, service *SyncService) (*servicedto.RedisBatchSyncResult, error) {
-	t.Helper()
-	return service.ProcessRedisUsageInbox(context.Background())
-}
-
-func TestProcessRedisUsageInboxSkipsEmptyBatchWithoutSnapshotOrMetadata(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	// 空批处理不需要 metadata 依赖。
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
-
-	result, err := processRedisUsageInboxForTest(t, service)
-	if err != nil {
-		t.Fatalf("process Redis usage inbox returned error: %v", err)
-	}
-	// 空批结果应明确返回 0 行且非满批，避免 runner 误判为 backlog。
-	if result == nil || !result.Empty || result.Status != "empty" || result.ProcessedRows != 0 || result.BatchFull {
-		t.Fatalf("expected empty redis batch result, got %+v", result)
-	}
-}
-
-func TestProcessRedisUsageInboxPersistsNonEmptyBatchWithoutMetadata(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","model":"sonnet","request_id":"redis-1","tokens":{"input_tokens":1,"output_tokens":2}}`)
-	// 非空批同样只依赖本地 inbox 和 usage 仓储。
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
-
-	result, err := processRedisUsageInboxForTest(t, service)
-	if err != nil {
-		t.Fatalf("process Redis usage inbox returned error: %v", err)
-	}
-	// 单条成功消息应报告本轮取出 1 行且非满批，保持原有插入数量语义。
-	if result == nil || result.Empty || result.Status != "completed" || result.InsertedEvents != 1 || result.DedupedEvents != 0 || result.ProcessedRows != 1 || result.BatchFull {
-		t.Fatalf("unexpected redis batch result: %+v", result)
-	}
-
-	var event entities.UsageEvent
-	if err := db.First(&event).Error; err != nil {
-		t.Fatalf("load usage event: %v", err)
-	}
-	if event.EventKey != "redis-1" {
-		t.Fatalf("unexpected usage event: %+v", event)
-	}
-	var inbox entities.RedisUsageInbox
-	if err := db.First(&inbox).Error; err != nil {
-		t.Fatalf("load inbox row: %v", err)
-	}
-	if inbox.Status != repository.RedisUsageInboxStatusProcessed || inbox.UsageEventKey != "redis-1" {
-		t.Fatalf("expected processed inbox row without snapshot link, got %+v", inbox)
-	}
-}
-
 func TestProcessRedisUsageInboxPersistsValidRowsWhenBatchContainsMalformedMessage(t *testing.T) {
 	db := openSyncTestDatabase(t)
 	seedRedisInboxMessagesForTest(t, db,
@@ -1134,7 +884,7 @@ func TestProcessRedisUsageInboxPersistsValidRowsWhenBatchContainsMalformedMessag
 	)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
-	result, err := processRedisUsageInboxForTest(t, service)
+	result, err := service.ProcessRedisUsageInbox(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "decode redis usage message") {
 		t.Fatalf("expected decode warning, got %v", err)
 	}
@@ -1171,7 +921,7 @@ func TestProcessRedisUsageInboxMarksMalformedOnlyBatchWithoutSnapshot(t *testing
 	seedRedisInboxMessagesForTest(t, db, `{bad-json}`)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
-	result, err := processRedisUsageInboxForTest(t, service)
+	result, err := service.ProcessRedisUsageInbox(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "decode redis usage message") {
 		t.Fatalf("expected decode warning, got %v", err)
 	}
@@ -1190,23 +940,16 @@ func TestProcessRedisUsageInboxMarksMalformedOnlyBatchWithoutSnapshot(t *testing
 }
 
 func TestProcessRedisUsageInboxMarksFullMalformedBatch(t *testing.T) {
-	// 准备独立数据库，用真实 service 路径处理满批坏消息。
 	db := openSyncTestDatabase(t)
-	// messages 保存一整批无法解码的 Redis 原始消息。
 	messages := make([]string, 0, redisInboxProcessLimit)
-	// 构造刚好达到 Redis process 批次上限的坏消息集合。
 	for i := 0; i < redisInboxProcessLimit; i++ {
 		// 每条坏消息内容不同，便于插入 inbox 时保持独立行。
 		messages = append(messages, fmt.Sprintf("{bad-json-%d}", i))
 	}
-	// 将满批坏消息写入 durable inbox，模拟真实 backlog 输入。
 	seedRedisInboxMessagesForTest(t, db, messages...)
-	// 构造 sync service，后续走真实 ProcessRedisUsageInbox 链路。
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
-	// 执行本地 inbox 处理，预期全部进入 decode_failed warning 路径。
-	result, err := processRedisUsageInboxForTest(t, service)
-	// 全坏消息应返回 decode warning，不能被静默吞掉。
+	result, err := service.ProcessRedisUsageInbox(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "decode redis usage message") {
 		t.Fatalf("expected decode warning, got %v", err)
 	}
@@ -1222,7 +965,7 @@ func TestProcessRedisUsageInboxLogsErrorAndMarksDecodeFailedWhenRequestIDMissing
 	seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","model":"sonnet","tokens":{"input_tokens":1,"output_tokens":2}}`)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
-	result, err := processRedisUsageInboxForTest(t, service)
+	result, err := service.ProcessRedisUsageInbox(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "request_id is required") {
 		t.Fatalf("expected missing request_id warning, got %v", err)
 	}
@@ -1243,43 +986,6 @@ func TestProcessRedisUsageInboxLogsErrorAndMarksDecodeFailedWhenRequestIDMissing
 	}
 }
 
-func TestProcessRedisUsageInboxProcessesPendingInbox(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	poppedAt := time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC)
-	rows, err := repository.InsertRedisUsageInboxMessages(db, []dto.RedisInboxInsert{{
-		Source:     redisUsageInboxTestSource,
-		RawMessage: `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","model":"sonnet","request_id":"pending-1","tokens":{"input_tokens":1,"output_tokens":2}}`,
-		PoppedAt:   poppedAt,
-	}})
-	if err != nil {
-		t.Fatalf("seed inbox row: %v", err)
-	}
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
-
-	result, err := processRedisUsageInboxForTest(t, service)
-	if err != nil {
-		t.Fatalf("process Redis usage inbox returned error: %v", err)
-	}
-	if result == nil || result.Status != "completed" || result.InsertedEvents != 1 {
-		t.Fatalf("expected pending inbox row to be processed, got %+v", result)
-	}
-
-	var event entities.UsageEvent
-	if err := db.First(&event).Error; err != nil {
-		t.Fatalf("load usage event: %v", err)
-	}
-	if event.EventKey != "pending-1" {
-		t.Fatalf("unexpected usage event: %+v", event)
-	}
-	var inbox entities.RedisUsageInbox
-	if err := db.First(&inbox, rows[0].ID).Error; err != nil {
-		t.Fatalf("load inbox row: %v", err)
-	}
-	if inbox.Status != repository.RedisUsageInboxStatusProcessed {
-		t.Fatalf("expected pending row processed, got %+v", inbox)
-	}
-}
-
 func TestProcessRedisUsageInboxDoesNotWatermarkFilterRedisInboxEvents(t *testing.T) {
 	db := openSyncTestDatabase(t)
 	if _, _, err := repository.InsertUsageEvents(db, []entities.UsageEvent{{
@@ -1293,7 +999,7 @@ func TestProcessRedisUsageInboxDoesNotWatermarkFilterRedisInboxEvents(t *testing
 	seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-26T07:00:00Z","provider":"claude","model":"sonnet","request_id":"old-but-unique","tokens":{"input_tokens":1,"output_tokens":2}}`)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
-	result, err := processRedisUsageInboxForTest(t, service)
+	result, err := service.ProcessRedisUsageInbox(context.Background())
 	if err != nil {
 		t.Fatalf("process Redis usage inbox returned error: %v", err)
 	}
@@ -1323,7 +1029,7 @@ func TestProcessRedisUsageInboxRetriesProcessFailedInbox(t *testing.T) {
 	}
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
-	result, err := processRedisUsageInboxForTest(t, service)
+	result, err := service.ProcessRedisUsageInbox(context.Background())
 	if err != nil {
 		t.Fatalf("process Redis usage inbox returned error: %v", err)
 	}
@@ -1339,39 +1045,13 @@ func TestProcessRedisUsageInboxRetriesProcessFailedInbox(t *testing.T) {
 	}
 }
 
-func TestProcessRedisUsageInboxUsesDurableInbox(t *testing.T) {
-	db := openSyncTestDatabase(t)
-	seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","model":"sonnet","request_id":"sync-now-redis","tokens":{"input_tokens":1,"output_tokens":2}}`)
-	// durable inbox 路径不配置 metadata 依赖。
-	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
-
-	result, err := processRedisUsageInboxForTest(t, service)
-	if err != nil {
-		t.Fatalf("process Redis usage inbox returned error: %v", err)
-	}
-	if result == nil || result.InsertedEvents != 1 {
-		t.Fatalf("unexpected process Redis usage inbox result: %+v", result)
-	}
-	var inbox entities.RedisUsageInbox
-	if err := db.First(&inbox).Error; err != nil {
-		t.Fatalf("load inbox row: %v", err)
-	}
-	if inbox.Status != repository.RedisUsageInboxStatusProcessed || inbox.UsageEventKey != "sync-now-redis" {
-		t.Fatalf("expected process Redis usage inbox redis path to use inbox, got %+v", inbox)
-	}
-}
-
 func TestProcessRedisUsageInboxKeepsDistinctRedisRequestIDsWithSameEventFields(t *testing.T) {
 	db := openSyncTestDatabase(t)
-	timestamp := time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC)
-	tokens := dto.TokenStats{InputTokens: 10, OutputTokens: 20, ReasoningTokens: 5, CachedTokens: 4, TotalTokens: 39}
-	seedRedisInboxMessagesForTest(t, db,
-		equivalentRedisMessage("external-api-key", "claude-sonnet", timestamp, "codex-a", "1", false, 123, tokens, "redis-request-1"),
-		equivalentRedisMessage("external-api-key", "claude-sonnet", timestamp, "codex-a", "1", false, 123, tokens, "redis-request-2"),
-	)
+	message := `{"timestamp":"2026-04-27T08:00:00Z","latency_ms":123,"source":"codex-a","auth_index":"1","failed":false,"api_key":"external-api-key","model":"claude-sonnet","request_id":"redis-request-1","tokens":{"input_tokens":10,"output_tokens":20,"reasoning_tokens":5,"cached_tokens":4,"total_tokens":39}}`
+	seedRedisInboxMessagesForTest(t, db, message, strings.Replace(message, "redis-request-1", "redis-request-2", 1))
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
-	result, err := processRedisUsageInboxForTest(t, service)
+	result, err := service.ProcessRedisUsageInbox(context.Background())
 	if err != nil {
 		t.Fatalf("process Redis usage inbox returned error: %v", err)
 	}
@@ -1388,7 +1068,7 @@ func TestProcessRedisUsageInboxWritesDebugLogsWithoutRawPayload(t *testing.T) {
 	seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-27T08:00:00Z","provider":"claude","model":"sonnet","request_id":"redis-log","api_key":"raw-secret-key","tokens":{"input_tokens":1,"output_tokens":2}}`)
 	service := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com"})
 
-	_, err := processRedisUsageInboxForTest(t, service)
+	_, err := service.ProcessRedisUsageInbox(context.Background())
 	if err != nil {
 		t.Fatalf("process Redis usage inbox returned error: %v", err)
 	}
@@ -1414,18 +1094,6 @@ func TestNewSyncServiceBuildsClientFromConfig(t *testing.T) {
 	if service.baseURL != "https://cpa.example.com" {
 		t.Fatalf("expected trimmed base url, got %q", service.baseURL)
 	}
-}
-
-func equivalentRedisMessage(apiGroupKey, model string, timestamp time.Time, source, authIndex string, failed bool, latencyMS int64, tokens dto.TokenStats, requestID string) string {
-	failedValue := "false"
-	if failed {
-		failedValue = "true"
-	}
-	return `{"timestamp":"` + timestamp.UTC().Format(time.RFC3339) + `","latency_ms":` + int64String(latencyMS) + `,"source":"` + source + `","auth_index":"` + authIndex + `","failed":` + failedValue + `,"api_key":"` + apiGroupKey + `","model":"` + model + `","request_id":"` + requestID + `","tokens":{"input_tokens":` + int64String(tokens.InputTokens) + `,"output_tokens":` + int64String(tokens.OutputTokens) + `,"reasoning_tokens":` + int64String(tokens.ReasoningTokens) + `,"cached_tokens":` + int64String(tokens.CachedTokens) + `,"total_tokens":` + int64String(tokens.TotalTokens) + `}}`
-}
-
-func int64String(value int64) string {
-	return strconv.FormatInt(value, 10)
 }
 
 func assertUsageEventCount(t *testing.T, db *gorm.DB, expected int64) {
@@ -1486,27 +1154,4 @@ func captureSyncDebugLogs(t *testing.T) *bytes.Buffer {
 		logrus.SetLevel(previousLevel)
 	})
 	return logs
-}
-
-func openSyncTestDatabaseWithLogs(t *testing.T) (*gorm.DB, *bytes.Buffer) {
-	t.Helper()
-
-	logs := &bytes.Buffer{}
-	gormLogger := gormlogger.New(
-		log.New(logs, "", 0),
-		gormlogger.Config{
-			LogLevel:                  gormlogger.Info,
-			IgnoreRecordNotFoundError: false,
-			Colorful:                  false,
-		},
-	)
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "sync.db")), &gorm.Config{Logger: gormLogger})
-	if err != nil {
-		t.Fatalf("gorm.Open returned error: %v", err)
-	}
-	closeTestDatabase(t, db)
-	if err := db.AutoMigrate(entities.All()...); err != nil {
-		t.Fatalf("AutoMigrate returned error: %v", err)
-	}
-	return db, logs
 }
