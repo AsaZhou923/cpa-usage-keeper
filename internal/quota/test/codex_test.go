@@ -287,16 +287,16 @@ func TestCodexProviderPreservesProWindowUsageFields(t *testing.T) {
 	}
 	rows := quota.NormalizeQuotaRows(output)
 
-	primary := findCodexQuotaRow(t, rows, "rate_limit.primary_window")
+	primary := findQuotaRow(t, rows, "rate_limit.primary_window")
 	assertWindowUsage(t, primary, 11368055, 14.83442025)
-	secondary := findCodexQuotaRow(t, rows, "rate_limit.secondary_window")
+	secondary := findQuotaRow(t, rows, "rate_limit.secondary_window")
 	assertWindowUsage(t, secondary, 623087989, 614.6869810999999)
-	additional := findCodexQuotaRow(t, rows, "additional_rate_limits.GPT-5.3-Codex-Spark.primary_window")
+	additional := findQuotaRow(t, rows, "additional_rate_limits.GPT-5.3-Codex-Spark.primary_window")
 	assertWindowUsage(t, additional, 393311, 0.458464)
 	if additional.Scope != "additional" || additional.Metric != "codex_bengalfox" {
 		t.Fatalf("expected additional row metadata to survive normalization, got %#v", additional)
 	}
-	additionalSecondary := findCodexQuotaRow(t, rows, "additional_rate_limits.GPT-5.3-Codex-Spark.secondary_window")
+	additionalSecondary := findQuotaRow(t, rows, "additional_rate_limits.GPT-5.3-Codex-Spark.secondary_window")
 	assertWindowUsage(t, additionalSecondary, 418184136, 405.1611734)
 	if additionalSecondary.Scope != "additional" || additionalSecondary.Metric != "codex_bengalfox" {
 		t.Fatalf("expected additional secondary row metadata to survive normalization, got %#v", additionalSecondary)
@@ -314,11 +314,11 @@ func TestCodexProviderTreatsNullWindowUsageAsMissingAndPreservesCamelCaseZero(t 
 	}
 	rows := quota.NormalizeQuotaRows(output)
 
-	primary := findCodexQuotaRow(t, rows, "rate_limit.primary_window")
+	primary := findQuotaRow(t, rows, "rate_limit.primary_window")
 	if primary.WindowUsageTokens != nil || primary.WindowUsageCost != nil {
 		t.Fatalf("expected null provider window usage to stay missing, got tokens=%#v cost=%#v", primary.WindowUsageTokens, primary.WindowUsageCost)
 	}
-	secondary := findCodexQuotaRow(t, rows, "rate_limit.secondary_window")
+	secondary := findQuotaRow(t, rows, "rate_limit.secondary_window")
 	assertWindowUsage(t, secondary, 0, 0)
 }
 
@@ -416,17 +416,6 @@ func TestCodexProviderRejectsResetResponse(t *testing.T) {
 			}
 		})
 	}
-}
-
-func findCodexQuotaRow(t *testing.T, rows []quota.QuotaRow, key string) quota.QuotaRow {
-	t.Helper()
-	for _, row := range rows {
-		if row.Key == key {
-			return row
-		}
-	}
-	t.Fatalf("missing quota row %q in %#v", key, rows)
-	return quota.QuotaRow{}
 }
 
 func assertWindowUsage(t *testing.T, row quota.QuotaRow, tokens int64, cost float64) {
