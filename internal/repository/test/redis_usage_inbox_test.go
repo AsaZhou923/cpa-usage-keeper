@@ -1,6 +1,7 @@
-package repository
+package test
 
 import (
+	. "cpa-usage-keeper/internal/repository"
 	"cpa-usage-keeper/internal/repository/dto"
 	"crypto/sha256"
 	"fmt"
@@ -11,8 +12,6 @@ import (
 
 	"cpa-usage-keeper/internal/entities"
 )
-
-const testRedisInboxSource = "redis_pull:usage"
 
 func TestInsertRedisUsageInboxMessagesPersistsPendingRows(t *testing.T) {
 	db := openTestDatabase(t)
@@ -161,7 +160,7 @@ func TestRedisUsageInboxFailureTransitionsBoundErrors(t *testing.T) {
 	if stored[0].AttemptCount != 1 {
 		t.Fatalf("expected decode attempt count 1, got %d", stored[0].AttemptCount)
 	}
-	if len(stored[0].LastError) > redisUsageInboxMaxErrorLength {
+	if len(stored[0].LastError) > 1024 {
 		t.Fatalf("expected bounded decode error, got length %d", len(stored[0].LastError))
 	}
 	if !strings.HasSuffix(stored[0].LastError, "界") {
