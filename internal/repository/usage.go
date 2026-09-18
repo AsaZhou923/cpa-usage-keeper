@@ -201,16 +201,13 @@ func FindUsageEventRequestIDByID(db *gorm.DB, id int64) (string, error) {
 }
 
 func loadUsageEventRecordsForQuery(db *gorm.DB, query *gorm.DB, costResolver pricing.Resolver) ([]dto.UsageEventRecord, error) {
-	var events []usageEventProjection
-	if err := query.Find(&events).Error; err != nil {
-		return nil, fmt.Errorf("load usage events: %w", err)
-	}
-	rows := make([]dto.UsageEventRecord, 0, len(events))
-	for _, event := range events {
-		record := usageEventProjectionToRecord(event)
-		// Request Events cost 只在响应阶段按当前价格配置计算，不回写 usage_events。
-		record.CostUSD, record.CostAvailable, record.PricingStyle = usageEventRecordCost(record, costResolver)
+	var rows []dto.UsageEventRecord
+	// Request Events cost 只在响应阶段按当前价格配置计算，不回写 usage_events。
+	if err := streamUsageEventRecordsForQuery(db, query, func(record dto.UsageEventRecord) error {
 		rows = append(rows, record)
+		return nil
+	}, costResolver); err != nil {
+		return nil, err
 	}
 	return rows, nil
 }
