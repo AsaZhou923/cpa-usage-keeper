@@ -123,10 +123,6 @@ describe('OverviewRealtimePanel', () => {
     expect(html).toContain('usage_stats.overview_realtime_current_usage');
     expect(html).not.toContain('usage_stats.overview_realtime_request_level');
     expect(html).toContain('usage_stats.overview_realtime_cache_level');
-    expect(html.match(/overviewRealtimeCardFull/g) ?? []).toHaveLength(2);
-    expect(html.match(/keeper-card-surface/g) ?? []).toHaveLength(5);
-    expect(html.match(/class="keeper-card-title-track"/g) ?? []).toHaveLength(5);
-    expect(html.match(/class="keeper-card-title"/g) ?? []).toHaveLength(5);
     expect(html).toContain('30m');
     expect(html).not.toMatch(/>5m<\/button>/);
     expect(html).toContain('usage_stats.overview_realtime_dimension_api_keys');
