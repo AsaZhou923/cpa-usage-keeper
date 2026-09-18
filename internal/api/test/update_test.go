@@ -1,11 +1,13 @@
-package api
+package test
 
 import (
 	"context"
+	_ "cpa-usage-keeper/internal/api"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	_ "unsafe"
 
 	"cpa-usage-keeper/internal/updatecheck"
 	"github.com/gin-gonic/gin"
@@ -58,3 +60,10 @@ func TestUpdateCheckReturnsInternalError(t *testing.T) {
 		t.Fatalf("unexpected response body: %s", body)
 	}
 }
+
+// 注入原有 checker stub，保留路由成功与上游失败覆盖。
+//
+//go:linkname registerUpdateRoutes cpa-usage-keeper/internal/api.registerUpdateRoutes
+func registerUpdateRoutes(router gin.IRoutes, checker interface {
+	Check(context.Context) (updatecheck.Result, error)
+})

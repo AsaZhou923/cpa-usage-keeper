@@ -1,14 +1,15 @@
-package api
+package test
 
 import (
+	. "cpa-usage-keeper/internal/api"
 	"encoding/json"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
+	_ "unsafe"
 
 	"cpa-usage-keeper/internal/auth"
 	"cpa-usage-keeper/internal/poller"
@@ -188,7 +189,7 @@ func TestVersionReturnsCurrentVersionAndUpdateCheckFlag(t *testing.T) {
 	if got := resp.Header().Get("Expires"); got != "0" {
 		t.Fatalf("expected version Expires 0, got %q", got)
 	}
-	var body versionResponse
+	var body routerVersionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response body: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestVersionAuthorizesAdminAndViewerSessionsAtConfiguredBasePath(t *testing.
 				t.Run(tc.name, func(t *testing.T) {
 					req := httptest.NewRequest(http.MethodGet, basePath+"/api/v1/version", nil)
 					if tc.token != "" {
-						req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tc.token})
+						req.AddCookie(&http.Cookie{Name: "cpa_usage_keeper_session", Value: tc.token})
 					}
 					resp := httptest.NewRecorder()
 					router.ServeHTTP(resp, req)
@@ -317,7 +318,7 @@ func TestVersionHidesUpdateCheckForDevVersion(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", resp.Code)
 	}
-	var body versionResponse
+	var body routerVersionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response body: %v", err)
 	}
@@ -450,6 +451,15 @@ func TestStaticResponsesUseContentAppropriateCaching(t *testing.T) {
 	}
 }
 
-func contains(s, sub string) bool {
-	return strings.Contains(s, sub)
+type routerVersionResponse struct {
+	Version            string `json:"version"`
+	UpdateCheckEnabled bool   `json:"updateCheckEnabled"`
 }
+
+// 路径清洗与反斜线拒绝直接覆盖原函数，避免 HTTP 客户端预先规范化测试输入。
+//
+//go:linkname cleanURLPath cpa-usage-keeper/internal/api.cleanURLPath
+func cleanURLPath(requestPath string) string
+
+//go:linkname staticAssetPath cpa-usage-keeper/internal/api.staticAssetPath
+func staticAssetPath(requestPath string) (string, bool)
