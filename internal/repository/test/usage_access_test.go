@@ -26,8 +26,10 @@ func newUsageOverviewRecord(windowMinutes int64) *dto.UsageOverviewRecord
 //go:linkname applyUsageEventToOverviewSnapshot cpa-usage-keeper/internal/repository.applyUsageEventToOverviewSnapshot
 func applyUsageEventToOverviewSnapshot(snapshot *dto.StatisticsSnapshot, event entities.UsageEvent)
 
+// 生产辅助函数增加了可选的身份查询切片，此处保持可变参数声明以匹配调用约定。
+//
 //go:linkname applyUsageEventToOverview cpa-usage-keeper/internal/repository.applyUsageEventToOverview
-func applyUsageEventToOverview(overview *dto.UsageOverviewRecord, event entities.UsageEvent, bucketByDay bool, costResolver pricing.Resolver)
+func applyUsageEventToOverview(overview *dto.UsageOverviewRecord, event entities.UsageEvent, bucketByDay bool, costResolver pricing.Resolver, identityLookups ...any)
 
 //go:linkname finalizeUsageOverview cpa-usage-keeper/internal/repository.finalizeUsageOverview
 func finalizeUsageOverview(overview *dto.UsageOverviewRecord)

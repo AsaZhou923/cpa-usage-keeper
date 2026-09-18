@@ -248,9 +248,9 @@ func TestBuildUsageOverviewWithFilterUsesStatsForFullHoursAndRawEventsForBoundar
 
 	if _, err := UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{
 		Model:                "claude-sonnet",
-		PromptPricePer1M:     0,
-		CompletionPricePer1M: 0,
-		CacheReadPricePer1M:  0,
+		PromptPricePer1M:     1,
+		CompletionPricePer1M: 2,
+		CacheReadPricePer1M:  0.5,
 	}); err != nil {
 		t.Fatalf("UpsertModelPriceSetting returned error: %v", err)
 	}
@@ -338,9 +338,9 @@ func TestBuildUsageOverviewWithFilterUsesDailyStatsForCompleteDays(t *testing.T)
 
 	if _, err := UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{
 		Model:                "claude-sonnet",
-		PromptPricePer1M:     0,
-		CompletionPricePer1M: 0,
-		CacheReadPricePer1M:  0,
+		PromptPricePer1M:     1,
+		CompletionPricePer1M: 2,
+		CacheReadPricePer1M:  0.5,
 	}); err != nil {
 		t.Fatalf("UpsertModelPriceSetting returned error: %v", err)
 	}
@@ -375,11 +375,27 @@ func TestBuildUsageOverviewWithFilterUsesDailyStatsForCompleteDays(t *testing.T)
 	if !reflect.DeepEqual(overview.Summary, oracle.Summary) {
 		t.Fatalf("summary mismatch after full-day hourly/raw data were removed\ngot:  %+v\nwant: %+v", overview.Summary, oracle.Summary)
 	}
-	if overview.Usage.TotalRequests != 4 || overview.Usage.TotalTokens != 1565 {
-		t.Fatalf("daily rollup did not preserve full-day totals: %+v", overview.Usage)
+	if overview.Usage.TotalRequests != oracle.Usage.TotalRequests || overview.Usage.TotalTokens != oracle.Usage.TotalTokens ||
+		overview.Usage.SuccessCount != oracle.Usage.SuccessCount || overview.Usage.FailureCount != oracle.Usage.FailureCount {
+		t.Fatalf("daily rollup usage mismatch:\ngot:  %+v\nwant: %+v", overview.Usage, oracle.Usage)
 	}
-	if overview.Series.Requests["2026-04-16"] != 2 || overview.Series.Tokens["2026-04-16"] != 815 {
-		t.Fatalf("daily rollup did not preserve the removed day's series: %+v", overview.Series)
+	if len(overview.Series.Requests) != len(oracle.Series.Requests) {
+		t.Fatalf("daily rollup request bucket count = %d, want %d: got=%+v want=%+v", len(overview.Series.Requests), len(oracle.Series.Requests), overview.Series.Requests, oracle.Series.Requests)
+	}
+	for key, wantRequests := range oracle.Series.Requests {
+		if gotRequests := overview.Series.Requests[key]; gotRequests != wantRequests || overview.Series.Tokens[key] != oracle.Series.Tokens[key] {
+			t.Fatalf("daily rollup bucket %q mismatch: got requests=%d tokens=%d, want requests=%d tokens=%d", key, gotRequests, overview.Series.Tokens[key], wantRequests, oracle.Series.Tokens[key])
+		}
+		assertFloatClose(t, overview.Series.RPM[key], oracle.Series.RPM[key])
+		assertFloatClose(t, overview.Series.TPM[key], oracle.Series.TPM[key])
+		assertFloatClose(t, overview.Series.Cost[key], oracle.Series.Cost[key])
+		gotCacheRate, wantCacheRate := overview.Series.CacheReadRate[key], oracle.Series.CacheReadRate[key]
+		if (gotCacheRate == nil) != (wantCacheRate == nil) {
+			t.Fatalf("daily rollup cache rate presence for bucket %q: got=%v want=%v", key, gotCacheRate, wantCacheRate)
+		}
+		if gotCacheRate != nil {
+			assertFloatClose(t, *gotCacheRate, *wantCacheRate)
+		}
 	}
 	for key := range overview.Series.Requests {
 		if strings.Contains(key, "T") {
