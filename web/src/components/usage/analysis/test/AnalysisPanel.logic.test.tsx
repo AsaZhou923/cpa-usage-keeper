@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Interaction, Tooltip } from 'chart.js';
 import type { ChartData, ChartOptions, Plugin } from 'chart.js';
-import type { AnalysisCompositionItem, AnalysisLatencyDiagnostics, AnalysisModelEfficiencyItem, AnalysisResponse, AnalysisTokenUsageBucket } from '@/lib/types';
+import type { AnalysisCompositionItem, AnalysisHeatmapCell, AnalysisLatencyDiagnostics, AnalysisModelEfficiencyItem, AnalysisResponse, AnalysisTokenUsageBucket } from '@/lib/types';
 
 type TokenAverageLinePluginOptions = {
   value: number;
@@ -106,6 +106,13 @@ const tokenBucket = (overrides: Partial<AnalysisTokenUsageBucket> = {}): Analysi
   requests: 3,
   cost_usd: 0,
   cost_available: true,
+  ...overrides,
+});
+
+const heatmapCell = (overrides: Partial<AnalysisHeatmapCell> = {}): AnalysisHeatmapCell => ({
+  api_key: 'key', model: 'model', input_tokens: 0, output_tokens: 0,
+  reasoning_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0,
+  total_tokens: 0, requests: 0, cost_usd: 0, cost_available: true, intensity: 0,
   ...overrides,
 });
 
@@ -331,6 +338,8 @@ describe('AnalysisPanel token chart data', () => {
     });
     expect(chartCapture.doughnutOptions?.plugins?.tooltip?.external).toBeUndefined();
     expect(chartCapture.doughnutPlugins?.map((plugin) => plugin.id)).toContain('analysis-composition-labels');
+    expect(chartCapture.doughnutData?.datasets[0]).toMatchObject({ borderRadius: 10, hoverOffset: 10 });
+    expect(chartCapture.doughnutOptions?.spacing).toBe(4);
   });
 
   it('limits usage distribution hover to the doughnut ring while allowing arc edges', () => {
@@ -466,13 +475,13 @@ describe('AnalysisPanel token chart data', () => {
 
     const markup = renderToStaticMarkup(<AnalysisTestPanel analysis={analysis} />);
     const backgroundColor = chartCapture.doughnutData?.datasets[0]?.backgroundColor;
-    const compositionColors = Array.from({ length: 6 }, (_, dataIndex) => (
+    const compositionColors = Array.from({ length: 7 }, (_, dataIndex) => (
       backgroundColor as (context: { dataIndex: number; chart: { chartArea?: unknown } }) => string
     )({ dataIndex, chart: {} }));
 
     expect(markup).not.toContain('usage_stats.analysis_others');
-    expect(compositionColors).toHaveLength(6);
-    expect(new Set(compositionColors).size).toBe(6);
+    expect(chartCapture.doughnutData?.datasets[0]?.data).toHaveLength(7);
+    expect(new Set(compositionColors).size).toBe(7);
   });
 
   it('renders latency diagnostics scatter before usage distribution', () => {
@@ -652,6 +661,28 @@ describe('AnalysisPanel token chart data', () => {
     const latencyScatterOptions = chartCapture.scatterOptions[latencyScatterIndex];
     expect((latencyScatterOptions.scales?.x as { max?: number }).max).toBeGreaterThan(150_000);
     expect((latencyScatterOptions.scales?.y as { max?: number }).max).toBeGreaterThan(300_000);
+  });
+
+  it('uses the readable dark palette for latency diagnostics', () => {
+    const latencyDiagnostics: AnalysisLatencyDiagnostics = {
+      total_points: 1,
+      sampled: false,
+      p95_ttft_ms: 240,
+      p95_latency_ms: 1200,
+      max_ttft_ms: 240,
+      max_latency_ms: 1200,
+      points: [{ ttft_ms: 240, latency_ms: 1200 }],
+      density: [],
+    };
+
+    renderToStaticMarkup(<AnalysisTestPanel latencyDiagnostics={latencyDiagnostics} isDark />);
+
+    const index = chartCapture.scatterData.findIndex((data) => data.datasets[0]?.label === 'usage_stats.analysis_latency_samples');
+    const colors = (chartCapture.scatterOptions[index].plugins as {
+      analysisLatencyDiagnostics?: { colors?: Record<string, unknown> };
+    }).analysisLatencyDiagnostics?.colors;
+    expect(chartCapture.scatterData[index].datasets[0]?.pointBackgroundColor).toBe('rgba(94, 234, 212, 0.72)');
+    expect(colors).toMatchObject({ point: '#5eead4', p95TTFT: '#7dd3fc', p95Latency: '#fda4af' });
   });
 
   it('renders model efficiency as cost per million total tokens against total tokens', () => {
@@ -955,6 +986,26 @@ describe('AnalysisPanel token chart data', () => {
     expect(markup).toContain('usage_stats.total_cost');
     expect(markup).not.toContain('usage_stats.analysis_heatmap_tokens_prefix');
     expect(markup).not.toContain('usage_stats.analysis_heatmap_requests_prefix');
+  });
+
+  it('keeps empty dark heatmap cells visible while retaining the high red stop', () => {
+    const analysis: AnalysisResponse = {
+      ...emptyAnalysis,
+      heatmap: {
+        api_keys: ['low', 'high'],
+        api_key_labels: {},
+        models: ['model'],
+        cells: [
+          heatmapCell({ api_key: 'low' }),
+          heatmapCell({ api_key: 'high', total_tokens: 1000, requests: 1, intensity: 1 }),
+        ],
+      },
+    };
+
+    const markup = renderToStaticMarkup(<AnalysisTestPanel analysis={analysis} isDark />);
+
+    expect(markup).toContain('background:rgb(58, 36, 48)');
+    expect(markup).toContain('background:rgb(239, 68, 68);color:#1c1208');
   });
 
   it('keeps rendering when an older analysis response omits heatmap', () => {
