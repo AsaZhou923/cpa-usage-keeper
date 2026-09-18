@@ -1,13 +1,15 @@
-package logging
+package logging_test
 
 import (
 	"bytes"
+	. "cpa-usage-keeper/internal/logging"
 	stdlog "log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"cpa-usage-keeper/internal/config"
@@ -16,12 +18,17 @@ import (
 )
 
 func TestResolveLogDirUsesWorkDirFallback(t *testing.T) {
+	captureGlobalLogState(t)
 	workDir := filepath.Join(t.TempDir(), "work")
-
-	logDir := resolveLogDir(config.Config{WorkDir: workDir})
-
-	if logDir != filepath.Join(workDir, filepath.Base(config.DefaultLogDir)) {
-		t.Fatalf("expected log dir under work dir, got %q", logDir)
+	closer, err := Configure(config.Config{WorkDir: workDir, LogFileEnabled: true, LogRetentionDays: 7})
+	if err != nil {
+		t.Fatalf("Configure with work dir: %v", err)
+	}
+	defer closer.Close()
+	logrus.Info("work dir fallback")
+	content := readTodayLogFile(t, filepath.Join(workDir, filepath.Base(config.DefaultLogDir)))
+	if !strings.Contains(content, "work dir fallback") {
+		t.Fatalf("expected log under work dir, got %q", content)
 	}
 }
 
@@ -170,35 +177,36 @@ func TestConfigureErrorLeavesGlobalLoggerStateUnchanged(t *testing.T) {
 }
 
 func TestRetentionDeletesOnlyOldAppLogs(t *testing.T) {
-	logDir := t.TempDir()
-	oldAppLog := filepath.Join(logDir, "cpa-usage-keeper-2020-01-01.log")
-	freshAppLog := filepath.Join(logDir, "cpa-usage-keeper-2099-01-01.log")
-	otherLog := filepath.Join(logDir, "other.log")
-	for _, path := range []string{oldAppLog, freshAppLog, otherLog} {
-		if err := os.WriteFile(path, []byte("log"), 0644); err != nil {
-			t.Fatalf("write fixture %s: %v", path, err)
+	synctest.Test(t, func(t *testing.T) {
+		captureGlobalLogState(t)
+		// 固定旧测试的维护日期，文件写入仍经生产 Configure 和 writer。
+		time.Sleep(time.Date(2026, 4, 28, 12, 0, 0, 0, time.Local).Sub(time.Now()))
+		logDir := t.TempDir()
+		oldAppLog := filepath.Join(logDir, "cpa-usage-keeper-2020-01-01.log")
+		freshAppLog := filepath.Join(logDir, "cpa-usage-keeper-2099-01-01.log")
+		otherLog := filepath.Join(logDir, "other.log")
+		for _, path := range []string{oldAppLog, freshAppLog, otherLog} {
+			if err := os.WriteFile(path, []byte("log"), 0644); err != nil {
+				t.Fatalf("write fixture %s: %v", path, err)
+			}
 		}
-	}
 
-	writer, err := newDailyFileWriter(logDir, 7, func() time.Time {
-		return time.Date(2026, 4, 28, 12, 0, 0, 0, time.Local)
+		writer, err := Configure(config.Config{LogFileEnabled: true, LogDir: logDir, LogRetentionDays: 7})
+		if err != nil {
+			t.Fatalf("Configure returned error: %v", err)
+		}
+		defer writer.Close()
+		logrus.Info("trigger log retention maintenance")
+
+		if _, err := os.Stat(oldAppLog); !os.IsNotExist(err) {
+			t.Fatalf("expected old app log to be removed, stat err=%v", err)
+		}
+		for _, path := range []string{freshAppLog, otherLog} {
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("expected %s to remain: %v", path, err)
+			}
+		}
 	})
-	if err != nil {
-		t.Fatalf("newDailyFileWriter returned error: %v", err)
-	}
-	defer writer.Close()
-	if err := writer.Maintain(); err != nil {
-		t.Fatalf("maintain daily log files: %v", err)
-	}
-
-	if _, err := os.Stat(oldAppLog); !os.IsNotExist(err) {
-		t.Fatalf("expected old app log to be removed, stat err=%v", err)
-	}
-	for _, path := range []string{freshAppLog, otherLog} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("expected %s to remain: %v", path, err)
-		}
-	}
 }
 
 func readTodayLogFile(t *testing.T, logDir string) string {
@@ -212,8 +220,9 @@ func readTodayLogFile(t *testing.T, logDir string) string {
 }
 
 func logLineHasTimestamp(content string) bool {
-	plain := ansiSequencePattern.ReplaceAllString(content, "")
-	return regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}) \|`).MatchString(plain)
+	var plain bytes.Buffer
+	_, _ = NewPlainWriter(&plain).Write([]byte(content))
+	return regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}) \|`).MatchString(plain.String())
 }
 
 func captureGlobalLogState(t *testing.T) {
