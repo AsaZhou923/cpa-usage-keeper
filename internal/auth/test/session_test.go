@@ -1,9 +1,13 @@
-package auth
+package test
 
 import (
+	. "cpa-usage-keeper/internal/auth"
 	"path/filepath"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"cpa-usage-keeper/internal/entities"
 	"gorm.io/driver/sqlite"
@@ -12,8 +16,8 @@ import (
 
 func TestSessionManagerCreateMetadataValidateDelete(t *testing.T) {
 	manager := NewSessionManager(2 * time.Hour)
-	manager.now = func() time.Time { return time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC) }
-	manager.generate = func() (string, error) { return "token-1", nil }
+	setSessionManagerField(manager, "now", func() time.Time { return time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC) })
+	setSessionManagerField(manager, "generate", func() (string, error) { return "token-1", nil })
 
 	token, expiresAt, err := manager.Create()
 	if err != nil {
@@ -51,8 +55,8 @@ func TestSessionManagerCreateMetadataValidateDelete(t *testing.T) {
 
 func TestSessionManagerCreateAPIKeyViewerBindsKeyID(t *testing.T) {
 	manager := NewSessionManager(2 * time.Hour)
-	manager.now = func() time.Time { return time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC) }
-	manager.generate = func() (string, error) { return "token-viewer", nil }
+	setSessionManagerField(manager, "now", func() time.Time { return time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC) })
+	setSessionManagerField(manager, "generate", func() (string, error) { return "token-viewer", nil })
 
 	token, expiresAt, err := manager.CreateAPIKeyViewer(42)
 	if err != nil {
@@ -77,15 +81,15 @@ func TestSessionManagerCreateAPIKeyViewerBindsKeyID(t *testing.T) {
 func TestSessionManagerRejectsExpiredSessions(t *testing.T) {
 	baseTime := time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC)
 	manager := NewSessionManager(30 * time.Minute)
-	manager.now = func() time.Time { return baseTime }
-	manager.generate = func() (string, error) { return "token-2", nil }
+	setSessionManagerField(manager, "now", func() time.Time { return baseTime })
+	setSessionManagerField(manager, "generate", func() (string, error) { return "token-2", nil })
 
 	token, _, err := manager.Create()
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
 
-	manager.now = func() time.Time { return baseTime.Add(31 * time.Minute) }
+	setSessionManagerField(manager, "now", func() time.Time { return baseTime.Add(31 * time.Minute) })
 	if manager.Validate(token) {
 		t.Fatal("expected expired token to fail validation")
 	}
@@ -94,23 +98,24 @@ func TestSessionManagerRejectsExpiredSessions(t *testing.T) {
 func TestSessionManagerCleanupExpired(t *testing.T) {
 	baseTime := time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC)
 	manager := NewSessionManager(time.Hour)
-	manager.now = func() time.Time { return baseTime }
-	manager.generate = func() (string, error) { return "token-3", nil }
+	setSessionManagerField(manager, "now", func() time.Time { return baseTime })
+	setSessionManagerField(manager, "generate", func() (string, error) { return "token-3", nil })
 
 	if _, _, err := manager.Create(); err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
 
-	manager.mu.Lock()
-	manager.sessions["expired"] = Session{Role: RoleAdmin, ExpiresAt: baseTime.Add(-time.Minute)}
-	manager.mu.Unlock()
+	mutex, sessions := sessionManagerState(manager)
+	mutex.Lock()
+	sessions["expired"] = Session{Role: RoleAdmin, ExpiresAt: baseTime.Add(-time.Minute)}
+	mutex.Unlock()
 
 	manager.CleanupExpired()
 
-	manager.mu.RLock()
-	_, expiredExists := manager.sessions["expired"]
-	_, activeExists := manager.sessions["token-3"]
-	manager.mu.RUnlock()
+	mutex.RLock()
+	_, expiredExists := sessions["expired"]
+	_, activeExists := sessions["token-3"]
+	mutex.RUnlock()
 
 	if expiredExists {
 		t.Fatal("expected expired token to be removed")
@@ -124,12 +129,12 @@ func TestSessionManagerListsSessionsAndRevokesAdminGroup(t *testing.T) {
 	baseTime := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 	tokens := []string{"admin-token-1", "admin-token-2", "viewer-token"}
 	manager := NewSessionManager(2 * time.Hour)
-	manager.now = func() time.Time { return baseTime }
-	manager.generate = func() (string, error) {
+	setSessionManagerField(manager, "now", func() time.Time { return baseTime })
+	setSessionManagerField(manager, "generate", func() (string, error) {
 		token := tokens[0]
 		tokens = tokens[1:]
 		return token, nil
-	}
+	})
 
 	adminToken1, _, err := manager.Create()
 	if err != nil {
@@ -174,8 +179,8 @@ func TestPersistentSessionManagerLoadsSessionAfterRestart(t *testing.T) {
 	store := NewGormSessionStore(db)
 	baseTime := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 	manager := NewPersistentSessionManager(2*time.Hour, store)
-	manager.now = func() time.Time { return baseTime }
-	manager.generate = func() (string, error) { return "persisted-token", nil }
+	setSessionManagerField(manager, "now", func() time.Time { return baseTime })
+	setSessionManagerField(manager, "generate", func() (string, error) { return "persisted-token", nil })
 
 	token, expiresAt, err := manager.CreateAPIKeyViewer(42)
 	if err != nil {
@@ -188,13 +193,13 @@ func TestPersistentSessionManagerLoadsSessionAfterRestart(t *testing.T) {
 	if row.TokenHash == token {
 		t.Fatal("expected persisted session token hash not to equal raw token")
 	}
-	if row.TokenHash != sessionTokenHash(token) {
-		t.Fatalf("expected persisted token hash %q, got %q", sessionTokenHash(token), row.TokenHash)
+	if row.TokenHash != SessionTokenHash(token) {
+		t.Fatalf("expected persisted token hash %q, got %q", SessionTokenHash(token), row.TokenHash)
 	}
 
 	restartedStore := &trackingSessionStore{SessionStore: store}
 	restarted := NewPersistentSessionManager(2*time.Hour, restartedStore)
-	restarted.now = func() time.Time { return baseTime.Add(time.Minute) }
+	setSessionManagerField(restarted, "now", func() time.Time { return baseTime.Add(time.Minute) })
 	session, ok := restarted.Get(token)
 	if !ok {
 		t.Fatal("expected persisted session to validate after manager restart")
@@ -226,8 +231,8 @@ func TestPersistentSessionManagerDeleteByTokenHashClearsStoreAndCache(t *testing
 	store := NewGormSessionStore(db)
 	baseTime := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 	manager := NewPersistentSessionManager(2*time.Hour, store)
-	manager.now = func() time.Time { return baseTime }
-	manager.generate = func() (string, error) { return "persisted-viewer-token", nil }
+	setSessionManagerField(manager, "now", func() time.Time { return baseTime })
+	setSessionManagerField(manager, "generate", func() (string, error) { return "persisted-viewer-token", nil })
 
 	token, _, err := manager.CreateAPIKeyViewer(42)
 	if err != nil {
@@ -237,7 +242,7 @@ func TestPersistentSessionManagerDeleteByTokenHashClearsStoreAndCache(t *testing
 		t.Fatal("expected created session to validate before revoke")
 	}
 
-	result := manager.DeleteByTokenHash(sessionTokenHash(token))
+	result := manager.DeleteByTokenHash(SessionTokenHash(token))
 	if result.Deleted != 1 {
 		t.Fatalf("expected one session to be deleted, got %+v", result)
 	}
@@ -245,7 +250,7 @@ func TestPersistentSessionManagerDeleteByTokenHashClearsStoreAndCache(t *testing
 		t.Fatal("expected revoked persisted session to fail validation")
 	}
 	var count int64
-	if err := db.Model(&entities.AuthSession{}).Where("token_hash = ?", sessionTokenHash(token)).Count(&count).Error; err != nil {
+	if err := db.Model(&entities.AuthSession{}).Where("token_hash = ?", SessionTokenHash(token)).Count(&count).Error; err != nil {
 		t.Fatalf("count auth sessions: %v", err)
 	}
 	if count != 0 {
@@ -261,13 +266,13 @@ func TestPersistentSessionManagerDeletesExpiredPersistedSession(t *testing.T) {
 		t.Fatalf("save expired session: %v", err)
 	}
 	manager := NewPersistentSessionManager(time.Hour, store)
-	manager.now = func() time.Time { return baseTime }
+	setSessionManagerField(manager, "now", func() time.Time { return baseTime })
 
 	if manager.Validate("expired-token") {
 		t.Fatal("expected expired persisted session to fail validation")
 	}
 	var count int64
-	if err := db.Model(&entities.AuthSession{}).Where("token_hash = ?", sessionTokenHash("expired-token")).Count(&count).Error; err != nil {
+	if err := db.Model(&entities.AuthSession{}).Where("token_hash = ?", SessionTokenHash("expired-token")).Count(&count).Error; err != nil {
 		t.Fatalf("count auth sessions: %v", err)
 	}
 	if count != 0 {
@@ -304,4 +309,18 @@ type trackingSessionStore struct {
 func (s *trackingSessionStore) Get(token string) (Session, bool, error) {
 	s.getCalls++
 	return s.SessionStore.Get(token)
+}
+
+// 只为原有白盒用例注入时钟和 token 生成器，保持确定性及原生产接口。
+func setSessionManagerField(manager *SessionManager, name string, value any) {
+	field := reflect.ValueOf(manager).Elem().FieldByName(name)
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(value))
+}
+
+// 清理测试在原互斥锁下检查缓存，避免 Get 自动清理过期项掩盖 CleanupExpired 回归。
+func sessionManagerState(manager *SessionManager) (*sync.RWMutex, map[string]Session) {
+	value := reflect.ValueOf(manager).Elem()
+	mutex := (*sync.RWMutex)(unsafe.Pointer(value.FieldByName("mu").UnsafeAddr()))
+	sessions := *(*map[string]Session)(unsafe.Pointer(value.FieldByName("sessions").UnsafeAddr()))
+	return mutex, sessions
 }
