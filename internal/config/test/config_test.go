@@ -1,11 +1,13 @@
-package config
+package test
 
 import (
+	. "cpa-usage-keeper/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	_ "unsafe"
 
 	"cpa-usage-keeper/internal/cpa"
 )
@@ -327,3 +329,8 @@ func TestLoadFromEnvIgnoresRemovedMetadataSyncIntervalOverride(t *testing.T) {
 		t.Fatalf("expected removed env overrides to be ignored, got metadata_interval=%s", cfg.MetadataSyncInterval)
 	}
 }
+
+// 保留可执行文件目录回退测试的隔离夹具，不改变生产加载路径。
+//
+//go:linkname executableDir cpa-usage-keeper/internal/config.executableDir
+var executableDir func() (string, error)
