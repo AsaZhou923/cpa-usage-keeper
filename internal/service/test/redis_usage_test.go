@@ -1,10 +1,13 @@
-package service
+package test
 
 import (
+	. "cpa-usage-keeper/internal/service"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
+	_ "unsafe"
 
 	"cpa-usage-keeper/internal/quota"
 )
@@ -198,3 +201,8 @@ func TestDecodeRedisUsageMessageReportsOnlyMessageError(t *testing.T) {
 		t.Fatalf("expected decode error, got %v", err)
 	}
 }
+
+// 直接保留空 Header 的零分配检查，完整解码入口还包含 JSON/事件自身分配。
+//
+//go:linkname decodeRedisUsageResponseHeaders cpa-usage-keeper/internal/service.decodeRedisUsageResponseHeaders
+func decodeRedisUsageResponseHeaders(raw json.RawMessage) (http.Header, bool)

@@ -1,11 +1,13 @@
-package service
+package test
 
 import (
 	"bytes"
 	"context"
+	. "cpa-usage-keeper/internal/service"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -724,6 +726,11 @@ func TestBuildUsageEventTypeResolverBatchesAPIKeyIdentityLookup(t *testing.T) {
 	if err := db.CreateInBatches(&identities, 100).Error; err != nil {
 		t.Fatalf("seed usage identities: %v", err)
 	}
+	messages := make([]string, len(events))
+	for i, event := range events {
+		messages[i] = fmt.Sprintf(`{"timestamp":"2026-04-27T08:00:00Z","request_id":"%s","auth_type":"apikey","auth_index":"%s","model":"claude-sonnet","tokens":{"input_tokens":100,"output_tokens":30,"cache_read_tokens":20,"cache_creation_tokens":10,"total_tokens":160}}`, event.AuthIndex, event.AuthIndex)
+	}
+	seedRedisInboxMessagesForTest(t, db, messages...)
 	usageIdentityQueries := 0
 	callbackName := "test:capture_usage_identity_type_lookup_batches"
 	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
@@ -735,12 +742,18 @@ func TestBuildUsageEventTypeResolverBatchesAPIKeyIdentityLookup(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
 
-	resolver, err := buildUsageEventTypeResolver(context.Background(), db, events)
-	if err != nil {
-		t.Fatalf("buildUsageEventTypeResolver returned error: %v", err)
+	notifier := &recordingUsageAggregationNotifier{}
+	syncer := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com", UsageAggregationNotifier: notifier})
+	if _, err := syncer.ProcessRedisUsageInbox(context.Background()); err != nil {
+		t.Fatalf("process identity batch: %v", err)
 	}
-	if len(resolver.byIdentity) != len(events) {
-		t.Fatalf("expected resolver to load %d types, got %d", len(events), len(resolver.byIdentity))
+	if len(notifier.events) != len(events) {
+		t.Fatalf("expected %d resolved events, got %d", len(events), len(notifier.events))
+	}
+	for _, event := range notifier.events {
+		if event.InputTokens != 130 || event.TotalTokens != 160 {
+			t.Fatalf("expected Claude identity normalization for %q, got %+v", event.AuthIndex, event)
+		}
 	}
 	if usageIdentityQueries != 2 {
 		t.Fatalf("expected 901 auth indexes to be loaded in two SELECT batches, got %d queries", usageIdentityQueries)
@@ -760,16 +773,14 @@ func TestBuildUsageEventTypeResolverIgnoresBlankActiveType(t *testing.T) {
 		t.Fatalf("seed usage identities: %v", err)
 	}
 
-	resolver, err := buildUsageEventTypeResolver(context.Background(), db, []entities.UsageEvent{{
-		AuthType:  "apikey",
-		AuthIndex: "blank-active-auth-index",
-	}})
-	if err != nil {
-		t.Fatalf("buildUsageEventTypeResolver returned error: %v", err)
+	seedRedisInboxMessagesForTest(t, db, `{"timestamp":"2026-04-27T08:00:00Z","request_id":"blank-active-type","auth_type":"apikey","auth_index":"blank-active-auth-index","model":"claude-sonnet","tokens":{"input_tokens":100,"output_tokens":30,"cache_read_tokens":20,"cache_creation_tokens":10}}`)
+	syncer := NewSyncServiceWithOptions(db, SyncServiceOptions{BaseURL: "https://cpa.example.com", UsageAggregationNotifier: &recordingUsageAggregationNotifier{}})
+	if _, err := syncer.ProcessRedisUsageInbox(context.Background()); err != nil {
+		t.Fatalf("process blank identity type: %v", err)
 	}
-	key := usageEventIdentityKey{authType: entities.UsageIdentityAuthTypeAIProvider, identity: "blank-active-auth-index"}
-	if got := resolver.byIdentity[key]; got != "" {
-		t.Fatalf("expected blank active type to remain unresolved for default token fallback, got %q", got)
+	event := loadUsageEventByKey(t, db, "blank-active-type")
+	if event.InputTokens != 100 || event.OutputTokens != 30 || event.TotalTokens != 130 {
+		t.Fatalf("expected blank active type to use strict token fallback, got %+v", event)
 	}
 }
 
@@ -941,8 +952,8 @@ func TestProcessRedisUsageInboxMarksMalformedOnlyBatchWithoutSnapshot(t *testing
 
 func TestProcessRedisUsageInboxMarksFullMalformedBatch(t *testing.T) {
 	db := openSyncTestDatabase(t)
-	messages := make([]string, 0, redisInboxProcessLimit)
-	for i := 0; i < redisInboxProcessLimit; i++ {
+	messages := make([]string, 0, 1000)
+	for i := 0; i < 1000; i++ {
 		// 每条坏消息内容不同，便于插入 inbox 时保持独立行。
 		messages = append(messages, fmt.Sprintf("{bad-json-%d}", i))
 	}
@@ -954,7 +965,7 @@ func TestProcessRedisUsageInboxMarksFullMalformedBatch(t *testing.T) {
 		t.Fatalf("expected decode warning, got %v", err)
 	}
 	// 即使没有事件写入，满批坏消息也应报告 BatchFull，供 runner 继续 drain。
-	if result == nil || result.Status != "completed_with_warnings" || result.ProcessedRows != redisInboxProcessLimit || !result.BatchFull {
+	if result == nil || result.Status != "completed_with_warnings" || result.ProcessedRows != 1000 || !result.BatchFull {
 		t.Fatalf("expected warning result with full malformed batch, got %+v", result)
 	}
 }
@@ -1088,11 +1099,11 @@ func TestNewSyncServiceBuildsClientFromConfig(t *testing.T) {
 		CPAManagementKey: "secret",
 		RequestTimeout:   5 * time.Second,
 	})
-	if service == nil || service.client == nil {
+	if service == nil || reflect.ValueOf(service).Elem().FieldByName("client").IsNil() {
 		t.Fatal("expected sync service client to be initialized")
 	}
-	if service.baseURL != "https://cpa.example.com" {
-		t.Fatalf("expected trimmed base url, got %q", service.baseURL)
+	if reflect.ValueOf(service).Elem().FieldByName("baseURL").String() != "https://cpa.example.com" {
+		t.Fatalf("expected trimmed base url, got %q", reflect.ValueOf(service).Elem().FieldByName("baseURL").String())
 	}
 }
 
