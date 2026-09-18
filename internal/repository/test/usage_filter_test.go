@@ -361,6 +361,7 @@ func TestBuildUsageOverviewWithFilterUsesDailyStatsForCompleteDays(t *testing.T)
 	start := time.Date(2026, 4, 15, 15, 30, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 24, 17, 30, 0, 0, time.UTC)
 	filter := dto.UsageQueryFilter{Range: "custom", StartTime: &start, EndTime: &end}
+	oracle := loadUsageOverviewOracleForTest(t, db, filter)
 	fullDayStart := time.Date(2026, 4, 16, 0, 0, 0, 0, time.Local)
 	fullDayEnd := fullDayStart.Add(24 * time.Hour)
 	if err := db.Where("timestamp >= ? AND timestamp < ?", timeutil.FormatStorageTime(fullDayStart), timeutil.FormatStorageTime(fullDayEnd)).Delete(&entities.UsageEvent{}).Error; err != nil {
@@ -371,6 +372,9 @@ func TestBuildUsageOverviewWithFilterUsesDailyStatsForCompleteDays(t *testing.T)
 		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 	}
 
+	if !reflect.DeepEqual(overview.Summary, oracle.Summary) {
+		t.Fatalf("summary mismatch after full-day hourly/raw data were removed\ngot:  %+v\nwant: %+v", overview.Summary, oracle.Summary)
+	}
 	if overview.Usage.TotalRequests != 4 || overview.Usage.TotalTokens != 1565 {
 		t.Fatalf("daily rollup did not preserve full-day totals: %+v", overview.Usage)
 	}
