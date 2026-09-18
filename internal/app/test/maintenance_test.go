@@ -1,7 +1,8 @@
-package app
+package test
 
 import (
 	"context"
+	. "cpa-usage-keeper/internal/app"
 	"strings"
 	"testing"
 	"time"
@@ -39,8 +40,8 @@ func TestStorageCleanupRunnerLogsTaskStart(t *testing.T) {
 	logs := captureAppInfoLogs(t)
 	syncer := &maintenanceSyncStub{}
 	runner := NewStorageCleanupRunner(syncer)
-	runner.now = func() time.Time { return time.Date(2026, 4, 26, 18, 30, 0, 0, time.UTC) }
-	runner.sleep = func(context.Context, time.Duration) bool { return false }
+	(*appTestField[func() time.Time](runner, "now")) = func() time.Time { return time.Date(2026, 4, 26, 18, 30, 0, 0, time.UTC) }
+	(*appTestField[func(context.Context, time.Duration) bool](runner, "sleep")) = func(context.Context, time.Duration) bool { return false }
 
 	if err := runner.Run(context.Background()); err != nil {
 		t.Fatalf("cleanup runner returned error: %v", err)
@@ -62,10 +63,10 @@ func TestStorageCleanupRunnerRunsAtScheduledTime(t *testing.T) {
 	}
 	time.Local = location
 	t.Cleanup(func() { time.Local = previousLocal })
-	runner.now = func() time.Time { return time.Date(2026, 4, 26, 18, 30, 0, 0, time.UTC) }
+	(*appTestField[func() time.Time](runner, "now")) = func() time.Time { return time.Date(2026, 4, 26, 18, 30, 0, 0, time.UTC) }
 	ctx, cancel := context.WithCancel(context.Background())
 	calls := 0
-	runner.sleep = func(_ context.Context, d time.Duration) bool {
+	(*appTestField[func(context.Context, time.Duration) bool](runner, "sleep")) = func(_ context.Context, d time.Duration) bool {
 		calls++
 		if calls == 1 {
 			if d != 2*time.Hour {

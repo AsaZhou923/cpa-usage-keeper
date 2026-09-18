@@ -1,7 +1,8 @@
-package app
+package test
 
 import (
 	"context"
+	. "cpa-usage-keeper/internal/app"
 	"errors"
 	"strings"
 	"sync"
@@ -122,8 +123,8 @@ func TestMetadataSyncRunnerValidatesConfig(t *testing.T) {
 func TestMetadataSyncRunnerDefaultsRefreshDebounceToOneSecond(t *testing.T) {
 	runner := NewMetadataSyncRunner(&metadataSyncStub{}, time.Minute)
 
-	if runner.refreshDebounce != time.Second {
-		t.Fatalf("expected default refresh debounce to be 1s, got %s", runner.refreshDebounce)
+	if (*appTestField[time.Duration](runner, "refreshDebounce")) != time.Second {
+		t.Fatalf("expected default refresh debounce to be 1s, got %s", (*appTestField[time.Duration](runner, "refreshDebounce")))
 	}
 }
 
@@ -153,7 +154,7 @@ func TestMetadataSyncRunnerLogsModeSwitches(t *testing.T) {
 func TestMetadataSyncRunnerNotificationModeWaitsForRefreshRequest(t *testing.T) {
 	syncer := &metadataSyncStub{}
 	runner := NewMetadataSyncRunner(syncer, time.Millisecond)
-	runner.refreshDebounce = time.Millisecond
+	(*appTestField[time.Duration](runner, "refreshDebounce")) = time.Millisecond
 	runner.NotifyIngestConnected()
 	runner.MarkRefreshSupported()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -178,7 +179,7 @@ func TestMetadataSyncRunnerNotificationModeWaitsForRefreshRequest(t *testing.T) 
 func TestMetadataSyncRunnerRefreshRequestDebounces(t *testing.T) {
 	syncer := &metadataSyncStub{}
 	runner := NewMetadataSyncRunner(syncer, time.Hour)
-	runner.refreshDebounce = 5 * time.Millisecond
+	(*appTestField[time.Duration](runner, "refreshDebounce")) = 5 * time.Millisecond
 	runner.NotifyIngestConnected()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -219,7 +220,7 @@ func TestMetadataSyncRunnerRefreshRequestDebounces(t *testing.T) {
 func TestMetadataSyncRunnerRefreshRequestUsesTrailingDebounce(t *testing.T) {
 	syncer := &metadataSyncStub{}
 	runner := NewMetadataSyncRunner(syncer, time.Hour)
-	runner.refreshDebounce = 150 * time.Millisecond
+	(*appTestField[time.Duration](runner, "refreshDebounce")) = 150 * time.Millisecond
 	runner.NotifyIngestConnected()
 	calls := make(chan time.Time, 3)
 	syncer.onCall = func(int) {
@@ -268,7 +269,7 @@ func TestMetadataSyncRunnerRefreshRequestUsesTrailingDebounce(t *testing.T) {
 func TestMetadataSyncRunnerSkipsDebouncedRefreshAfterContextError(t *testing.T) {
 	syncer := &metadataSyncStub{}
 	runner := NewMetadataSyncRunner(syncer, time.Hour)
-	runner.refreshDebounce = time.Millisecond
+	(*appTestField[time.Duration](runner, "refreshDebounce")) = time.Millisecond
 	runner.NotifyIngestConnected()
 	ctx := newMetadataSyncErrContext()
 	syncer.onCall = func(call int) {

@@ -1,7 +1,8 @@
-package app
+package test
 
 import (
 	"context"
+	. "cpa-usage-keeper/internal/app"
 	"errors"
 	"slices"
 	"strings"
@@ -29,9 +30,9 @@ func TestDatabaseBackupRunnerRunsAtScheduledTime(t *testing.T) {
 	cleaner := &databaseBackupCleanerStub{}
 	runner := NewDatabaseBackupRunner(writer, cleaner, 24*time.Hour, 30)
 	now := time.Date(2026, 4, 16, 3, 45, 0, 0, time.Local)
-	runner.now = func() time.Time { return now }
+	(*appTestField[func() time.Time](runner, "now")) = func() time.Time { return now }
 	sleepCalls := 0
-	runner.sleep = func(context.Context, time.Duration) bool {
+	(*appTestField[func(context.Context, time.Duration) bool](runner, "sleep")) = func(context.Context, time.Duration) bool {
 		sleepCalls++
 		return sleepCalls == 1
 	}
@@ -64,9 +65,9 @@ func TestDatabaseBackupRunnerUsesDailySchedule(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			writer := &databaseBackupWriterStub{lastBackupAt: tc.lastBackupAt}
 			runner := NewDatabaseBackupRunner(writer, nil, tc.interval, 0)
-			runner.now = func() time.Time { return now }
+			(*appTestField[func() time.Time](runner, "now")) = func() time.Time { return now }
 			var delay time.Duration
-			runner.sleep = func(_ context.Context, d time.Duration) bool {
+			(*appTestField[func(context.Context, time.Duration) bool](runner, "sleep")) = func(_ context.Context, d time.Duration) bool {
 				delay = d
 				return false
 			}
@@ -93,9 +94,9 @@ func TestDatabaseBackupRunnerResumesIntervalSchedule(t *testing.T) {
 			now := time.Date(2026, 4, 16, 3, 45, 0, 0, time.Local)
 			writer := &databaseBackupWriterStub{lastBackupAt: now.Add(-tc.age)}
 			runner := NewDatabaseBackupRunner(writer, nil, 10*time.Second, 0)
-			runner.now = func() time.Time { return now }
+			(*appTestField[func() time.Time](runner, "now")) = func() time.Time { return now }
 			var delays []time.Duration
-			runner.sleep = func(_ context.Context, delay time.Duration) bool {
+			(*appTestField[func(context.Context, time.Duration) bool](runner, "sleep")) = func(_ context.Context, delay time.Duration) bool {
 				delays = append(delays, delay)
 				return len(delays) == 1
 			}
@@ -117,9 +118,9 @@ func TestDatabaseBackupRunnerCleansAfterBackupFailure(t *testing.T) {
 	writer := &databaseBackupWriterStub{err: errors.New("disk full")}
 	cleaner := &databaseBackupCleanerStub{}
 	runner := NewDatabaseBackupRunner(writer, cleaner, time.Second, 30)
-	runner.now = func() time.Time { return time.Date(2026, 4, 16, 3, 45, 0, 0, time.Local) }
+	(*appTestField[func() time.Time](runner, "now")) = func() time.Time { return time.Date(2026, 4, 16, 3, 45, 0, 0, time.Local) }
 	sleepCalls := 0
-	runner.sleep = func(context.Context, time.Duration) bool {
+	(*appTestField[func(context.Context, time.Duration) bool](runner, "sleep")) = func(context.Context, time.Duration) bool {
 		sleepCalls++
 		return sleepCalls == 1
 	}
@@ -143,7 +144,7 @@ func TestDatabaseBackupRunnerRetriesDailyBackupAfterFailure(t *testing.T) {
 	writer := &databaseBackupWriterStub{err: errors.New("temporary failure")}
 	runner := NewDatabaseBackupRunner(writer, nil, 24*time.Hour, 0)
 	now := time.Date(2026, 4, 16, 3, 59, 0, 0, time.Local)
-	runner.now = func() time.Time { return now }
+	(*appTestField[func() time.Time](runner, "now")) = func() time.Time { return now }
 	var delays []time.Duration
 	retryTimes := []time.Time{
 		time.Date(2026, 4, 16, 4, 0, 0, 0, time.Local),
@@ -151,7 +152,7 @@ func TestDatabaseBackupRunnerRetriesDailyBackupAfterFailure(t *testing.T) {
 		time.Date(2026, 4, 16, 4, 30, 0, 0, time.Local),
 		time.Date(2026, 4, 16, 4, 45, 0, 0, time.Local),
 	}
-	runner.sleep = func(_ context.Context, delay time.Duration) bool {
+	(*appTestField[func(context.Context, time.Duration) bool](runner, "sleep")) = func(_ context.Context, delay time.Duration) bool {
 		delays = append(delays, delay)
 		if len(delays) > len(retryTimes) {
 			return false

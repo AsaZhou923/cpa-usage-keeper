@@ -1,8 +1,9 @@
-package app
+package test
 
 import (
 	"bytes"
 	"context"
+	. "cpa-usage-keeper/internal/app"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -296,19 +297,19 @@ func TestRunStartsPollerAndMaintenanceIndependently(t *testing.T) {
 	metadataStarted := make(chan struct{}, 1)
 	backupStarted := make(chan struct{})
 	maintenance := NewStorageCleanupRunner(&maintenanceSyncStub{})
-	maintenance.sleep = func(context.Context, time.Duration) bool {
+	(*appTestField[func(context.Context, time.Duration) bool](maintenance, "sleep")) = func(context.Context, time.Duration) bool {
 		close(maintenanceStarted)
 		return false
 	}
 	metadataRunner := NewMetadataSyncRunner(&metadataSyncStub{}, time.Second)
-	metadataRunner.onStart = func() {
+	(*appTestField[func()](metadataRunner, "onStart")) = func() {
 		select {
 		case metadataStarted <- struct{}{}:
 		default:
 		}
 	}
 	backupRunner := NewDatabaseBackupRunner(&databaseBackupWriterStub{}, nil, time.Second, 0)
-	backupRunner.sleep = func(context.Context, time.Duration) bool {
+	(*appTestField[func(context.Context, time.Duration) bool](backupRunner, "sleep")) = func(context.Context, time.Duration) bool {
 		close(backupStarted)
 		return false
 	}
@@ -379,7 +380,7 @@ func TestRunCancelsBackgroundTasksWhenRouterStops(t *testing.T) {
 	backupStarted := make(chan struct{})
 	backupCanceled := make(chan struct{})
 	backupRunner := NewDatabaseBackupRunner(&databaseBackupWriterStub{}, nil, time.Second, 0)
-	backupRunner.sleep = func(ctx context.Context, _ time.Duration) bool {
+	(*appTestField[func(context.Context, time.Duration) bool](backupRunner, "sleep")) = func(ctx context.Context, _ time.Duration) bool {
 		close(backupStarted)
 		<-ctx.Done()
 		close(backupCanceled)
