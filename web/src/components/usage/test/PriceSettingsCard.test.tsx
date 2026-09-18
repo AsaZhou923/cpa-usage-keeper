@@ -3,19 +3,12 @@ import '@/i18n';
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ApiError } from '@/lib/api';
+import { buildPricingModelOptions, PriceSettingsCard } from '../PriceSettingsCard';
 import {
-  buildPricingModelOptions,
-  buildSelectedSyncPrices,
-  markPricingSyncFailures,
-  notifyPricingSyncUnexpectedError,
-  notifyPricingSyncFailures,
-  PriceSettingsCard,
-  pricingDraftToModelPrice,
-  syncDraftToModelPrice,
-  syncMatchToDraft,
-  saveSyncDraftsWithSingleModelCallback,
+  buildSelectedSyncPrices, markPricingSyncFailures, notifyPricingSyncUnexpectedError,
+  notifyPricingSyncFailures, pricingDraftToModelPrice, syncDraftToModelPrice, syncMatchToDraft,
   type PricingSyncDraft,
-} from '../PriceSettingsCard';
+} from '../pricing/pricingDrafts';
 
 const syncDraft = (model: string): PricingSyncDraft => ({
   model,
@@ -179,7 +172,9 @@ describe('PriceSettingsCard', () => {
         modelPrices={{}}
         onPriceSave={() => undefined}
         onPriceDelete={() => undefined}
+        onSyncPricesChange={async (prices) => ({ successModels: Object.keys(prices), failures: [] })}
         onSyncPreview={async () => ({
+          source_id: 'models-dev',
           source: 'Models.dev',
           source_url: 'https://models.dev/api.json',
           metadata_models: 1,
@@ -375,32 +370,7 @@ describe('PriceSettingsCard', () => {
     });
   });
 
-  it('sync fallback saves selected models with single-model callbacks', async () => {
-    const calls: Array<{ model: string; price: number }> = [];
-    const selectedDrafts = [
-      syncDraft('gpt-4o'),
-      syncDraft('claude-sonnet'),
-    ];
-    const prices = {
-      'gpt-4o': { ...syncDraftToModelPrice(selectedDrafts[0])!, prompt: 3 },
-      'claude-sonnet': { ...syncDraftToModelPrice(selectedDrafts[1])!, prompt: 4 },
-      'gpt-4o-mini': { ...syncDraftToModelPrice(syncDraft('gpt-4o-mini'))!, prompt: 5 },
-    };
 
-    const result = await saveSyncDraftsWithSingleModelCallback(
-      selectedDrafts,
-      prices,
-      async (model, price) => {
-        calls.push({ model, price: price.prompt });
-      },
-    );
-
-    expect(calls).toEqual([
-      { model: 'gpt-4o', price: 3 },
-      { model: 'claude-sonnet', price: 4 },
-    ]);
-    expect(result).toEqual({ successModels: ['gpt-4o', 'claude-sonnet'], failures: [] });
-  });
 });
 
 describe('buildPricingModelOptions', () => {

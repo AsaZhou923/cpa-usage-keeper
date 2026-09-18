@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 const readSource = (url: URL) => readFileSync(url, 'utf8').replace(/\r\n/g, '\n')
 
 const usagePageSource = readSource(new URL('../UsagePage.tsx', import.meta.url))
-const keyOverviewPageStyles = readSource(new URL('../../features/key-viewer/KeyViewerShell.module.scss', import.meta.url))
+const dashboardHeaderSource = readSource(new URL('../../components/dashboard/DashboardHeader.tsx', import.meta.url))
 const keyOverviewPageSource = readSource(new URL('../KeyOverviewPage.tsx', import.meta.url))
 const keyAnalysisPageSource = readSource(new URL('../KeyAnalysisPage.tsx', import.meta.url))
 const keyViewerShellSource = readSource(new URL('../../features/key-viewer/KeyViewerShell.tsx', import.meta.url))
@@ -129,12 +129,13 @@ describe('UsagePage caller wiring', () => {
     expect(usagePageSource).toContain('latencyError={analysisLatencyError}')
   })
 
-  it('keeps Sign out as the rightmost shared main action after Check Updates', () => {
-    const checkUpdates = usagePageSource.indexOf("t('usage_stats.check_updates')")
+  it('keeps update checks and Sign out wired through the shared header', () => {
+    expect(usagePageSource).toContain('onLogout={handleRequestLogout}')
+    expect(usagePageSource).toContain('onCheckUpdates={shouldShowUpdateCheckButton(versionInfo) ? () => void handleUpdateCheck() : undefined}')
+    expect(keyViewerShellSource).toContain('onLogout={() => void handleLogout()}')
+    const checkUpdates = dashboardHeaderSource.indexOf("'usage_stats.check_updates'")
     expect(checkUpdates).toBeGreaterThanOrEqual(0)
-    expect(usagePageSource.indexOf("t('common.logout')")).toBeGreaterThan(checkUpdates)
-    expect(usagePageSource).toContain("aria-label={t('common.logout')}")
-    expect(keyViewerShellSource).toContain("aria-label={t('common.logout')}")
+    expect(dashboardHeaderSource.indexOf("'common.logout'")).toBeGreaterThan(checkUpdates)
   })
 
   it('renders primary navigation as direct links without replacing activeTab rendering', () => {
@@ -155,11 +156,12 @@ describe('UsagePage caller wiring', () => {
     expect(usagePageSource).toContain("window.history.replaceState(null, '', appPath(getUsageTabPath(tab)) + cpamcEmbedSearch());")
   })
 
-  it('keeps the connected shell out of CPAMC embed while sharing it with Key Overview', () => {
-    expect(usagePageSource).toContain("${!isEmbeddedInCPAMC ? styles.tabBarConnected : ''}")
-    expect(keyViewerShellSource).toContain('styles.tabBarConnected')
+  it('keeps the shared toolbar out of CPAMC embed while using it in Key Overview', () => {
+    expect(usagePageSource).toContain('{isEmbeddedInCPAMC ? <div className={styles.toolbarRow}>')
+    expect(usagePageSource).toContain(': <DashboardToolbar')
+    expect(usagePageSource).toContain('onNavigate={activateUsageTab}')
+    expect(keyViewerShellSource).toContain('<DashboardToolbar')
     expect(keyOverviewPageSource).toContain('KeyViewerShell')
-    expect(keyOverviewPageStyles).toContain('.tabBarConnected')
   })
 
   it('passes realtime error state and current data guard to the realtime panel', () => {
@@ -178,6 +180,11 @@ describe('UsagePage caller wiring', () => {
 
   it('does not render the Back to CPA link in CPAMC embed mode', () => {
     expect(usagePageSource).toMatch(/const isEmbeddedInCPAMC = isCPAMCEmbed\(\);/)
-    expect(usagePageSource).toMatch(/\{\(!isEmbeddedInCPAMC && cpaManagementURL\) && \(/)
+    const headerStart = usagePageSource.indexOf('{isEmbeddedInCPAMC ? <header')
+    const sharedHeaderStart = usagePageSource.indexOf('</header> : <DashboardHeader', headerStart)
+    expect(headerStart).toBeGreaterThanOrEqual(0)
+    expect(sharedHeaderStart).toBeGreaterThan(headerStart)
+    expect(usagePageSource.slice(headerStart, sharedHeaderStart)).not.toContain('cpaManagementURL')
+    expect(usagePageSource.slice(sharedHeaderStart)).toContain('backToCPA={cpaManagementURL || undefined}')
   })
 })

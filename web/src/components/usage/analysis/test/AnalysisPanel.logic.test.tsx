@@ -133,6 +133,7 @@ describe('AnalysisPanel token chart data', () => {
   it('splits cache read and write from input while keeping total tooltip values', () => {
     const analysis: AnalysisResponse = {
       ...emptyAnalysis,
+      timezone: 'Asia/Shanghai',
       token_usage: [tokenBucket({
         cache_read_tokens: 600,
         cache_creation_tokens: 100,
@@ -144,6 +145,7 @@ describe('AnalysisPanel token chart data', () => {
 
     renderToStaticMarkup(<AnalysisTestPanel analysis={analysis} />);
 
+    expect(chartCapture.barData?.labels).toEqual(['09:00']);
     const datasets = chartCapture.barData!.datasets;
     expect(datasets.find((dataset) => dataset.label === 'usage_stats.input_tokens')?.data).toEqual([300]);
     expect(datasets.find((dataset) => dataset.label === 'usage_stats.cache_read_tokens')?.data).toEqual([600]);
@@ -237,7 +239,7 @@ describe('AnalysisPanel token chart data', () => {
     expect(chartCapture.doughnutOptions?.plugins?.tooltip?.enabled).toBe(true);
     expect(chartCapture.doughnutOptions?.plugins?.tooltip?.position).toBe('analysisCompositionCursor');
     expect(chartCapture.doughnutOptions?.plugins?.tooltip?.external).toBeUndefined();
-    expect(chartCapture.doughnutPlugins).toBeUndefined();
+    expect(chartCapture.doughnutPlugins?.map((plugin) => plugin.id)).toContain('analysis-composition-labels');
     expect(markup).toContain('usage_stats.analysis_composition_title');
     expect(markup).toContain('usage_stats.analysis_composition_api_key_tab');
     expect(markup).toContain('usage_stats.analysis_composition_token_percent');
@@ -328,7 +330,7 @@ describe('AnalysisPanel token chart data', () => {
       position: 'analysisCompositionCursor',
     });
     expect(chartCapture.doughnutOptions?.plugins?.tooltip?.external).toBeUndefined();
-    expect(chartCapture.doughnutPlugins).toBeUndefined();
+    expect(chartCapture.doughnutPlugins?.map((plugin) => plugin.id)).toContain('analysis-composition-labels');
   });
 
   it('limits usage distribution hover to the doughnut ring while allowing arc edges', () => {
@@ -499,7 +501,7 @@ describe('AnalysisPanel token chart data', () => {
     const markup = renderToStaticMarkup(<AnalysisTestPanel analysis={emptyAnalysis} latencyDiagnostics={latencyDiagnostics} />);
 
     expect(markup).toContain('usage_stats.analysis_latency_title');
-    expect(markup.indexOf('usage_stats.analysis_latency_title')).toBeLessThan(markup.indexOf('usage_stats.analysis_composition_title'));
+    expect(markup.indexOf('usage_stats.analysis_composition_title')).toBeLessThan(markup.indexOf('usage_stats.analysis_latency_title'));
     const latencyScatterIndex = chartCapture.scatterData.findIndex((data) => data.datasets[0]?.label === 'usage_stats.analysis_latency_samples');
     expect(latencyScatterIndex).toBeGreaterThanOrEqual(0);
     const latencyScatterData = chartCapture.scatterData[latencyScatterIndex];
@@ -650,48 +652,6 @@ describe('AnalysisPanel token chart data', () => {
     const latencyScatterOptions = chartCapture.scatterOptions[latencyScatterIndex];
     expect((latencyScatterOptions.scales?.x as { max?: number }).max).toBeGreaterThan(150_000);
     expect((latencyScatterOptions.scales?.y as { max?: number }).max).toBeGreaterThan(300_000);
-  });
-
-  it('renders cost breakdown with total tokens, total cost, blended rate and segment percentages', () => {
-    const analysis: AnalysisResponse = {
-      ...emptyAnalysis,
-      timezone: 'Asia/Shanghai',
-      token_usage: [tokenBucket({
-        input_tokens: 1_000_000,
-        output_tokens: 1_000_000,
-        cache_read_tokens: 500_000,
-        cache_creation_tokens: 100_000,
-        reasoning_tokens: 100_000,
-        total_tokens: 3_000_000,
-        requests: 10,
-        cost_usd: 6,
-      })],
-      cost_breakdown: {
-        uncached_input_cost_usd: 1,
-        output_cost_usd: 3,
-        cache_read_cost_usd: 1.5,
-        cache_write_cost_usd: 0.5,
-        total_cost_usd: 6,
-        cost_available: true,
-      },
-    };
-
-    const markup = renderToStaticMarkup(<AnalysisTestPanel analysis={analysis} />);
-
-    expect(markup).toContain('usage_stats.analysis_cost_per_million_tokens');
-    expect(markup).toContain('usage_stats.analysis_blended_rate');
-    expect(markup).toContain('usage_stats.analysis_cost_share: 16.67%');
-    expect(markup).toContain('usage_stats.input_tokens · usage_stats.analysis_cost_share');
-    expect(markup).not.toContain('title="usage_stats.input_tokens · usage_stats.analysis_cost_share');
-    expect(markup).toContain('usage_stats.analysis_cost_per_million_tokens: $2.50');
-    expect(markup).toContain('usage_stats.total_tokens: 400.00K');
-    expect(chartCapture.barData?.labels).toEqual(['09:00']);
-    expect(markup).toContain('$6.00');
-    expect(markup).toContain('$2.00');
-    expect(markup).toContain('16.67%');
-    expect(markup).toContain('50.00%');
-    expect(markup).toContain('25.00%');
-    expect(markup).toContain('8.33%');
   });
 
   it('renders model efficiency as cost per million total tokens against total tokens', () => {
@@ -923,12 +883,12 @@ describe('AnalysisPanel token chart data', () => {
     expect(markup).toMatch(/Unpriced Key[\s\S]*\$0\.0000/);
     expect(markup).toContain('usage_stats.cost_need_price');
     expect(markup).not.toContain('usage_stats.analysis_token_usage_subtitle (usage_stats.cost_need_price)');
-    expect([...container.querySelectorAll('h2')].filter((heading) => heading.parentElement?.textContent?.includes('usage_stats.cost_need_price'))).toHaveLength(5);
-    expect(container.querySelector('[class*="costRatePanel"]')?.textContent).toContain('usage_stats.analysis_cost_per_million_tokens$0.0000');
+    expect([...container.querySelectorAll('h2')].filter((heading) => heading.parentElement?.textContent?.includes('usage_stats.cost_need_price'))).toHaveLength(4);
+    expect(container.querySelector('[class*="analysisSummary"]')?.textContent).toContain('usage_stats.analysis_cost_per_million_tokens$0.0000');
     expect(markup).toContain('usage_stats.total_cost: $0.0000');
   });
 
-  it('keeps partially priced cost breakdown rates visible under the card-level pricing hint', () => {
+  it('keeps partially priced summary rates visible under the token chart pricing hint', () => {
     const analysis: AnalysisResponse = {
       ...emptyAnalysis,
       token_usage: [tokenBucket({
@@ -951,7 +911,7 @@ describe('AnalysisPanel token chart data', () => {
     const costDataset = chartCapture.barData?.datasets.find((dataset) => dataset.label === 'usage_stats.total_cost');
     expect(costDataset?.data).toEqual([9]);
     expect(markup).toContain('usage_stats.cost_need_price');
-    expect([...container.querySelectorAll('[class*="costRatePanel"] strong')].map((value) => value.textContent)).toEqual(['1.10K', '$9.00', '$8,181.82']);
+    expect([...container.querySelectorAll('[class*="analysisSummary"] dd')].map((value) => value.textContent)).toEqual(['1.10K', '$9.00', '$8,181.82']);
   });
 
   it('shows compact heatmap cells with id keys and display labels', () => {

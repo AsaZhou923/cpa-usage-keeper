@@ -133,18 +133,18 @@ describe('RequestEventsDetailsCard', () => {
       sourceFilter: 'source-a',
       sourceOptions: [{ value: 'source-a', label: 'Provider A', displayName: 'Team Prefix' }],
     });
-    expect(html).toMatch(/aria-label="Source"><span[^>]*>Team Prefix<\/span>/);
+    expect(html).toMatch(/<input[^>]*role="combobox"[^>]*aria-label="Source"[^>]*value="Team Prefix"/);
   });
 
   it('uses backend options independently of current page grouping', () => {
     const html = renderCard({ modelFilter: 'claude-opus', sourceFilter: 'source-b' });
     expect(html).toMatch(/<input[^>]*role="combobox"[^>]*aria-label="Model"[^>]*value="claude-opus"/);
-    expect(html).toMatch(/aria-label="Source"><span[^>]*>Provider B<\/span>/);
+    expect(html).toMatch(/<input[^>]*role="combobox"[^>]*aria-label="Source"[^>]*value="Provider B"/);
   });
 
-  it('renders the selected Result filter without a Credential control', () => {
+  it('renders the selected Status filter without a Credential control', () => {
     const html = renderCard({ resultFilter: 'failed' });
-    expect(html).toContain('aria-label="Result"');
+    expect(html).toContain('aria-label="Status"');
     expect(html).toContain('Failure');
     expect(html).not.toContain('aria-label="Credential"');
   });
@@ -219,8 +219,8 @@ describe('RequestEventsDetailsCard', () => {
     expect(html.match(/>Export</g)).toHaveLength(1);
     expect(html.indexOf('aria-label="Columns"')).toBeGreaterThan(-1);
     expect(html.indexOf('aria-label="Columns"')).toBeLessThan(html.indexOf('>Export<'));
-    expect(html.indexOf('>Export<')).toBeLessThan(html.indexOf('aria-label="Result"'));
-    expect(html.indexOf('aria-label="Result"')).toBeLessThan(html.indexOf('Clear Filters'));
+    expect(html.indexOf('>Export<')).toBeLessThan(html.indexOf('aria-label="Status"'));
+    expect(html.indexOf('aria-label="Status"')).toBeLessThan(html.indexOf('Clear Filters'));
     expect(html).toContain('aria-haspopup="menu"');
     expect(html).not.toContain('Export CSV');
     expect(html).not.toContain('Export JSON');

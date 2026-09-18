@@ -17,7 +17,7 @@ vi.mock('react-i18next', () => ({
 import { renderAnalysisPanel } from './analysisFixtures';
 
 describe('AnalysisPanel latency loading boundary', () => {
-  const latencyCard = (container: HTMLElement) => container.querySelector('[class*="latencyDiagnosticsCard"]')!;
+  const latencyCard = (container: HTMLElement) => [...container.querySelectorAll('h2')].find((heading) => heading.textContent === 'usage_stats.analysis_latency_title')!.closest('section')!;
 
   it('keeps core cards settled while only the latency card is loading', () => {
     const container = renderAnalysisPanel({ latencyLoading: true });

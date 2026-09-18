@@ -39,6 +39,10 @@ type quotaProviderStub struct {
 	inspectionStartCalls     int
 }
 
+func (s *quotaProviderStub) DeleteCodexQuotaHistoryCycle(context.Context, string, int64) error {
+	return nil
+}
+
 func (s *quotaProviderStub) GetCodexQuotaHistory(ctx context.Context, request quota.CodexQuotaHistoryRequest) (quota.CodexQuotaHistoryResponse, error) {
 	s.historyRequest = request
 	return s.historyResponse, s.historyErr

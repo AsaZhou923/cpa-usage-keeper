@@ -30,6 +30,7 @@ describe('UsagePage request event column preferences', () => {
       expect(preferences).toEqual({
         version: 9,
         filters: {
+          apiKeyId: '',
           model: 'gpt-5.6',
           source: 'openai-team',
           result: 'failed',
@@ -52,6 +53,7 @@ describe('UsagePage request event column preferences', () => {
     });
 
     expect(preferences.filters).toEqual({
+      apiKeyId: '',
       model: 'claude-sonnet',
       source: 'anthropic-team',
       result: 'success',
@@ -100,6 +102,7 @@ describe('UsagePage request event preferences', () => {
     });
 
     expect(preferences.filters).toEqual({
+      apiKeyId: '',
       model: '__all__',
       source: '__all__',
       result: '__all__',
@@ -113,7 +116,7 @@ describe('UsagePage request event preferences', () => {
     const visibleColumnIds = REQUEST_EVENT_COLUMN_IDS.filter((columnId) => columnId !== hiddenColumn);
     const preferences = {
       version: 9,
-      filters: { model: '__all__', source: '__all__', result: '__all__' },
+      filters: { apiKeyId: '', model: '__all__', source: '__all__', result: '__all__' },
       visibleColumnIds,
       columnOrder: [...REQUEST_EVENT_COLUMN_IDS],
     };
@@ -129,6 +132,7 @@ describe('UsagePage request event preferences', () => {
     });
 
     expect(loadRequestEventsPreferences(storage).filters).toEqual({
+      apiKeyId: '',
       model: '__all__',
       source: '__all__',
       result: '__all__',
@@ -137,6 +141,7 @@ describe('UsagePage request event preferences', () => {
     saveRequestEventsPreferences({
       version: 9,
       filters: {
+        apiKeyId: '',
         model: 'gpt-4.1',
         source: 'source-a',
         result: 'success',
@@ -148,6 +153,7 @@ describe('UsagePage request event preferences', () => {
     expect(JSON.parse(storage.value(REQUEST_EVENTS_PREFERENCES_STORAGE_KEY) ?? '')).toEqual({
       version: 9,
       filters: {
+        apiKeyId: '',
         model: 'gpt-4.1',
         source: 'source-a',
         result: 'success',
