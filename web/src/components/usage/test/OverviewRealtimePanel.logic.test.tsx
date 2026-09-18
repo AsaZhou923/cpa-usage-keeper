@@ -1,17 +1,17 @@
-import React, { type ComponentProps } from 'react';
+import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ChartData, ChartOptions } from 'chart.js';
+import type { ChartData, ChartOptions, Plugin } from 'chart.js';
 import type { OverviewRealtimeBlock } from '@/lib/types';
 import i18n from '@/i18n';
 
 const chartCapture = vi.hoisted(() => ({
-  lineCalls: [] as Array<{ data: ChartData<'line', Array<number | null>, string>; options: ChartOptions<'line'> }>,
+  lineCalls: [] as Array<{ data: ChartData<'line', Array<number | null>, string>; options: ChartOptions<'line'>; plugins?: Plugin<'line'>[] }>,
   chartCalls: [] as Array<{ type?: string; data: ChartData; options: ChartOptions }>,
 }));
 
 vi.mock('react-chartjs-2', () => ({
-  Line: (props: { data: ChartData<'line', Array<number | null>, string>; options: ChartOptions<'line'> }) => {
+  Line: (props: { data: ChartData<'line', Array<number | null>, string>; options: ChartOptions<'line'>; plugins?: Plugin<'line'>[] }) => {
     chartCapture.lineCalls.push(props);
     return React.createElement('div');
   },
@@ -82,7 +82,7 @@ const realtime: OverviewRealtimeBlock = {
     { bucket: '2026-06-09T11:55:00Z', cache_read_rate: 25, cache_read_tokens: 10, cache_creation_tokens: 2, input_tokens: 40 },
     { bucket: '2026-06-09T11:55:30Z', cache_read_rate: 50, cache_read_tokens: 30, cache_creation_tokens: 4, input_tokens: 60 },
   ],
-} satisfies OverviewRealtimeBlock;
+} as OverviewRealtimeBlock;
 
 const realtimeWithProjectOffset: OverviewRealtimeBlock = {
   ...realtime,
@@ -96,10 +96,6 @@ const realtimeWithProjectOffset: OverviewRealtimeBlock = {
   ],
 };
 
-function TestPanel(props: Partial<ComponentProps<typeof OverviewRealtimePanel>>) {
-  return <OverviewRealtimePanel loading={false} window="15m" onWindowChange={() => {}} isDark={false} isMobile={false} {...props} />;
-}
-
 describe('OverviewRealtimePanel', () => {
   afterEach(async () => {
     chartCapture.lineCalls = [];
@@ -109,8 +105,13 @@ describe('OverviewRealtimePanel', () => {
 
   it('renders a dual-axis throughput chart without duplicating the request chart', () => {
     const html = renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={realtime}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
         timezone="UTC"
       />
     );
@@ -122,13 +123,17 @@ describe('OverviewRealtimePanel', () => {
     expect(html).toContain('usage_stats.overview_realtime_current_usage');
     expect(html).not.toContain('usage_stats.overview_realtime_request_level');
     expect(html).toContain('usage_stats.overview_realtime_cache_level');
+    expect(html.match(/overviewRealtimeCardFull/g) ?? []).toHaveLength(2);
+    expect(html.match(/keeper-card-surface/g) ?? []).toHaveLength(5);
+    expect(html.match(/class="keeper-card-title-track"/g) ?? []).toHaveLength(5);
+    expect(html.match(/class="keeper-card-title"/g) ?? []).toHaveLength(5);
     expect(html).toContain('30m');
     expect(html).not.toMatch(/>5m<\/button>/);
     expect(html).toContain('usage_stats.overview_realtime_dimension_api_keys');
     expect(html).toContain('usage_stats.overview_realtime_dimension_auth_files');
     expect(html).toContain('gpt-5');
-    expect(chartCapture.lineCalls).toHaveLength(2);
-    expect(chartCapture.chartCalls).toHaveLength(2);
+    expect(chartCapture.lineCalls).toHaveLength(1);
+    expect(chartCapture.chartCalls).toHaveLength(3);
     expect(chartCapture.lineCalls[0].data.datasets).toMatchObject([
       {
         label: 'usage_stats.overview_realtime_tpm',
@@ -151,6 +156,7 @@ describe('OverviewRealtimePanel', () => {
           labels: {
             usePointStyle: true,
             pointStyle: 'line',
+            pointStyleWidth: 32,
             generateLabels: expect.any(Function),
           },
         },
@@ -159,18 +165,21 @@ describe('OverviewRealtimePanel', () => {
         tokens: {
           position: 'left',
           beginAtZero: true,
+          border: { color: 'rgba(17, 24, 39, 0.07)' },
+          ticks: { count: 6 },
         },
         requests: {
           position: 'right',
           beginAtZero: true,
           max: 5,
           grid: { drawOnChartArea: false },
-          ticks: { precision: 0 },
+          border: { color: 'rgba(17, 24, 39, 0.07)' },
+          ticks: { count: 6, precision: 0 },
         },
       },
     });
-    const generateLabels = chartCapture.lineCalls[0].options.plugins!.legend!.labels!.generateLabels!;
-    const legendItems = generateLabels({
+    const generateLabels = chartCapture.lineCalls[0].options.plugins?.legend?.labels?.generateLabels;
+    const legendItems = generateLabels?.({
       data: chartCapture.lineCalls[0].data,
       isDatasetVisible: () => true,
     } as never);
@@ -178,32 +187,43 @@ describe('OverviewRealtimePanel', () => {
       { text: 'usage_stats.overview_realtime_tpm', lineDash: [], pointStyle: 'line' },
       { text: 'usage_stats.overview_realtime_rpm', lineDash: [6, 4], pointStyle: 'line' },
     ]);
+    expect(chartCapture.lineCalls[0].plugins?.map((plugin) => plugin.id)).toContain('throughputLegendSpacing');
+    expect(html.match(/overviewRealtimePairedMetric_/g) ?? []).toHaveLength(3);
+    expect(html).not.toContain('overviewRealtimeSeriesSwatch');
+    expect(html.match(/>usage_stats\.overview_realtime_latest<\/span>/g) ?? []).toHaveLength(4);
+    expect(html.match(/>usage_stats\.overview_realtime_average<\/span>/g) ?? []).toHaveLength(4);
+    expect(html.match(/>usage_stats\.overview_realtime_trend<\/span>/g) ?? []).toHaveLength(4);
     expect(html).toContain('usage_stats.tpm');
     expect(html).toContain('usage_stats.rpm');
     expect(html).not.toContain('aria-label="usage_stats.overview_realtime_latest usage_stats.overview_realtime_tpm');
     expect(html).toContain('overviewRealtimeScreenReaderOnly_');
     expect(html).toContain('>usage_stats.overview_realtime_latest usage_stats.overview_realtime_tpm 240 usage_stats.overview_realtime_rpm 4 usage_stats.overview_realtime_throughput_hint</span>');
     expect(html).toContain('aria-hidden="true">usage_stats.overview_realtime_latest</span>');
-    expect(chartCapture.lineCalls[1].data.datasets[0].data).toEqual([25, 50]);
-    expect(html).toContain('title="usage_stats.overview_realtime_rolling_metric_hint"');
-    expect(html).toContain('aria-label="usage_stats.overview_realtime_latest 190ms usage_stats.overview_realtime_rolling_metric_hint"');
-    for (const label of ['tokens', 'requests', 'cost']) {
-      expect(html).toContain(`usage_stats.overview_realtime_${label}_label`);
-    }
-    for (const chart of [...chartCapture.lineCalls, ...chartCapture.chartCalls]) {
-      expect(chart.options.spanGaps).not.toBe(true);
-    }
+    expect(chartCapture.chartCalls[0].data.datasets.map((dataset) => dataset.label)).toEqual([
+      'usage_stats.overview_realtime_ttft_average',
+      'usage_stats.overview_realtime_ttft_distribution',
+    ]);
+    expect(chartCapture.chartCalls[1].data.datasets.map((dataset) => dataset.label)).toEqual([
+      'usage_stats.overview_realtime_latency_average',
+      'usage_stats.overview_realtime_latency_distribution',
+    ]);
+    expect(chartCapture.chartCalls[2].data.datasets[3].data).toEqual([25, 50]);
   });
 
   it('aligns throughput series by bucket when one response series has a missing point', () => {
     renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={{
           ...realtime,
           request_level: [
             { bucket: '2026-06-09T11:55:30Z', requests_per_minute: 4, requests: 2 },
           ],
         }}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
         timezone="UTC"
       />
     );
@@ -215,7 +235,7 @@ describe('OverviewRealtimePanel', () => {
 
   it('shows metric-specific empty states while keeping valid zero lines visible', () => {
     const html = renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={{
           ...realtime,
           token_velocity: [
@@ -242,6 +262,11 @@ describe('OverviewRealtimePanel', () => {
             { bucket: '2026-06-09T11:55:30Z', cache_read_rate: null, cache_read_tokens: 0, cache_creation_tokens: 0, input_tokens: 0 },
           ],
         }}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
       />
     );
 
@@ -250,14 +275,53 @@ describe('OverviewRealtimePanel', () => {
     expect(html).toContain('usage_stats.overview_realtime_latency_empty');
     expect(html).toContain('usage_stats.overview_realtime_cache_empty');
     expect(html).toContain('usage_stats.overview_realtime_usage_empty');
-    expect(chartCapture.lineCalls).toHaveLength(2);
-    expect(chartCapture.chartCalls).toHaveLength(2);
+    expect(chartCapture.lineCalls).toHaveLength(1);
+    expect(chartCapture.chartCalls).toHaveLength(3);
+  });
+
+  it('labels realtime metric chips as rolling values with localized tooltip text', () => {
+    const html = renderToStaticMarkup(
+      <OverviewRealtimePanel
+        realtime={realtime}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
+      />
+    );
+
+    expect(html).toContain('title="usage_stats.overview_realtime_rolling_metric_hint"');
+    expect(html).toContain('aria-label="usage_stats.overview_realtime_latest 190ms usage_stats.overview_realtime_rolling_metric_hint"');
+  });
+
+  it('renders token share metadata as labeled compact chips', () => {
+    const html = renderToStaticMarkup(
+      <OverviewRealtimePanel
+        realtime={realtime}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
+      />
+    );
+
+    expect(html).toContain('usage_stats.overview_realtime_tokens_label');
+    expect(html).toContain('usage_stats.overview_realtime_requests_label');
+    expect(html).toContain('usage_stats.overview_realtime_cost_label');
+    expect(html).toContain('overviewRealtimeUsageMetaPill');
   });
 
   it('renders response level as separate TTFT and latency distribution cards', () => {
     const html = renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={realtime}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
         timezone="UTC"
       />
     );
@@ -265,7 +329,7 @@ describe('OverviewRealtimePanel', () => {
     expect(html).toContain('usage_stats.overview_realtime_ttft_distribution');
     expect(html).toContain('usage_stats.overview_realtime_latency_distribution');
     expect(html).not.toContain('usage_stats.overview_realtime_response_level</h3>');
-    expect(chartCapture.chartCalls).toHaveLength(2);
+    expect(chartCapture.chartCalls).toHaveLength(3);
     expect(chartCapture.chartCalls[0].data.datasets.map((dataset) => dataset.label)).toEqual([
       'usage_stats.overview_realtime_ttft_average',
       'usage_stats.overview_realtime_ttft_distribution',
@@ -293,7 +357,7 @@ describe('OverviewRealtimePanel', () => {
 
   it('uses data-driven logarithmic response axes per distribution chart', () => {
     renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={{
           ...realtime,
           response_distribution: {
@@ -319,6 +383,11 @@ describe('OverviewRealtimePanel', () => {
             },
           },
         }}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
       />
     );
 
@@ -363,8 +432,13 @@ describe('OverviewRealtimePanel', () => {
     } as unknown as OverviewRealtimeBlock;
 
     renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={malformedRealtime}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
         timezone="UTC"
       />
     );
@@ -394,7 +468,7 @@ describe('OverviewRealtimePanel', () => {
     }));
 
     renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={{
           ...realtime,
           response_distribution: {
@@ -405,6 +479,11 @@ describe('OverviewRealtimePanel', () => {
             },
           },
         }}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
       />
     );
 
@@ -417,8 +496,13 @@ describe('OverviewRealtimePanel', () => {
 
   it('shows an error state before realtime data has loaded', () => {
     const html = renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
+        loading={false}
         error="Realtime failed"
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
       />
     );
 
@@ -428,21 +512,30 @@ describe('OverviewRealtimePanel', () => {
 
   it('keeps stale charts visible when a realtime refresh fails after data has loaded', () => {
     const html = renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={realtime}
+        loading={false}
         error="Realtime failed"
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
       />
     );
 
     expect(html).toContain('Realtime failed');
-    expect(chartCapture.lineCalls).toHaveLength(2);
-    expect(chartCapture.chartCalls).toHaveLength(2);
+    expect(chartCapture.lineCalls).toHaveLength(1);
+    expect(chartCapture.chartCalls).toHaveLength(3);
   });
 
   it('shows a loading state before realtime data has loaded', () => {
     const html = renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         loading
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
       />
     );
 
@@ -481,8 +574,13 @@ describe('OverviewRealtimePanel', () => {
     };
 
     const html = renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={formattedRealtime}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
       />
     );
 
@@ -533,8 +631,13 @@ describe('OverviewRealtimePanel', () => {
     };
 
     const html = renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={formattedRealtime}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
       />
     );
     const responseYAxis = chartCapture.chartCalls[1].options.scales?.y as { ticks?: { callback?: (value: string | number) => string } };
@@ -547,8 +650,13 @@ describe('OverviewRealtimePanel', () => {
 
   it('shows only the Models current-usage dimension for key overview', () => {
     const html = renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={realtime}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
         visibleDimensions={['models'] as const}
       />
     );
@@ -562,7 +670,7 @@ describe('OverviewRealtimePanel', () => {
 
   it('does not render a nonzero usage bar for zero-share rows', () => {
     const html = renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={{
           ...realtime,
           current_usage: {
@@ -570,6 +678,11 @@ describe('OverviewRealtimePanel', () => {
             models: [{ key: 'zero', label: 'zero', tokens: 0, requests: 1, share: 0 }],
           },
         }}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
       />
     );
 
@@ -579,11 +692,56 @@ describe('OverviewRealtimePanel', () => {
 
   it('formats realtime bucket labels with the realtime response timezone', () => {
     renderToStaticMarkup(
-      <TestPanel
+      <OverviewRealtimePanel
         realtime={{ ...realtimeWithProjectOffset, timezone: 'Asia/Shanghai' }}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
       />
     );
 
     expect(chartCapture.lineCalls[0].data.labels).toEqual(['11:55', '11:55:30']);
+  });
+
+  it('keeps gap spanning disabled for realtime charts', () => {
+    renderToStaticMarkup(
+      <OverviewRealtimePanel
+        realtime={realtime}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
+      />
+    );
+
+    expect(chartCapture.lineCalls[0].options.spanGaps).toBeUndefined();
+    expect(chartCapture.chartCalls[2].options.spanGaps).toBeUndefined();
+    expect(chartCapture.chartCalls[0].options.spanGaps).toBeUndefined();
+    expect(chartCapture.chartCalls[1].options.spanGaps).toBeUndefined();
+  });
+
+  it('keeps response axis logarithmic and cache axis light', () => {
+    renderToStaticMarkup(
+      <OverviewRealtimePanel
+        realtime={realtime}
+        loading={false}
+        window="15m"
+        onWindowChange={() => {}}
+        isDark={false}
+        isMobile={false}
+      />
+    );
+
+    const responseYAxis = chartCapture.chartCalls[0].options.scales?.y as { type?: string; beginAtZero?: boolean; min?: number; ticks?: { maxTicksLimit?: number } };
+    const cacheYAxis = chartCapture.chartCalls[2].options.scales?.y as { ticks?: { maxTicksLimit?: number } };
+
+    expect(responseYAxis.type).toBe('logarithmic');
+    expect(responseYAxis.beginAtZero).toBeUndefined();
+    expect(responseYAxis.min).toBeGreaterThan(0);
+    expect(responseYAxis.ticks?.maxTicksLimit).toBe(5);
+    expect(cacheYAxis.ticks?.maxTicksLimit).toBe(5);
   });
 });

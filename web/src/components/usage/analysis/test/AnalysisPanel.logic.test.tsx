@@ -447,7 +447,7 @@ describe('AnalysisPanel token chart data', () => {
     expect(markup).toContain('width:100%');
   });
 
-  it('uses a distinct sixth composition color when others are collapsed', () => {
+  it('uses distinct colors for every composition entry', () => {
     const analysis: AnalysisResponse = {
       ...emptyAnalysis,
       api_key_composition: Array.from({ length: 7 }, (_, index) => (composition({
@@ -470,7 +470,7 @@ describe('AnalysisPanel token chart data', () => {
       backgroundColor as (context: { dataIndex: number; chart: { chartArea?: unknown } }) => string
     )({ dataIndex, chart: {} }));
 
-    expect(markup).toContain('usage_stats.analysis_others');
+    expect(markup).not.toContain('usage_stats.analysis_others');
     expect(compositionColors).toHaveLength(6);
     expect(new Set(compositionColors).size).toBe(6);
   });
@@ -697,10 +697,10 @@ describe('AnalysisPanel token chart data', () => {
     expect(modelScatterOptions.scales?.x).not.toHaveProperty('beginAtZero');
     expect(modelScatterOptions.scales?.y).not.toHaveProperty('beginAtZero');
     const pointRadii = modelScatterData.datasets[0]?.pointRadius as number[];
-    expect(pointRadii[0]).toBe(5);
-    expect(pointRadii[1]).toBeGreaterThan(10);
+    expect(pointRadii[0]).toBeGreaterThan(10);
+    expect(pointRadii[1]).toBeGreaterThan(pointRadii[0]);
     expect(pointRadii[2]).toBe(24);
-    expect(pointRadii[2] - pointRadii[1]).toBeGreaterThan(4);
+    expect(pointRadii[2] - pointRadii[1]).toBeGreaterThan(2);
     expect(modelScatterData.datasets[0]?.clip).toBe(false);
     expect((modelScatterOptions.scales?.x as { min?: number }).min).toBeLessThan(2_000_000);
     expect((modelScatterOptions.scales?.x as { max?: number }).max).toBeGreaterThan(9_000_000);

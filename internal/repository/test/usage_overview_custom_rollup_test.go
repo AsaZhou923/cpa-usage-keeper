@@ -172,10 +172,11 @@ func TestCustomDayOverviewReadsCompleteDailyBucketsWithoutUsageEvents(t *testing
 	assertOverviewQueryTables(t, *queries, false, true)
 }
 
-func captureOverviewDataQueries(t *testing.T, db *gorm.DB) *[]string {
+func captureOverviewDataQueries(t *testing.T, db *gorm.DB, suffix ...string) *[]string {
 	t.Helper()
 	queries := make([]string, 0, 3)
 	callbackName := "test:capture_overview_data_queries"
+	if len(suffix) > 0 && suffix[0] != "" { callbackName += "_" + suffix[0] }
 	capture := func(tx *gorm.DB) {
 		queries = append(queries, strings.ToLower(tx.Statement.SQL.String()))
 	}

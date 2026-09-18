@@ -18,6 +18,7 @@ type centerStub struct {
 	metadata func(context.Context) (ranking.LeaderboardMetadata, error)
 
 	selfCalls        int
+	reportCalls      int
 	leaderboardCalls int
 	metadataCalls    int
 	registrations    []ranking.RegistrationCommand
@@ -42,6 +43,7 @@ func (s *centerStub) Self(ctx context.Context, credentials ranking.Credentials, 
 }
 
 func (s *centerStub) SubmitReport(ctx context.Context, command ranking.ReportCommand) (ranking.ReportReceipt, error) {
+	s.reportCalls++
 	s.reports = append(s.reports, command)
 	if s.report != nil {
 		return s.report(ctx, command)

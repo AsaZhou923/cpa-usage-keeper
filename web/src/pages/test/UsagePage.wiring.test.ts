@@ -174,8 +174,8 @@ describe('UsagePage caller wiring', () => {
   it('loads both Activity cards through one independent Recent Activity request', () => {
     expect(usagePageSource).toContain('useUsageActivityData({')
     expect(usagePageSource).toContain('useRecentActivityWindow(usageRangeQuery)')
-    expect(usagePageSource).toContain('await Promise.all([loadUsage(), loadActivity(), loadRealtime()])')
-    expect(usagePageSource).toContain('await Promise.all([loadUsage(), loadActivity({ skipIfInFlight: true }), loadRealtime()])')
+    expect(usagePageSource).toContain('await Promise.all([loadUsage(), loadActivity(), loadComparisons()])')
+    expect(usagePageSource).toContain('await Promise.all([loadUsage(), loadActivity({ skipIfInFlight: true }), loadComparisons({ skipIfInFlight: true })])')
   })
 
   it('does not render the Back to CPA link in CPAMC embed mode', () => {
