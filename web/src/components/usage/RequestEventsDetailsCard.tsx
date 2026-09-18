@@ -29,6 +29,7 @@ import {
 import type { UsageEvent, UsageEventRequestLogResponse, UsageSourceFilterOption } from '@/lib/types';
 import { useScrollBoundaryContainment } from '@/hooks/useScrollBoundaryContainment';
 import { compareModelNames } from '@/utils/modelSort';
+import { getUsageModelDisplay } from '@/utils/usage/modelDisplay';
 import {
   calculateCacheReadRate,
   formatDurationMs,
@@ -116,6 +117,7 @@ type RequestEventRow = {
   timestampDateLabel: string;
   apiKey: string;
   model: string;
+  responseModel: string;
   modelAlias: string;
   reasoningEffort: string;
   speedMode: string;
@@ -560,10 +562,8 @@ export function RequestEventsDetailsCard({
       const source = String(event.source ?? '').trim() || '-';
       const sourceType = String(event.source_type ?? '').trim();
       const apiKey = String(event.api_key ?? '').trim() || '-';
-      const modelValue = String(event.model ?? '').trim();
-      const model = modelValue || '-';
-      const modelAliasValue = String(event.model_alias ?? '').trim();
-      const modelAlias = modelAliasValue && modelAliasValue !== modelValue ? modelAliasValue : '-';
+      const modelDisplay = getUsageModelDisplay(event.model, event.response_model, event.model_alias);
+      const model = modelDisplay.model;
       const reasoningEffort = String(event.reasoning_effort ?? '').trim() || '-';
       const speedModeRaw = String(event.service_tier ?? '').trim() || '-';
       const responseSpeedModeRaw = String(event.response_service_tier ?? '').trim() || '-';
@@ -603,7 +603,8 @@ export function RequestEventsDetailsCard({
         timestampDateLabel: timestampLabels.date,
         apiKey,
         model,
-        modelAlias,
+        responseModel: modelDisplay.responseModel,
+        modelAlias: modelDisplay.modelAlias,
         reasoningEffort,
         speedMode,
         speedModeRaw,
@@ -855,7 +856,12 @@ export function RequestEventsDetailsCard({
         renderCell: (row) => (
           <td className={`${styles.modelCell} ${styles.requestEventsStackedCell}`}>
             <span className={styles.requestEventsStackedPrimary} title={row.model}>{row.model}</span>
-            <span className={styles.requestEventsStackedSecondary} title={row.modelAlias}>{row.modelAlias}</span>
+            {row.responseModel ? (
+              <span className={styles.requestEventsStackedResponse} title={`${t('usage_stats.upstream_response_model')}: ${row.responseModel}`}>
+                <span aria-hidden="true">↳ </span>{t('usage_stats.upstream_response_model')}: {row.responseModel}
+              </span>
+            ) : null}
+            {row.modelAlias ? <span className={styles.requestEventsStackedSecondary} title={row.modelAlias}>{row.modelAlias}</span> : null}
           </td>
         ),
       },
