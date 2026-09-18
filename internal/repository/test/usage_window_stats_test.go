@@ -1,15 +1,14 @@
-package repository
+package test
 
 import (
 	"context"
+	. "cpa-usage-keeper/internal/repository"
 	"math"
 	"testing"
 	"time"
 
 	"cpa-usage-keeper/internal/entities"
-	"cpa-usage-keeper/internal/pricing"
 	"cpa-usage-keeper/internal/repository/dto"
-	"gorm.io/gorm"
 )
 
 func TestSumUsageWindowStatsByAuthIndexUsesAuthIndexAndWindow(t *testing.T) {
@@ -29,7 +28,7 @@ func TestSumUsageWindowStatsByAuthIndexUsesAuthIndexAndWindow(t *testing.T) {
 		t.Fatalf("seed usage events: %v", err)
 	}
 
-	stats, err := SumUsageWindowStatsByAuthIndex(context.Background(), db, "auth-1", start, &end, pricingResolverFromDBForTest(t, db))
+	stats, err := SumUsageWindowStatsByAuthIndex(context.Background(), db, "auth-1", start, &end, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("SumUsageWindowStatsByAuthIndex returned error: %v", err)
 	}
@@ -70,7 +69,7 @@ func TestSumUsageWindowStatsByAuthIndexCalculatesClaudeCacheReadAndCreationCost(
 		t.Fatalf("seed usage event: %v", err)
 	}
 
-	stats, err := SumUsageWindowStatsByAuthIndex(context.Background(), db, "auth-claude", start, &end, pricingResolverFromDBForTest(t, db))
+	stats, err := SumUsageWindowStatsByAuthIndex(context.Background(), db, "auth-claude", start, &end, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("SumUsageWindowStatsByAuthIndex returned error: %v", err)
 	}
@@ -108,7 +107,7 @@ func TestSumUsageWindowStatsByAuthIndexUsesHourlyStatsForLongWindow(t *testing.T
 		t.Fatalf("delete full-hour raw events: %v", err)
 	}
 
-	stats, err := SumUsageWindowStatsByAuthIndex(context.Background(), db, "auth-1", start, &end, pricingResolverFromDBForTest(t, db))
+	stats, err := SumUsageWindowStatsByAuthIndex(context.Background(), db, "auth-1", start, &end, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("SumUsageWindowStatsByAuthIndex returned error: %v", err)
 	}
@@ -180,17 +179,4 @@ func TestSumUsageWindowStatsByAuthIndexTreatsMissingPriceAsZeroCost(t *testing.T
 	if stats.Tokens != 1_000_000 || stats.Cost != 0 {
 		t.Fatalf("expected tokens with zero missing-price cost, got %+v", stats)
 	}
-}
-
-func pricingResolverFromDBForTest(t *testing.T, db *gorm.DB) pricing.Resolver {
-	t.Helper()
-	snapshot, err := LoadPricingSnapshot(context.Background(), db)
-	if err != nil {
-		t.Fatalf("LoadPricingSnapshot returned error: %v", err)
-	}
-	return pricing.NewCatalog(snapshot).NewResolver()
-}
-
-func emptyPricingResolverForTest() pricing.Resolver {
-	return pricing.NewCatalog(pricing.EmptySnapshot()).NewResolver()
 }

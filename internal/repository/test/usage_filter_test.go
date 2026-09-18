@@ -1,7 +1,8 @@
-package repository
+package test
 
 import (
 	"context"
+	. "cpa-usage-keeper/internal/repository"
 	"math"
 	"reflect"
 	"strings"
@@ -59,14 +60,10 @@ func loadUsageOverviewOracleForTest(t *testing.T, db *gorm.DB, filter dto.UsageQ
 	for _, setting := range settings {
 		pricingByModel[strings.TrimSpace(setting.Model)] = setting
 	}
-	query := applyUsageOverviewQuery(db.Model(&entities.UsageEvent{}), filter).Select(usageEventProjectionColumns).Order("timestamp asc")
-	var rows []usageEventProjection
-	if err := query.Find(&rows).Error; err != nil {
+	query := applyUsageOverviewQuery(db.Model(&entities.UsageEvent{}), filter).Order("timestamp asc")
+	var events []entities.UsageEvent
+	if err := query.Find(&events).Error; err != nil {
 		t.Fatalf("load oracle events: %v", err)
-	}
-	events := make([]entities.UsageEvent, 0, len(rows))
-	for _, row := range rows {
-		events = append(events, usageEventProjectionToEntity(row))
 	}
 	return buildUsageOverviewFromEventsForTest(events, filter, pricingByModel)
 }
@@ -115,23 +112,19 @@ func TestLoadUsageOverviewRawEventWindowsUsesSeparateRangeQueries(t *testing.T) 
 
 	start := time.Date(2026, 4, 16, 9, 20, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 16, 12, 40, 0, 0, time.UTC)
-	fullStart := time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC)
-	fullEnd := time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)
 	filter := dto.UsageQueryFilter{Range: "custom", StartTime: &start, EndTime: &end}
 	var sqls []string
 	callbackName := "test:capture_boundary_sql"
 	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		sqls = append(sqls, tx.Statement.SQL.String())
+		if tx.Statement.Table == "usage_events" {
+			sqls = append(sqls, tx.Statement.SQL.String())
+		}
 	}); err != nil {
 		t.Fatalf("register query callback returned error: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Callback().Query().Remove(callbackName) })
-	windows := []usageOverviewRawEventWindow{
-		{start: start, end: fullStart},
-		{start: fullEnd, end: end, includeEnd: true},
-	}
-	if _, err := loadUsageOverviewRawEventWindowsWithFilter(db, filter, windows, nil, 0); err != nil {
-		t.Fatalf("loadUsageOverviewRawEventWindowsWithFilter returned error: %v", err)
+	if _, err := BuildUsageOverviewWithFilter(db, filter, emptyPricingResolverForTest()); err != nil {
+		t.Fatalf("build overview boundary queries: %v", err)
 	}
 	if len(sqls) != 2 {
 		t.Fatalf("expected two boundary range queries, got %d: %+v", len(sqls), sqls)
@@ -156,7 +149,7 @@ func TestBuildUsageOverviewWithFilterIncludesEndBoundaryWhenNoFullHour(t *testin
 		t.Fatalf("InsertUsageEvents returned error: %v", err)
 	}
 
-	overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: "custom", StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: "custom", StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 	}
@@ -288,7 +281,7 @@ func TestBuildUsageOverviewWithFilterUsesStatsForFullHoursAndRawEventsForBoundar
 		t.Fatalf("delete full-hour usage_events returned error: %v", err)
 	}
 
-	overview, err := BuildUsageOverviewWithFilter(db, filter, pricingResolverFromDBForTest(t, db))
+	overview, err := BuildUsageOverviewWithFilter(db, filter, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 	}
@@ -325,7 +318,7 @@ func TestBuildUsageOverviewWithFilterKeepsHourlyBucketsWhenShortWindowContainsCo
 	filter := dto.UsageQueryFilter{Range: "custom", StartTime: &start, EndTime: &end}
 	oracle := loadUsageOverviewOracleForTest(t, db, filter)
 
-	overview, err := BuildUsageOverviewWithFilter(db, filter, pricingResolverFromDBForTest(t, db))
+	overview, err := BuildUsageOverviewWithFilter(db, filter, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 	}
@@ -375,7 +368,7 @@ func TestBuildUsageOverviewWithFilterUsesDailyStatsForCompleteDays(t *testing.T)
 	if err := db.Where("timestamp >= ? AND timestamp < ?", timeutil.FormatStorageTime(fullDayStart), timeutil.FormatStorageTime(fullDayEnd)).Delete(&entities.UsageEvent{}).Error; err != nil {
 		t.Fatalf("delete full-day usage_events returned error: %v", err)
 	}
-	overview, err := BuildUsageOverviewWithFilter(db, filter, pricingResolverFromDBForTest(t, db))
+	overview, err := BuildUsageOverviewWithFilter(db, filter, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 	}
@@ -431,7 +424,7 @@ func TestBuildUsageOverviewWithFilterComputesSummaryAndSeries(t *testing.T) {
 
 	start := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 17, 23, 59, 59, 999000000, time.UTC)
-	overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: "7d", StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: "7d", StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 	}
@@ -685,7 +678,7 @@ func TestBuildUsageOverviewWithFilterCostAvailabilityForUnpricedModels(t *testin
 
 			start := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
 			end := time.Date(2026, 4, 16, 23, 59, 59, 999000000, time.UTC)
-			overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: "24h", StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+			overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: "24h", StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 			if err != nil {
 				t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 			}
@@ -717,7 +710,7 @@ func TestBuildUsageOverviewWithFilterReturnsUnavailableCostWithoutPricing(t *tes
 
 	start := time.Date(2026, 4, 16, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 16, 23, 59, 59, 999000000, time.UTC)
-	overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: "24h", StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: "24h", StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 	}
@@ -779,7 +772,7 @@ func TestBuildUsageOverviewWithFilterUsesExactPresetWindowMinutes(t *testing.T) 
 				t.Fatalf("AggregateUsageOverviewStats returned error: %v", err)
 			}
 
-			overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: tc.rangeName, StartTime: &tc.start, EndTime: &tc.end}, pricingResolverFromDBForTest(t, db))
+			overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: tc.rangeName, StartTime: &tc.start, EndTime: &tc.end}, newUsageCostResolverForTest(t, db))
 			if err != nil {
 				t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 			}
@@ -885,7 +878,7 @@ func TestBuildUsageOverviewWithFilterUsesDailyBucketsForLongCustomRanges(t *test
 
 	start := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 26, 23, 59, 59, 999000000, time.UTC)
-	overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: "custom", StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	overview, err := BuildUsageOverviewWithFilter(db, dto.UsageQueryFilter{Range: "custom", StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildUsageOverviewWithFilter returned error: %v", err)
 	}
@@ -912,7 +905,7 @@ func TestBuildUsageOverviewRealtimeWithFilterBuildsRealtimeBlockFromRecentCache(
 	ttftZero := int64(0)
 	cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return now }})
 	t.Cleanup(cache.Close)
-	cache.appendEvents([]entities.UsageEvent{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{
 		{APIGroupKey: "provider-a", Model: "gpt-5", AuthType: "oauth", AuthIndex: "auth-file-1", Timestamp: now.Add(-16 * time.Minute), InputTokens: 900, TotalTokens: 900},
 		{APIGroupKey: "provider-a", Model: "gpt-5", AuthType: "oauth", AuthIndex: "auth-file-1", Timestamp: now.Add(-4*time.Minute - 50*time.Second), InputTokens: 100, OutputTokens: 60, CachedTokens: 20, CacheReadTokens: 20, TotalTokens: 120, LatencyMS: 500, TTFTMS: &ttft100},
 		{APIGroupKey: "provider-a", Model: "gpt-5", AuthType: "oauth", AuthIndex: "auth-file-1", Timestamp: now.Add(-4*time.Minute - 45*time.Second), InputTokens: 50, OutputTokens: 40, CachedTokens: 5, CacheReadTokens: 5, TotalTokens: 80, LatencyMS: 700, TTFTMS: &ttft200},
@@ -1070,7 +1063,7 @@ func TestBuildUsageOverviewRealtimeWithFilterCapsResponseDistributionParticles(t
 	}
 	cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return now }})
 	t.Cleanup(cache.Close)
-	cache.appendEvents(events)
+	appendRecentCacheEvents(cache, events)
 	if err := db.Migrator().DropTable(&entities.UsageEvent{}); err != nil {
 		t.Fatalf("drop usage_events returned error: %v", err)
 	}
@@ -1121,7 +1114,7 @@ func TestBuildUsageOverviewRealtimeWithFilterUsesWarmupEventsForSlidingBucketsOn
 	windowStart := now.Add(-15 * time.Minute)
 	cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return now }})
 	t.Cleanup(cache.Close)
-	cache.appendEvents([]entities.UsageEvent{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{
 		{EventKey: "warmup", APIGroupKey: "provider-a", Model: "warmup-model", Timestamp: windowStart.Add(-30 * time.Second), InputTokens: 600, TotalTokens: 600},
 		{EventKey: "visible", APIGroupKey: "provider-a", Model: "visible-model", Timestamp: windowStart.Add(10 * time.Second), InputTokens: 60, TotalTokens: 60},
 	})
@@ -1157,7 +1150,7 @@ func TestBuildUsageOverviewRealtimeWithFilterUsesRecentCacheFallbackLabels(t *te
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return now }})
 	t.Cleanup(cache.Close)
-	cache.appendEvents([]entities.UsageEvent{{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{{
 		APIGroupKey: "provider-a",
 		Model:       "gpt-5",
 		AuthType:    "oauth",
@@ -1248,7 +1241,7 @@ func TestBuildUsageOverviewWithFilterUsesRecentCacheForCoveredBoundaryEvents(t *
 	end := time.Date(2026, 6, 10, 12, 20, 0, 0, time.UTC)
 	cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return now }})
 	t.Cleanup(cache.Close)
-	cache.appendEvents([]entities.UsageEvent{{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{{
 		APIGroupKey:         "provider-a",
 		Model:               "gpt-5",
 		AuthType:            "oauth",
@@ -1306,7 +1299,7 @@ func TestBuildUsageOverviewWithFilterUsesOpenEndedRecentCacheForCurrentRightBoun
 	end := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return now }})
 	t.Cleanup(cache.Close)
-	cache.appendEvents([]entities.UsageEvent{{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{{
 		APIGroupKey: "provider-a",
 		Model:       "gpt-5",
 		AuthType:    "oauth",
@@ -1342,7 +1335,7 @@ func TestBuildUsageOverviewWithFilterUsesBoundedRecentCacheForHistoricalCustomRi
 	end := time.Date(2026, 6, 10, 12, 20, 0, 0, time.UTC)
 	cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return now }})
 	t.Cleanup(cache.Close)
-	cache.appendEvents([]entities.UsageEvent{{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{{
 		APIGroupKey: "provider-a",
 		Model:       "gpt-5",
 		AuthType:    "oauth",
@@ -1391,7 +1384,7 @@ func TestBuildUsageOverviewWithFilterClampsFutureCustomEndToQueryNow(t *testing.
 	end := time.Date(2026, 6, 10, 23, 59, 59, 0, time.UTC)
 	cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return queryNow }})
 	t.Cleanup(cache.Close)
-	cache.appendEvents([]entities.UsageEvent{{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{{
 		APIGroupKey: "provider-a",
 		Model:       "gpt-5",
 		AuthType:    "oauth",

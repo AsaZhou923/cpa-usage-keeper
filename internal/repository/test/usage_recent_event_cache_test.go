@@ -1,6 +1,7 @@
-package repository
+package test
 
 import (
+	. "cpa-usage-keeper/internal/repository"
 	"sync"
 	"testing"
 	"time"
@@ -128,7 +129,7 @@ func TestUsageRecentEventCacheFiltersByWindowAndAPIGroupKey(t *testing.T) {
 	cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return now }})
 	t.Cleanup(cache.Close)
 
-	cache.appendEvents([]entities.UsageEvent{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{
 		{APIGroupKey: "provider-a", AuthType: "oauth", Source: "a@example.com", AuthIndex: "auth-a", Model: "gpt-5", Timestamp: now.Add(-10 * time.Minute), TotalTokens: 10},
 		{APIGroupKey: "provider-b", AuthType: "apikey", Provider: "Provider B", AuthIndex: "provider-b", Model: "gpt-5", Timestamp: now.Add(-5 * time.Minute), TotalTokens: 20},
 	})
@@ -168,7 +169,7 @@ func TestUsageRecentEventCacheBuildsCredentialHealthFromStartupAndAppend(t *test
 	}
 	t.Cleanup(cache.Close)
 
-	cache.appendEvents([]entities.UsageEvent{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{
 		{EventKey: "auth-latest", AuthType: "oauth", AuthIndex: "shared-auth", Timestamp: now.Add(-3 * time.Minute), Failed: false},
 	})
 
@@ -287,7 +288,7 @@ func TestUsageRecentEventCacheAccumulatesCredentialHealthCacheTokens(t *testing.
 	t.Cleanup(cache.Close)
 
 	// 增量追加路径必须与启动加载累计到同一份合计，并把负数 token 截断为 0。
-	cache.appendEvents([]entities.UsageEvent{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{
 		{EventKey: "appended", AuthType: "apikey", AuthIndex: "provider-1", Timestamp: now.Add(-3 * time.Minute), InputTokens: 2000, CacheReadTokens: 900},
 		{EventKey: "negative", AuthType: "apikey", AuthIndex: "provider-1", Timestamp: now.Add(-3 * time.Minute), InputTokens: -50, CacheReadTokens: -50},
 	})
@@ -339,14 +340,8 @@ func TestCredentialHealthStartupLoadStreamsRowsInBatches(t *testing.T) {
 	}
 
 	var batchSizes []int
-	var failures int
-	err := loadCredentialHealthCacheRowsBatched(db, now.Add(-credentialHealthWindow), 10, func(rows []credentialHealthLoadRow) error {
+	err := loadCredentialHealthCacheRowsBatched(db, now.Add(-5*time.Hour), 10, func(rows opaqueCredentialHealthRows) error {
 		batchSizes = append(batchSizes, len(rows))
-		for _, row := range rows {
-			if row.Failed {
-				failures++
-			}
-		}
 		return nil
 	})
 	if err != nil {
@@ -363,6 +358,16 @@ func TestCredentialHealthStartupLoadStreamsRowsInBatches(t *testing.T) {
 	if len(batchSizes) != 3 || totalRows != 25 {
 		t.Fatalf("expected all 25 rows in three batches, got %v", batchSizes)
 	}
+	cache, err := NewUsageRecentEventCache(db, UsageRecentEventCacheOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("load credential health cache: %v", err)
+	}
+	t.Cleanup(cache.Close)
+	health, ok := cache.CredentialHealth("oauth", "streamed-auth", now)
+	if !ok {
+		t.Fatal("expected loaded credential health")
+	}
+	failures := health.TotalFailure
 	if failures != 9 {
 		t.Fatalf("expected 9 failed rows, got %d", failures)
 	}
@@ -385,21 +390,17 @@ func TestUsageRecentEventCachePrunesInactiveCredentialHealthKeys(t *testing.T) {
 	}
 	t.Cleanup(cache.Close)
 
-	staleKey, ok := newCredentialHealthKey("oauth", "stale-auth")
-	if !ok {
-		t.Fatal("expected stale credential key to be valid")
-	}
-	if _, ok := cache.credentialHealth.bucketsByCredential[staleKey]; !ok {
-		t.Fatalf("expected stale credential to be present before prune, got %+v", cache.credentialHealth.bucketsByCredential)
+	if !hasCachedCredentialHealthKey(cache, "oauth", "stale-auth") {
+		t.Fatal("expected stale credential before prune")
 	}
 
 	currentNow = baseNow.Add(5*time.Hour + 20*time.Minute)
-	cache.appendEvents([]entities.UsageEvent{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{
 		{EventKey: "fresh-auth", AuthType: "oauth", AuthIndex: "fresh-auth", Timestamp: currentNow.Add(-time.Minute), Failed: false},
 	})
 
-	if _, ok := cache.credentialHealth.bucketsByCredential[staleKey]; ok {
-		t.Fatalf("expected inactive stale credential to be pruned after full prune, got %+v", cache.credentialHealth.bucketsByCredential)
+	if hasCachedCredentialHealthKey(cache, "oauth", "stale-auth") {
+		t.Fatal("expected inactive stale credential to be pruned after full prune")
 	}
 }
 
@@ -415,17 +416,17 @@ func TestUsageRecentEventCacheTryAppendDoesNotBlockWhenQueueIsFull(t *testing.T)
 			now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 			cache := newEmptyUsageRecentEventCache(UsageRecentEventCacheOptions{Now: func() time.Time { return now }, QueueSize: test.size})
 			t.Cleanup(cache.Close)
-			if cap(cache.appendSlots) != test.capacity || cap(cache.appendCh) != test.capacity {
-				t.Fatalf("expected capacity %d, got slots=%d queue=%d", test.capacity, cap(cache.appendSlots), cap(cache.appendCh))
+			if cap(*recentCacheField[chan struct{}](cache, "appendSlots")) != test.capacity || cap(*recentCacheField[chan []entities.UsageEvent](cache, "appendCh")) != test.capacity {
+				t.Fatalf("expected capacity %d, got slots=%d queue=%d", test.capacity, cap(*recentCacheField[chan struct{}](cache, "appendSlots")), cap(*recentCacheField[chan []entities.UsageEvent](cache, "appendCh")))
 			}
 			for range test.capacity {
-				<-cache.appendSlots
+				<-*recentCacheField[chan struct{}](cache, "appendSlots")
 			}
 			if cache.TryAppend([]entities.UsageEvent{{APIGroupKey: "provider-b", AuthType: "oauth", Source: "b@example.com", Timestamp: now}}) {
 				t.Fatal("expected append to report queue overflow when no slot is available")
 			}
-			if len(cache.appendCh) != 0 {
-				t.Fatalf("overflow append enqueued events: %d", len(cache.appendCh))
+			if len(*recentCacheField[chan []entities.UsageEvent](cache, "appendCh")) != 0 {
+				t.Fatalf("overflow append enqueued events: %d", len(*recentCacheField[chan []entities.UsageEvent](cache, "appendCh")))
 			}
 			if _, ok := cache.Events(now.Add(-time.Minute), now.Add(time.Minute), false, ""); !ok {
 				t.Fatal("expected queue overflow not to invalidate the cache window")
@@ -444,18 +445,19 @@ func TestUsageRecentEventCachePruneClearsRemovedBackingSlots(t *testing.T) {
 
 	activeTTFT := int64(120)
 	expiredTTFT := int64(900)
-	cache.appendEvents([]entities.UsageEvent{
+	appendRecentCacheEvents(cache, []entities.UsageEvent{
 		{APIGroupKey: "active-key-a", AuthType: "oauth", Source: "active-a@example.com", AuthIndex: "active-a", Model: "gpt-5", Timestamp: now.Add(-2 * time.Minute), TTFTMS: &activeTTFT},
 		{APIGroupKey: "active-key-b", AuthType: "apikey", Provider: "Active Provider", AuthIndex: "active-b", Model: "claude-sonnet", Timestamp: now.Add(-1 * time.Minute)},
 		{APIGroupKey: "expired-key", AuthType: "oauth", Source: "expired@example.com", AuthIndex: "expired-auth", Model: "expired-model", Timestamp: now.Add(-20 * time.Minute), TTFTMS: &expiredTTFT},
 	})
 
-	if len(cache.events) != 2 {
-		t.Fatalf("expected 2 active events after pruning, got %d: %+v", len(cache.events), cache.events)
+	events := *recentCacheField[[]RecentUsageEvent](cache, "events")
+	if len(events) != 2 {
+		t.Fatalf("expected 2 active events after pruning, got %d: %+v", len(events), events)
 	}
-	for index, event := range cache.events[len(cache.events):cap(cache.events)] {
+	for index, event := range events[len(events):cap(events)] {
 		if event != (RecentUsageEvent{}) {
-			t.Fatalf("expected pruned backing slot %d to be cleared, got %+v", len(cache.events)+index, event)
+			t.Fatalf("expected pruned backing slot %d to be cleared, got %+v", len(events)+index, event)
 		}
 	}
 }

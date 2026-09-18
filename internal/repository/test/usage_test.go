@@ -1,7 +1,8 @@
-package repository
+package test
 
 import (
 	"context"
+	. "cpa-usage-keeper/internal/repository"
 	"math"
 	"testing"
 	"time"
@@ -161,7 +162,7 @@ func TestBuildAnalysisWithFilterCalculatesCostInsightsFromOverviewStats(t *testi
 	start := bucket
 	end := bucket.Add(2 * time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -234,7 +235,7 @@ func TestBuildAnalysisWithFilterMarksCostUnavailableForUnpricedStats(t *testing.
 	start := bucket
 	end := bucket.Add(time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -267,7 +268,7 @@ func TestBuildAnalysisWithFilterExcludesMissingAndDeletedCPAAPIKeys(t *testing.T
 	start := bucket
 	end := bucket.Add(time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -321,7 +322,7 @@ func TestBuildAnalysisWithFilterBuildsIdentityCompositionsFromActiveUsageIdentit
 	start := bucket
 	end := bucket.Add(time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -364,7 +365,7 @@ func TestBuildAnalysisWithFilterKeepsHeatmapPairsSeparateWhenValuesContainDelimi
 	start := bucket
 	end := bucket.Add(time.Hour)
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -397,7 +398,7 @@ func TestBuildAnalysisWithFilterIncludesCurrentHourStatsInRollingHourlyRanges(t 
 		t.Fatalf("drop usage_events: %v", err)
 	}
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: "5h", StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: "5h", StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -442,7 +443,7 @@ func TestBuildAnalysisWithFilterFillsTodayAndYesterdayHourlyBucketsFromStats(t *
 		t.Fatalf("drop usage_events: %v", err)
 	}
 
-	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: "yesterday", StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+	analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: "yesterday", StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 	if err != nil {
 		t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 	}
@@ -527,7 +528,7 @@ func TestBuildAnalysisWithFilterUsesCurrentDailyRollupInDailyRanges(t *testing.T
 
 	for _, rangeValue := range []string{"7d", "30d"} {
 		t.Run(rangeValue, func(t *testing.T) {
-			analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: rangeValue, StartTime: &start, EndTime: &end}, pricingResolverFromDBForTest(t, db))
+			analysis, err := BuildAnalysisWithFilter(db, repodto.UsageQueryFilter{Range: rangeValue, StartTime: &start, EndTime: &end}, newUsageCostResolverForTest(t, db))
 			if err != nil {
 				t.Fatalf("BuildAnalysisWithFilter returned error: %v", err)
 			}
