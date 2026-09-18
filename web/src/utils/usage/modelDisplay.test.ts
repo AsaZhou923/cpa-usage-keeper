@@ -18,6 +18,22 @@ describe('getUsageModelDisplay', () => {
     })
   })
 
+  it('uses locale-independent case comparison for model names', () => {
+    const originalLocaleLowerCase = String.prototype.toLocaleLowerCase
+    String.prototype.toLocaleLowerCase = function toLocaleLowerCase() {
+      return originalLocaleLowerCase.call(this, 'tr-TR')
+    }
+    try {
+      expect(getUsageModelDisplay('mini', 'MINI', 'MINI')).toEqual({
+        model: 'mini',
+        responseModel: '',
+        modelAlias: '',
+      })
+    } finally {
+      String.prototype.toLocaleLowerCase = originalLocaleLowerCase
+    }
+  })
+
   it('uses a dash only for a missing requested model', () => {
     expect(getUsageModelDisplay('', 'served-model', 'client-alias')).toEqual({
       model: '-',

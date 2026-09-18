@@ -392,7 +392,7 @@ const buildRow = (
 
   return {
     event,
-    id: String(event.id ?? '').trim() || `${timestamp}-${model}-${index}`,
+    id: String(event.id ?? '').trim() || `${timestamp}-${modelDisplay.model}-${index}`,
     requestId: String(event.request_id ?? '').trim(),
     detailsId: `credential-request-event-details-${index}`,
     timestamp,

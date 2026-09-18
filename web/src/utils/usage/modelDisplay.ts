@@ -1,6 +1,6 @@
 const normalizeModelName = (value: unknown): string => String(value ?? '').trim()
 
-const comparableModelName = (value: string): string => value.toLocaleLowerCase()
+const comparableModelName = (value: string): string => value.toLowerCase()
 
 export interface UsageModelDisplay {
   model: string
