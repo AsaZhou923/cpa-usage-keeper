@@ -1,8 +1,9 @@
-package cpa
+package cpa_test
 
 import (
 	"bufio"
 	"context"
+	. "cpa-usage-keeper/internal/cpa"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "unsafe"
 )
 
 func TestRedisQueueClientPopsBatch(t *testing.T) {
@@ -212,9 +214,9 @@ func startRedisQueueTestServer(t *testing.T, useTLS bool, handler func(*testing.
 	var err error
 	if useTLS {
 		cert := generateSelfSignedCert(t)
-		listener, err = tls.Listen(cpaManagementRedisNetwork, "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+		listener, err = tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
 	} else {
-		listener, err = net.Listen(cpaManagementRedisNetwork, "127.0.0.1:0")
+		listener, err = net.Listen("tcp", "127.0.0.1:0")
 	}
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -301,3 +303,8 @@ func ctxWithTimeout(t *testing.T) context.Context {
 	t.Cleanup(cancel)
 	return ctx
 }
+
+// 地址解析使用原函数，保留显式 Redis TLS 与默认管理端口的对应关系。
+//
+//go:linkname redisQueueAddress cpa-usage-keeper/internal/cpa.redisQueueAddress
+func redisQueueAddress(baseURL, redisQueueAddr string) (string, bool)

@@ -1,17 +1,20 @@
-package cpa
+package cpa_test
 
 import (
 	"context"
+	. "cpa-usage-keeper/internal/cpa"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"cpa-usage-keeper/internal/cpa/dto/apicall"
 )
@@ -31,7 +34,7 @@ func TestBlankJSONResponseBodyCheckDoesNotAllocate(t *testing.T) {
 
 func TestFetchManagementAPIKeysSendsBearerTokenAndParsesKeys(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != cpaManagementAPIKeysEndpoint {
+		if r.URL.Path != "/v0/management/api-keys" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer management-secret" {
@@ -60,7 +63,7 @@ func TestFetchManagementAPIKeysSendsBearerTokenAndParsesKeys(t *testing.T) {
 
 func TestFetchRequestLogByIDDownloadsFileWithBearerToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != cpaManagementRequestLogByIDEndpoint+"/req-log-42" {
+		if r.URL.Path != "/v0/management/request-log-by-id"+"/req-log-42" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer management-secret" {
@@ -101,7 +104,7 @@ func TestFetchRequestLogByIDLimitsPreviewBody(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "management-secret", 2*time.Second, false)
-	result, err := client.fetchRequestLogByID(context.Background(), "req-large", previewLimit)
+	result, err := fetchRequestLogPreview(client, context.Background(), "req-large", previewLimit)
 
 	if err != nil {
 		t.Fatalf("fetchRequestLogByID returned error: %v", err)
@@ -133,7 +136,7 @@ func TestFetchRequestLogByIDSkipsBodyWhenContentLengthExceedsPreviewLimit(t *tes
 	defer server.Close()
 
 	client := NewClient(server.URL, "management-secret", 2*time.Second, false)
-	result, err := client.fetchRequestLogByID(context.Background(), "req-large", previewLimit)
+	result, err := fetchRequestLogPreview(client, context.Background(), "req-large", previewLimit)
 
 	if err != nil {
 		t.Fatalf("fetchRequestLogByID returned error: %v", err)
@@ -187,7 +190,8 @@ func TestOpenRequestLogByIDTimesOutStalledStreamBody(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "management-secret", 2*time.Second, false)
-	client.streamIdleTimeout = 20 * time.Millisecond
+	idleTimeout := reflect.ValueOf(client).Elem().FieldByName("streamIdleTimeout")
+	*(*time.Duration)(unsafe.Pointer(idleTimeout.UnsafeAddr())) = 20 * time.Millisecond
 	stream, err := client.OpenRequestLogByID(context.Background(), "req-stalled")
 	if err != nil {
 		t.Fatalf("OpenRequestLogByID returned error before streaming body: %v", err)
@@ -205,13 +209,12 @@ func TestOpenRequestLogByIDTimesOutStalledStreamBody(t *testing.T) {
 }
 
 func TestIdleTimeoutReadCloserNilReceiver(t *testing.T) {
-	var reader *idleTimeoutReadCloser
 
-	n, err := reader.Read(make([]byte, 1))
+	n, err := readNilIdleTimeoutBody(nil, make([]byte, 1))
 	if n != 0 || !errors.Is(err, io.EOF) {
 		t.Fatalf("expected nil reader to return EOF, got n=%d err=%v", n, err)
 	}
-	if err := reader.Close(); err != nil {
+	if err := closeNilIdleTimeoutBody(nil); err != nil {
 		t.Fatalf("expected nil reader close to be a no-op, got %v", err)
 	}
 }
@@ -261,7 +264,7 @@ func TestFetchManagementAPIKeysRejectsInvalidJSON(t *testing.T) {
 
 func TestFetchAuthFilesParsesSyncMetadataFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != cpaManagementAuthFilesEndpoint {
+		if r.URL.Path != "/v0/management/auth-files" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -292,7 +295,7 @@ func TestFetchAuthFilesParsesSyncMetadataFields(t *testing.T) {
 
 func TestFetchAuthFilesParsesCodexIDTokenFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != cpaManagementAuthFilesEndpoint {
+		if r.URL.Path != "/v0/management/auth-files" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer management-secret" {
@@ -334,7 +337,7 @@ func TestUpdateAuthFileStatusPatchesManagementEndpoint(t *testing.T) {
 		if r.Method != http.MethodPatch {
 			t.Errorf("expected PATCH method, got %s", r.Method)
 		}
-		if r.URL.Path != cpaManagementAuthFilesStatusEndpoint {
+		if r.URL.Path != "/v0/management/auth-files/status" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer management-secret" {
@@ -368,7 +371,7 @@ func TestDeleteAuthFilesSendsNamesToManagementEndpoint(t *testing.T) {
 		if r.Method != http.MethodDelete {
 			t.Errorf("expected DELETE method, got %s", r.Method)
 		}
-		if r.URL.Path != cpaManagementAuthFilesEndpoint {
+		if r.URL.Path != "/v0/management/auth-files" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer management-secret" {
@@ -402,7 +405,7 @@ func TestCallManagementAPIPostsWrappedRequest(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST method, got %s", r.Method)
 		}
-		if r.URL.Path != cpaManagementAPICallEndpoint {
+		if r.URL.Path != "/v0/management/api-call" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer management-secret" {
@@ -458,7 +461,7 @@ func TestCallManagementAPIPostsWrappedRequest(t *testing.T) {
 
 func TestCallManagementAPIParsesSnakeCaseResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != cpaManagementAPICallEndpoint {
+		if r.URL.Path != "/v0/management/api-call" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -478,7 +481,7 @@ func TestCallManagementAPIParsesSnakeCaseResponse(t *testing.T) {
 
 func TestFetchUsageQueueUsesManagementEndpointAndParsesMessages(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != cpaManagementUsageQueueEndpoint {
+		if r.URL.Path != "/v0/management/usage-queue" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if got := r.URL.Query().Get("count"); got != "2" {
@@ -515,13 +518,13 @@ func TestFetchUsageQueueRejectsNonPositiveCount(t *testing.T) {
 func TestFetchModelsUsesExternalAPIKeyAndParsesOpenAICompatibleResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case cpaManagementAPIKeysEndpoint:
+		case "/v0/management/api-keys":
 			if got := r.Header.Get("Authorization"); got != "Bearer management-secret" {
 				t.Errorf("expected management Authorization header, got %q", got)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"api-keys":["", "   ", "normal-api-key"]}`))
-		case cpaModelsEndpoint:
+		case "/v1/models":
 			if got := r.Header.Get("Authorization"); got != "Bearer normal-api-key" {
 				t.Errorf("expected normal API Authorization header, got %q", got)
 			}
@@ -549,9 +552,9 @@ func TestFetchModelsUsesExternalAPIKeyAndParsesOpenAICompatibleResponse(t *testi
 func TestFetchModelsDoesNotUseProviderEndpointsWhenCPAManagementAPIKeysAreMissing(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case cpaManagementAPIKeysEndpoint:
+		case "/v0/management/api-keys":
 			_, _ = w.Write([]byte(`{"api-keys":[]}`))
-		case cpaManagementClaudeAPIKeyEndpoint, cpaManagementCodexAPIKeyEndpoint, cpaManagementOpenAICompatibilityEndpoint, cpaModelsEndpoint:
+		case "/v0/management/claude-api-key", "/v0/management/codex-api-key", "/v0/management/openai-compatibility", "/v1/models":
 			t.Errorf("FetchModels should not request %s when CPA management API keys are missing", r.URL.Path)
 		default:
 			t.Errorf("unexpected path %q", r.URL.Path)
@@ -578,9 +581,9 @@ func TestFetchModelsRejectsInvalidResponses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case cpaManagementAPIKeysEndpoint:
+				case "/v0/management/api-keys":
 					_, _ = w.Write([]byte(`{"api-keys":["normal-api-key"]}`))
-				case cpaModelsEndpoint:
+				case "/v1/models":
 					w.WriteHeader(tc.status)
 					_, _ = w.Write([]byte(tc.body))
 				default:
@@ -624,3 +627,19 @@ func TestNewClientTLSSkipVerify(t *testing.T) {
 		}
 	})
 }
+
+// 保留零分配与小预览上限测试，无需增加大响应夹具或生产导出接口。
+//
+//go:linkname isBlankJSONResponseBody cpa-usage-keeper/internal/cpa.isBlankJSONResponseBody
+func isBlankJSONResponseBody(body []byte) bool
+
+//go:linkname fetchRequestLogPreview cpa-usage-keeper/internal/cpa.(*Client).fetchRequestLogByID
+func fetchRequestLogPreview(client *Client, ctx context.Context, requestID string, maxBodyBytes int64) (*RequestLogResult, error)
+
+// 两个入口仅传 nil 接收者，保留原用例且无需复制私有 reader 布局。
+//
+//go:linkname readNilIdleTimeoutBody cpa-usage-keeper/internal/cpa.(*idleTimeoutReadCloser).Read
+func readNilIdleTimeoutBody(reader unsafe.Pointer, buffer []byte) (int, error)
+
+//go:linkname closeNilIdleTimeoutBody cpa-usage-keeper/internal/cpa.(*idleTimeoutReadCloser).Close
+func closeNilIdleTimeoutBody(reader unsafe.Pointer) error
