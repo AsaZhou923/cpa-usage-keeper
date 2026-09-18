@@ -1,9 +1,13 @@
-package api
+package test
 
 import (
+	_ "cpa-usage-keeper/internal/api"
+	servicedto "cpa-usage-keeper/internal/service/dto"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+	_ "unsafe"
 )
 
 func TestParseUsageFilterQueryPresetRange(t *testing.T) {
@@ -282,3 +286,14 @@ func TestParseUsageFilterQueryRejectsInvalidEventsPagination(t *testing.T) {
 		}
 	}
 }
+
+// 保留固定时间锚点的解析契约；链接仅用于测试，不增加生产导出接口。
+
+//go:linkname parseUsageFilterQuery cpa-usage-keeper/internal/api.parseUsageFilterQuery
+func parseUsageFilterQuery(req *http.Request, anchor time.Time) (servicedto.UsageFilter, error)
+
+//go:linkname parseUsageRealtimeFilterQuery cpa-usage-keeper/internal/api.parseUsageRealtimeFilterQuery
+func parseUsageRealtimeFilterQuery(req *http.Request, anchor time.Time) (servicedto.UsageFilter, error)
+
+//go:linkname parseUsageTimeFilterQuery cpa-usage-keeper/internal/api.parseUsageTimeFilterQuery
+func parseUsageTimeFilterQuery(req *http.Request, anchor time.Time) (servicedto.UsageFilter, error)
