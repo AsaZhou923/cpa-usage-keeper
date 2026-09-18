@@ -1,13 +1,15 @@
-package repository
+package test
 
 import (
 	"context"
+	. "cpa-usage-keeper/internal/repository"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+	_ "unsafe"
 
 	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/repository/dto"
@@ -1160,3 +1162,8 @@ func boolPtr(value bool) *bool {
 func strPtr(value string) *string {
 	return &value
 }
+
+// 保留 DryRun SQL 的跨数据库排序契约，避免为了迁移改成真实数据库专属排序检查。
+//
+//go:linkname applyUsageIdentityPageSort cpa-usage-keeper/internal/repository.applyUsageIdentityPageSort
+func applyUsageIdentityPageSort(query *gorm.DB, sort string, authType *entities.UsageIdentityAuthType) *gorm.DB
