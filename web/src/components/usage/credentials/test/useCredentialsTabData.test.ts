@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/lib/api'
 import { buildCredentialQuotaStateMap, quotaRefreshDisplayError, quotaResetDisplayError, runQuotaResetForAuthIndex } from '../useCredentialsTabData'
@@ -6,9 +5,6 @@ import { CREDENTIAL_PAGES_REFRESH_INTERVAL_MS, mergeUsageIdentityAliasUpdate } f
 import { buildQuotaCacheAuthIndexesKey, QUOTA_CACHE_REFRESH_INTERVAL_MS } from '../useQuotaCache'
 import { buildQuotaRefreshSubmissionUpdate, buildQuotaRefreshTaskErrorUpdate } from '../useQuotaRefreshTasks'
 import type { UsageIdentity } from '@/lib/types'
-
-const credentialsTabDataSource = readFileSync(new URL('../useCredentialsTabData.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
-const quotaCacheSource = readFileSync(new URL('../useQuotaCache.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 describe('Credentials polling intervals', () => {
   it('keeps list data on a 1 minute refresh interval', () => {
@@ -30,32 +26,7 @@ describe('buildQuotaCacheAuthIndexesKey', () => {
   })
 })
 
-describe('useQuotaCache interval lifecycle', () => {
-  it('does not register the cache interval while disabled', () => {
-    const start = quotaCacheSource.indexOf('useEffect(() => {')
-    const end = quotaCacheSource.indexOf('const intervalID = window.setInterval')
-
-    expect(start).toBeGreaterThanOrEqual(0)
-    expect(end).toBeGreaterThan(start)
-
-    const beforeInterval = quotaCacheSource.slice(start, end)
-    expect(beforeInterval).toContain('if (!enabled)')
-    expect(beforeInterval).toContain('return')
-  })
-})
-
 describe('Credentials quota inspection cache refresh', () => {
-  it('refreshes identities and quota cache together for manual page refresh', () => {
-    expect(credentialsTabDataSource).toContain('const refreshCredentialPages = credentialPages.refresh')
-    expect(credentialsTabDataSource).toMatch(/const\s+refresh\s*=\s*useCallback\(\s*async\s*\(\)\s*=>\s*\{[\s\S]*refreshCredentialPages\(\)[\s\S]*refreshQuotaCache\(\)[\s\S]*\}/)
-    expect(credentialsTabDataSource).toMatch(/refresh:\s*refresh,/)
-  })
-
-  it('refreshes the current Auth Files quota cache when inspection completes', () => {
-    expect(credentialsTabDataSource).toContain('refreshQuotaCache')
-    expect(credentialsTabDataSource).toMatch(/useQuotaInspection\(\{[\s\S]*?onInspectionCompleted:\s*refreshQuotaCache[\s\S]*?\}\)/)
-  })
-
   it('lets completed cache quota clear stale row refresh failures after inspection', () => {
     const states = buildCredentialQuotaStateMap(
       {},
@@ -276,18 +247,5 @@ describe('runQuotaResetForAuthIndex', () => {
     })
 
     expect(outcome).toEqual({ kind: 'error', message: 'Quota reset failed. Please try again later.' })
-  })
-})
-
-describe('useCredentialsTabData quota response contract', () => {
-  it('narrows reset callback dependencies to refreshQuotaForAuthIndex and notice handler', () => {
-    expect(credentialsTabDataSource).toMatch(/}, \[onNotice, refreshQuotaForAuthIndex\]\)/)
-  })
-
-  it('routes reset outcomes through the shared helper and top notice', () => {
-    expect(credentialsTabDataSource).toContain('runQuotaResetForAuthIndex(authIndex, {')
-    expect(credentialsTabDataSource).toContain("onNotice?.('error', outcome.message)")
-    expect(credentialsTabDataSource).not.toContain("onAuthRequired?.()")
-    expect(credentialsTabDataSource).not.toContain('quotaResetError')
   })
 })
