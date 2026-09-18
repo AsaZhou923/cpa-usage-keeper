@@ -230,6 +230,39 @@ func TestUsageOverviewRealtimeUsesCPAAPIKeyAliasLabels(t *testing.T) {
 	}
 }
 
+func TestUsageOverviewRealtimeKeepsLegacyAPIKeyIdentifiersDistinct(t *testing.T) {
+	rawKeys := []string{"sk-same-prefix-middle-one-123456", "sk-same-prefix-middle-two-123456"}
+	provider := &usageFilterStub{realtime: &servicedto.UsageOverviewRealtime{
+		CurrentUsage: servicedto.RealtimeCurrentUsage{APIKeys: []servicedto.RealtimeUsageTopItem{
+			{Key: rawKeys[0], Tokens: 2},
+			{Key: rawKeys[1], Tokens: 1},
+		}},
+	}}
+	router := NewRouter(nil, nil, provider, nil, AuthConfig{}, nil, "")
+	resp := serveAPIGet(router, "/api/v1/usage/overview/realtime?window=15m")
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	var payload struct {
+		CurrentUsage struct {
+			APIKeys []struct{ Key string } `json:"api_keys"`
+		} `json:"current_usage"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode realtime response: %v", err)
+	}
+	items := payload.CurrentUsage.APIKeys
+	if len(items) != 2 || items[0].Key == items[1].Key || !strings.HasPrefix(items[0].Key, "legacy:") || !strings.HasPrefix(items[1].Key, "legacy:") {
+		t.Fatalf("unexpected legacy API Key identifiers: %+v", items)
+	}
+	for _, rawKey := range rawKeys {
+		if strings.Contains(resp.Body.String(), rawKey) {
+			t.Fatalf("raw API Key leaked: %s", resp.Body.String())
+		}
+	}
+}
+
 func TestUsageOverviewRealtimeAcceptsWindowAndReturnsRealtimeBlock(t *testing.T) {
 	previousLocal := time.Local
 	location, err := time.LoadLocation("Asia/Shanghai")
