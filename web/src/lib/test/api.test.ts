@@ -391,12 +391,14 @@ describe('fetchUsageEvents', () => {
       pageSize: 100,
       cursorMode: true,
       cursor: 'opaque-cursor',
+      apiKeyId: '42',
     });
 
     const parsed = new URL(String(fetchMock.mock.calls[0][0]), 'http://localhost');
     expect(parsed.searchParams.get('page_size')).toBe('100');
     expect(parsed.searchParams.get('cursor_mode')).toBe('true');
     expect(parsed.searchParams.get('cursor')).toBe('opaque-cursor');
+    expect(parsed.searchParams.get('api_key_id')).toBe('42');
     expect(parsed.searchParams.get('page')).toBeNull();
   });
 
@@ -417,7 +419,7 @@ describe('fetchUsageEvents', () => {
     expect(parsed.searchParams.get('cursor_mode')).toBe('true');
   });
 
-  it('exports usage events with filters but without pagination params', async () => {
+  it.each(['csv', 'json'] as const)('exports usage events as %s with filters but without pagination params', async (format) => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('id,timestamp\n', {
       headers: new Headers({ 'Content-Disposition': 'attachment; filename="usage-events-20260627-013245.csv"' }),
     }));
@@ -427,7 +429,7 @@ describe('fetchUsageEvents', () => {
       unit: 'hour',
       start: '2026-04-20T00:00:00Z',
       end: '2026-04-21T00:00:00Z',
-    }, 'csv', {
+    }, format, {
       page: 3,
       pageSize: 100,
       model: 'claude-sonnet',
@@ -445,7 +447,7 @@ describe('fetchUsageEvents', () => {
     expect(parsed.searchParams.get('range')).toBe('custom');
     expect(parsed.searchParams.get('start')).toBe('2026-04-20T00:00:00Z');
     expect(parsed.searchParams.get('end')).toBe('2026-04-21T00:00:00Z');
-    expect(parsed.searchParams.get('format')).toBe('csv');
+    expect(parsed.searchParams.get('format')).toBe(format);
     expect(parsed.searchParams.get('model')).toBe('claude-sonnet');
     expect(parsed.searchParams.get('source')).toBe('authidx-source-a');
     expect(parsed.searchParams.get('result')).toBe('failed');

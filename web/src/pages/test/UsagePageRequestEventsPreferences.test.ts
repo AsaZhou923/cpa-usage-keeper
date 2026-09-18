@@ -30,7 +30,6 @@ describe('UsagePage request event column preferences', () => {
       expect(preferences).toEqual({
         version: 9,
         filters: {
-          apiKeyId: '',
           model: 'gpt-5.6',
           source: 'openai-team',
           result: 'failed',
@@ -53,7 +52,6 @@ describe('UsagePage request event column preferences', () => {
     });
 
     expect(preferences.filters).toEqual({
-      apiKeyId: '',
       model: 'claude-sonnet',
       source: 'anthropic-team',
       result: 'success',
@@ -65,10 +63,12 @@ describe('UsagePage request event column preferences', () => {
   it('preserves and normalizes custom column settings from the current version', () => {
     const preferences = normalizeRequestEventsPreferences({
       version: 9,
+      filters: { model: 'gpt-5', apiKeyId: '22', source: 'team', result: 'failed' },
       visibleColumnIds: ['model', 'timestamp', 'model', 'not-a-column', 'total_cost'],
       columnOrder: ['total_cost', 'timestamp', 'total_cost', 'not-a-column'],
     });
 
+    expect(preferences.filters).toEqual({ model: 'gpt-5', source: 'team', result: 'failed' });
     expect(preferences.visibleColumnIds).toEqual(['model', 'timestamp', 'total_cost']);
     expect(preferences.columnOrder).toEqual([
       'total_cost',
@@ -102,7 +102,6 @@ describe('UsagePage request event preferences', () => {
     });
 
     expect(preferences.filters).toEqual({
-      apiKeyId: '',
       model: '__all__',
       source: '__all__',
       result: '__all__',
@@ -116,7 +115,7 @@ describe('UsagePage request event preferences', () => {
     const visibleColumnIds = REQUEST_EVENT_COLUMN_IDS.filter((columnId) => columnId !== hiddenColumn);
     const preferences = {
       version: 9,
-      filters: { apiKeyId: '', model: '__all__', source: '__all__', result: '__all__' },
+      filters: { model: '__all__', source: '__all__', result: '__all__' },
       visibleColumnIds,
       columnOrder: [...REQUEST_EVENT_COLUMN_IDS],
     };
@@ -132,7 +131,6 @@ describe('UsagePage request event preferences', () => {
     });
 
     expect(loadRequestEventsPreferences(storage).filters).toEqual({
-      apiKeyId: '',
       model: '__all__',
       source: '__all__',
       result: '__all__',
@@ -141,7 +139,6 @@ describe('UsagePage request event preferences', () => {
     saveRequestEventsPreferences({
       version: 9,
       filters: {
-        apiKeyId: '',
         model: 'gpt-4.1',
         source: 'source-a',
         result: 'success',
@@ -153,7 +150,6 @@ describe('UsagePage request event preferences', () => {
     expect(JSON.parse(storage.value(REQUEST_EVENTS_PREFERENCES_STORAGE_KEY) ?? '')).toEqual({
       version: 9,
       filters: {
-        apiKeyId: '',
         model: 'gpt-4.1',
         source: 'source-a',
         result: 'success',
