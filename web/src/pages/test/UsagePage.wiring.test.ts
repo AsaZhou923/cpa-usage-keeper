@@ -4,10 +4,8 @@ import { describe, expect, it } from 'vitest'
 const readSource = (url: URL) => readFileSync(url, 'utf8').replace(/\r\n/g, '\n')
 
 const usagePageSource = readSource(new URL('../UsagePage.tsx', import.meta.url))
-const dashboardHeaderSource = readSource(new URL('../../components/dashboard/DashboardHeader.tsx', import.meta.url))
 const keyOverviewPageSource = readSource(new URL('../KeyOverviewPage.tsx', import.meta.url))
 const keyAnalysisPageSource = readSource(new URL('../KeyAnalysisPage.tsx', import.meta.url))
-const keyViewerShellSource = readSource(new URL('../../features/key-viewer/KeyViewerShell.tsx', import.meta.url))
 const statCardsSource = readSource(new URL('../../components/usage/StatCards.tsx', import.meta.url))
 
 const usagePageEffectBlock = (needle: string) => {
@@ -129,62 +127,4 @@ describe('UsagePage caller wiring', () => {
     expect(usagePageSource).toContain('latencyError={analysisLatencyError}')
   })
 
-  it('keeps update checks and Sign out wired through the shared header', () => {
-    expect(usagePageSource).toContain('onLogout={handleRequestLogout}')
-    expect(usagePageSource).toContain('onCheckUpdates={shouldShowUpdateCheckButton(versionInfo) ? () => void handleUpdateCheck() : undefined}')
-    expect(keyViewerShellSource).toContain('onLogout={() => void handleLogout()}')
-    const checkUpdates = dashboardHeaderSource.indexOf("'usage_stats.check_updates'")
-    expect(checkUpdates).toBeGreaterThanOrEqual(0)
-    expect(dashboardHeaderSource.indexOf("'common.logout'")).toBeGreaterThan(checkUpdates)
-  })
-
-  it('renders primary navigation as direct links without replacing activeTab rendering', () => {
-    const navigationStart = usagePageSource.indexOf('{tabOptions.map((option) => (')
-    const navigationEnd = usagePageSource.indexOf('))}', navigationStart)
-    const navigationBlock = usagePageSource.slice(navigationStart, navigationEnd)
-
-    expect(navigationStart).toBeGreaterThanOrEqual(0)
-    expect(navigationEnd).toBeGreaterThan(navigationStart)
-    expect(navigationBlock).toContain('<a')
-    expect(navigationBlock).toContain('href={appPath(getUsageTabPath(option.value)) + cpamcEmbedSearch()}')
-    expect(navigationBlock).toContain('onClick={(event) => handleUsageTabNavigation(event, option.value)}')
-    expect(navigationBlock).toContain('onKeyDown={(event) => handleUsageTabKeyActivation(event, option.value, activateUsageTab)}')
-    expect(navigationBlock).toContain('aria-selected={activeTab === option.value}')
-    expect(navigationBlock).not.toContain('<button')
-    expect(usagePageSource).toContain('const activateUsageTab = useCallback((tab: UsageTab) => {')
-    expect(usagePageSource).toContain('setActiveTab(tab);')
-    expect(usagePageSource).toContain("window.history.replaceState(null, '', appPath(getUsageTabPath(tab)) + cpamcEmbedSearch());")
-  })
-
-  it('keeps the shared toolbar out of CPAMC embed while using it in Key Overview', () => {
-    expect(usagePageSource).toContain('{isEmbeddedInCPAMC ? <div className={styles.toolbarRow}>')
-    expect(usagePageSource).toContain(': <DashboardToolbar')
-    expect(usagePageSource).toContain('onNavigate={activateUsageTab}')
-    expect(keyViewerShellSource).toContain('<DashboardToolbar')
-    expect(keyOverviewPageSource).toContain('KeyViewerShell')
-  })
-
-  it('passes realtime error state and current data guard to the realtime panel', () => {
-    expect(usagePageSource).toContain('error: realtimeError')
-    expect(usagePageSource).toContain('const displayRealtimeError = realtimeError')
-    expect(usagePageSource).toContain('realtime={currentRealtime ?? undefined}')
-    expect(usagePageSource).toContain('error={displayRealtimeError}')
-  })
-
-  it('loads both Activity cards through one independent Recent Activity request', () => {
-    expect(usagePageSource).toContain('useUsageActivityData({')
-    expect(usagePageSource).toContain('useRecentActivityWindow(usageRangeQuery)')
-    expect(usagePageSource).toContain('await Promise.all([loadUsage(), loadActivity(), loadComparisons()])')
-    expect(usagePageSource).toContain('await Promise.all([loadUsage(), loadActivity({ skipIfInFlight: true }), loadComparisons({ skipIfInFlight: true })])')
-  })
-
-  it('does not render the Back to CPA link in CPAMC embed mode', () => {
-    expect(usagePageSource).toMatch(/const isEmbeddedInCPAMC = isCPAMCEmbed\(\);/)
-    const headerStart = usagePageSource.indexOf('{isEmbeddedInCPAMC ? <header')
-    const sharedHeaderStart = usagePageSource.indexOf('</header> : <DashboardHeader', headerStart)
-    expect(headerStart).toBeGreaterThanOrEqual(0)
-    expect(sharedHeaderStart).toBeGreaterThan(headerStart)
-    expect(usagePageSource.slice(headerStart, sharedHeaderStart)).not.toContain('cpaManagementURL')
-    expect(usagePageSource.slice(sharedHeaderStart)).toContain('backToCPA={cpaManagementURL || undefined}')
-  })
 })

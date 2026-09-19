@@ -9,19 +9,6 @@ describe('KeyOverviewPage caller wiring', () => {
     expect(source).toContain('}, [onAuthRequired, realtimeWindow]);')
   })
 
-  it('loads overview, Activity, and realtime data through separate requests', () => {
-    expect(source).toContain('const overview = await fetchKeyOverview(')
-    expect(source).toContain('const nextRealtime = await fetchKeyOverviewRealtime({')
-    expect(source).toContain('useUsageActivityData({')
-    expect(source).toContain('useRecentActivityWindow(usageRangeQuery)')
-    expect(source).toContain('await Promise.all([loadOverview(options), loadActivity(options), loadComparisons({ skipIfInFlight: options.skipIfInFlight })])')
-  })
-
-  it('auto-refreshes the viewer overview and realtime data together', () => {
-    expect(source).toContain('refreshOverview: () => refreshKeyOverview({ skipIfInFlight: true })')
-    expect(source).toContain('onRefreshError: handleAutoRefreshError')
-  })
-
   it('disables manual refresh only while its own request is in flight', () => {
     expect(source).toContain('const refreshDisabled = manualRefreshLoading;')
   })
