@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Interaction, Tooltip } from 'chart.js';
 import type { ChartData, ChartOptions, Plugin } from 'chart.js';
-import type { AnalysisCompositionItem, AnalysisHeatmapCell, AnalysisLatencyDiagnostics, AnalysisModelEfficiencyItem, AnalysisResponse, AnalysisTokenUsageBucket } from '@/lib/types';
+import type { AnalysisCompositionItem, AnalysisLatencyDiagnostics, AnalysisModelEfficiencyItem, AnalysisResponse, AnalysisTokenUsageBucket } from '@/lib/types';
 
 type TokenAverageLinePluginOptions = {
   value: number;
@@ -106,13 +106,6 @@ const tokenBucket = (overrides: Partial<AnalysisTokenUsageBucket> = {}): Analysi
   requests: 3,
   cost_usd: 0,
   cost_available: true,
-  ...overrides,
-});
-
-const heatmapCell = (overrides: Partial<AnalysisHeatmapCell> = {}): AnalysisHeatmapCell => ({
-  api_key: 'key', model: 'model', input_tokens: 0, output_tokens: 0,
-  reasoning_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0,
-  total_tokens: 0, requests: 0, cost_usd: 0, cost_available: true, intensity: 0,
   ...overrides,
 });
 
