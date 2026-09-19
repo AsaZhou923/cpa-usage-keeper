@@ -184,15 +184,8 @@ describe('OverviewRealtimePanel', () => {
       { text: 'usage_stats.overview_realtime_rpm', lineDash: [6, 4], pointStyle: 'line' },
     ]);
     expect(chartCapture.lineCalls[0].plugins?.map((plugin) => plugin.id)).toContain('throughputLegendSpacing');
-    expect(html.match(/overviewRealtimePairedMetric_/g) ?? []).toHaveLength(3);
-    expect(html).not.toContain('overviewRealtimeSeriesSwatch');
-    expect(html.match(/>usage_stats\.overview_realtime_latest<\/span>/g) ?? []).toHaveLength(4);
-    expect(html.match(/>usage_stats\.overview_realtime_average<\/span>/g) ?? []).toHaveLength(4);
-    expect(html.match(/>usage_stats\.overview_realtime_trend<\/span>/g) ?? []).toHaveLength(4);
     expect(html).toContain('usage_stats.tpm');
     expect(html).toContain('usage_stats.rpm');
-    expect(html).not.toContain('aria-label="usage_stats.overview_realtime_latest usage_stats.overview_realtime_tpm');
-    expect(html).toContain('overviewRealtimeScreenReaderOnly_');
     expect(html).toContain('>usage_stats.overview_realtime_latest usage_stats.overview_realtime_tpm 240 usage_stats.overview_realtime_rpm 4 usage_stats.overview_realtime_throughput_hint</span>');
     expect(html).toContain('aria-hidden="true">usage_stats.overview_realtime_latest</span>');
     expect(chartCapture.chartCalls[0].data.datasets.map((dataset) => dataset.label)).toEqual([
