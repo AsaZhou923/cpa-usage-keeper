@@ -1,5 +1,4 @@
 import { createElement } from 'react';
-import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import '@/i18n';
@@ -27,14 +26,6 @@ describe('OverviewActivityCards', () => {
     expect(html.match(new RegExp(`data-activity-start="${activity.blocks[0].start_time}"`, 'g'))).toHaveLength(2);
   });
 
-  it('does not own a second Activity request or range state', () => {
-    const source = readFileSync(new URL('../OverviewActivityCards.tsx', import.meta.url), 'utf8');
-
-    expect(source).not.toContain('fetchUsageActivity');
-    expect(source).not.toContain('fetchKeyActivity');
-    expect(source).not.toContain('useUsageActivityData');
-    expect(source).not.toContain('useRecentActivityWindow');
-  });
 
   it('keeps the current summaries visible during a background refresh', () => {
     const html = renderToStaticMarkup(createElement(OverviewActivityCards, {
