@@ -210,13 +210,18 @@ describe('CredentialRequestEventsList', () => {
     expect(container.querySelector('[data-credential-request-timestamp="1"]')?.textContent)
       .toBe('10:00:002026/08/17')
     expect(container.querySelector('[data-credential-request-model="1"]')?.textContent)
-      .toBe('gpt-5.6keeper-gptusage_stats.reasoning_effort high')
+      .toBe('gpt-5.6keeper-gpt')
+    expect(container.querySelector('[data-credential-request-model="1"]')?.textContent)
+      .not.toContain('usage_stats.reasoning_effort')
+    expect(container.querySelector('tbody tr:first-child td:nth-child(4)')?.textContent)
+      .toBe('SSEusage_stats.request_endpoint: /responsesusage_stats.reasoning_effort: high')
     expect(container.textContent).not.toContain('usage_stats.model_alias')
     expect(container.querySelector('[data-credential-request-model="1"]')?.getAttribute('title')).toBeNull()
     expect(Array.from(container.querySelectorAll('[data-credential-request-sub-label]')).map((label) => label.textContent)).toEqual([
-      'usage_stats.reasoning_effort',
-      'usage_stats.ttft',
-      'usage_stats.speed',
+      'usage_stats.request_endpoint:',
+      'usage_stats.reasoning_effort:',
+      'usage_stats.ttft:',
+      'usage_stats.speed:',
     ])
     const metricCells = container.querySelectorAll<HTMLTableCellElement>('tbody tr:first-child td')
     const tokenCell = metricCells[5]
@@ -247,6 +252,22 @@ describe('CredentialRequestEventsList', () => {
     expect(container.textContent).not.toContain('usage_stats.request_events_filter_model')
     expect(container.textContent).not.toContain('usage_stats.request_events_filter_source')
     expect(container.textContent).not.toContain('usage_stats.request_events_filter_result')
+  })
+
+  it('stacks response model between requested model and alias', async () => {
+    await act(async () => root.render(
+      <CredentialRequestEventsList
+        events={[{ ...event, response_model: 'gpt-5.6-luna' }]}
+        loading={false}
+        hasMore={false}
+        loadingMore={false}
+        autoLoadMore
+        onLoadMore={() => undefined}
+      />,
+    ))
+
+    expect(container.querySelector('[data-credential-request-model="1"]')?.textContent)
+      .toBe('gpt-5.6↳ usage_stats.upstream_response_model: gpt-5.6-lunakeeper-gpt')
   })
 
   it.each([undefined, 0, 3000])('shows the API speed independently of TTFT %s', async (ttft) => {

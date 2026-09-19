@@ -24,6 +24,7 @@ import {
 import { useScrollBoundaryContainment } from '@/hooks/useScrollBoundaryContainment'
 import type { UsageEvent } from '@/lib/types'
 import { calculateCacheReadRate, formatCompactTokenValue, formatDurationMs, formatUsd } from '@/utils/usage'
+import { getUsageModelDisplay } from '@/utils/usage/modelDisplay'
 import { RequestEventResultBadge } from '@/components/usage/RequestEventResultBadge'
 import styles from './CredentialRequestEventsList.module.scss'
 
@@ -59,6 +60,7 @@ interface CredentialRequestEventRow {
   requestTier: string
   responseTier: string
   model: string
+  responseModel: string
   modelAlias: string
   reasoningEffort: string
   requestType: string
@@ -367,8 +369,7 @@ const buildRow = (
   t: (key: string) => string,
 ): CredentialRequestEventRow => {
   const timestamp = String(event.timestamp ?? '')
-  const model = String(event.model ?? '').trim() || '-'
-  const modelAliasValue = String(event.model_alias ?? '').trim()
+  const modelDisplay = getUsageModelDisplay(event.model, event.response_model, event.model_alias)
   const endpoint = parseRequestEndpoint(event.endpoint)
   const latencyMs = Number.isFinite(event.latency_ms) ? event.latency_ms : null
   const ttftMs = Number.isFinite(event.ttft_ms) ? event.ttft_ms as number : null
@@ -391,7 +392,7 @@ const buildRow = (
 
   return {
     event,
-    id: String(event.id ?? '').trim() || `${timestamp}-${model}-${index}`,
+    id: String(event.id ?? '').trim() || `${timestamp}-${modelDisplay.model}-${index}`,
     requestId: String(event.request_id ?? '').trim(),
     detailsId: `credential-request-event-details-${index}`,
     timestamp,
@@ -400,9 +401,10 @@ const buildRow = (
     apiKey,
     requestTier,
     responseTier,
-    model,
-    modelAlias: modelAliasValue && modelAliasValue !== model ? modelAliasValue : '-',
-    reasoningEffort: optionalText(event.reasoning_effort),
+    model: modelDisplay.model,
+    responseModel: modelDisplay.responseModel,
+    modelAlias: modelDisplay.modelAlias,
+    reasoningEffort: String(event.reasoning_effort ?? '').trim(),
     requestType: endpoint.requestType,
     endpoint: endpoint.endpoint,
     failed: event.failed === true,
@@ -581,9 +583,9 @@ export function CredentialRequestEventsList({
 
   const renderLabeledOverflowText = (label: string, value: string) => renderOverflowText(
     'small',
-    `${label} ${value}`,
+    `${label}: ${value}`,
     <>
-      <span className={styles.subDataLabel} data-credential-request-sub-label>{label}</span>
+      <span className={styles.subDataLabel} data-credential-request-sub-label>{label}:</span>
       {' '}{value}
     </>,
   )
@@ -653,12 +655,18 @@ export function CredentialRequestEventsList({
             data-credential-request-model={row.id}
           >
             {renderOverflowText('strong', row.model)}
-            {renderOverflowText('small', row.modelAlias)}
-            {renderLabeledOverflowText(t('usage_stats.reasoning_effort'), row.reasoningEffort)}
+            {row.responseModel ? renderOverflowText(
+              'small',
+              `${t('usage_stats.upstream_response_model')}: ${row.responseModel}`,
+              <><span className={styles.responseModelArrow} aria-hidden="true">↳ </span><span className={styles.responseModelLabel}>{t('usage_stats.upstream_response_model')}:</span> {row.responseModel}</>,
+              styles.responseModel,
+            ) : null}
+            {row.modelAlias ? renderOverflowText('small', row.modelAlias) : null}
           </td>
           <td className={styles.stackedCell}>
             {renderOverflowText('strong', row.requestType)}
-            {renderOverflowText('small', row.endpoint)}
+            {row.endpoint !== '-' ? renderLabeledOverflowText(t('usage_stats.request_endpoint'), row.endpoint) : null}
+            {row.reasoningEffort ? renderLabeledOverflowText(t('usage_stats.reasoning_effort'), row.reasoningEffort) : null}
           </td>
           <td>
             <RequestEventResultBadge
