@@ -27,7 +27,7 @@ import (
 
 const usageEventInsertColumns = entities.UsageEventStorageColumns
 
-const DatasetGeneratorVersion = "production-v8-month-window-canonical"
+const DatasetGeneratorVersion = "production-v9-event-status-stream"
 
 type GenerateOptions struct {
 	Path              string
