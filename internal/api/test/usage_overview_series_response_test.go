@@ -33,7 +33,7 @@ func TestLongCustomDayOverviewCapsAlignedSeriesAtNinetyPoints(t *testing.T) {
 	for bucket := start; !bucket.After(today); bucket = bucket.AddDate(0, 0, 1) {
 		rows = append(rows, entities.UsageOverviewDailyStat{
 			BucketStart: bucket, APIGroupKey: "provider-a", Model: "model-a",
-			RequestCount: 1, SuccessCount: 1, InputTokens: 10, TotalTokens: 10,
+			RequestCount: 1, SuccessCount: 1, InputTokens: 10, CacheReadTokens: 4, TotalTokens: 10,
 		})
 	}
 	if err := db.Create(&rows).Error; err != nil {
@@ -78,5 +78,10 @@ func TestLongCustomDayOverviewCapsAlignedSeriesAtNinetyPoints(t *testing.T) {
 	}
 	if seriesRequests != 121 {
 		t.Fatalf("merged series lost requests: %d", seriesRequests)
+	}
+	for index, rate := range payload.Series.CacheReadRate {
+		if rate == nil || *rate != 40 {
+			t.Fatalf("merged cache rate[%d] = %v, want 40", index, rate)
+		}
 	}
 }
