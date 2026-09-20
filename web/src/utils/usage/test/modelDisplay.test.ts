@@ -26,6 +26,22 @@ describe('getUsageModelDisplay', () => {
     expect(getUsageModelDisplay(values[0], values[1], values[2])).toEqual(expected)
   })
 
+  it('compares model identifiers independently of the browser locale', () => {
+    const originalLocaleLowerCase = String.prototype.toLocaleLowerCase
+    String.prototype.toLocaleLowerCase = function toLocaleLowerCase() {
+      return originalLocaleLowerCase.call(this, 'tr-TR')
+    }
+    try {
+      expect(getUsageModelDisplay('mini', 'MINI', 'MINI')).toEqual({
+        model: 'mini',
+        responseModel: '',
+        modelAlias: '',
+      })
+    } finally {
+      String.prototype.toLocaleLowerCase = originalLocaleLowerCase
+    }
+  })
+
   it('keeps raw matching values in the tooltip and omits empty lines', () => {
     const values = getUsageModelTooltip('DeepSeek-V4-Flash', ' deepseek-v4-flash ', '')
     expect(values).toEqual({
