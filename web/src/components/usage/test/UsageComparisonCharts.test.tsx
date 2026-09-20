@@ -109,7 +109,8 @@ it('keeps every compact tile readable and non-overlapping at the mobile chart wi
 it('puts model information in the tooltip and Key information in the list without metric switches', async () => {
   await render([item('most-tokens', {total_tokens:800,cost:null}),item('most-requests',{total_tokens:200,requests:1000,cost:50})]);
   const tile=firstChart().querySelector<HTMLButtonElement>('[data-comparison-entry]')!;
-  expect(tile.textContent).toBe('most-tokens');
+  expect(tile.textContent).toContain('most-tokens');
+  expect(tile.textContent).toContain('80.0%');
   expect(firstChart().querySelector('[aria-pressed]')).toBeNull();
   await act(async()=>tile.focus());
   expect(document.querySelector('[role="tooltip"]')?.textContent).toContain('80.0%');
@@ -122,6 +123,30 @@ it('puts model information in the tooltip and Key information in the list withou
   expect(row.textContent).toContain('Requests');
   expect(row.textContent).toContain('—');
   expect((row.querySelector('[aria-hidden="true"] > span') as HTMLElement).style.width).toBe('80%');
+});
+
+it('keeps Model Usage and Token Usage on the same five-plus-Others rows', async () => {
+  const items = Array.from({ length: 7 }, (_, index) => item(`model-${index}`, {total_tokens: 700 - index * 10}));
+  await render(items);
+  const modelRows = firstChart().querySelectorAll('[data-comparison-entry]');
+  const tokenRows = container.querySelectorAll('[data-comparison="api_keys"] [data-usage-share-item]');
+  expect(modelRows).toHaveLength(6);
+  expect(tokenRows).toHaveLength(6);
+  expect(firstChart().querySelector('[data-comparison-entry="model-4"]')).not.toBeNull();
+  expect(firstChart().querySelector('[data-comparison-entry="__comparison_others__"]')).not.toBeNull();
+  expect(container.querySelector('[data-comparison="api_keys"] [data-usage-share-item="model-4"]')).not.toBeNull();
+  expect(container.querySelector('[data-comparison="api_keys"] [data-usage-share-item="__comparison_others__"]')).not.toBeNull();
+});
+
+it('keeps model tile DOM and keyboard order ranked before Others', async () => {
+  const items = [
+    item('first', {total_tokens: 1000}), item('second', {total_tokens: 120}), item('third', {total_tokens: 60}),
+    item('fourth', {total_tokens: 10}), item('fifth', {total_tokens: 1}), item('sixth', {total_tokens: 1}),
+  ];
+  await render(items);
+  expect(Array.from(firstChart().querySelectorAll('[data-comparison-entry]'), element => element.getAttribute('data-comparison-entry'))).toEqual([
+    'first', 'second', 'third', 'fourth', 'fifth', '__comparison_others__',
+  ]);
 });
 
 it('updates token-ranked rows during polling and preserves zero versus unknown prices', async () => {
