@@ -61,6 +61,17 @@ describe('Credential section layout and accessibility', () => {
     expect(credentialStyles).toMatch(/@include mobile\s*\{[\s\S]*?\.credentialHealthPanel\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\);/)
   })
 
+  it('sizes the credential status toggle by the shared icon slot and keeps its tooltip revealable', () => {
+    // occurrence 0 落在 .credentialStatusToggleWrap 上，开关自身的规则是第 1 次命中。
+    const toggleStyles = scssRule(credentialStyles, '.credentialStatusToggle', 1)
+    const tooltipStyles = scssRule(credentialStyles, '.credentialStatusToggleTooltip')
+
+    expect(toggleStyles).toContain('width: $credential-provider-icon-size;')
+    expect(toggleStyles).toContain('height: $credential-provider-icon-size;')
+    expect(tooltipStyles).toContain('opacity: 0;')
+    expect(credentialStyles).toMatch(/\.credentialStatusToggleWrap:hover \.credentialStatusToggleTooltip,[\s\S]*?\.credentialStatusToggleWrap:focus-within \.credentialStatusToggleTooltip\s*\{[\s\S]*?opacity: 1;/)
+  })
+
   it('reveals health bucket tooltips on hover', () => {
     expect(credentialStyles).toMatch(/\.credentialHealthCell\s*\{[\s\S]*?position:\s*relative;/)
     expect(credentialStyles).toMatch(/\.credentialHealthTooltip\s*\{[\s\S]*?position:\s*absolute;/)

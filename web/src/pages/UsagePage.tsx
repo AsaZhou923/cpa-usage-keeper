@@ -2379,6 +2379,8 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
                       aliasSavingId={credentialsData.aliasSavingId}
                       onSaveAlias={credentialsData.saveUsageIdentityAlias}
                       onOpenDetails={(row) => handleCredentialDetailOpen({ kind: 'auth-file', row })}
+                      statusPendingIdentityIds={credentialsData.credentialStatusPendingIdentityIds}
+                      onToggleStatus={credentialsData.toggleAuthFileStatus}
                       onRefreshInspectionStatus={credentialsData.refreshQuotaInspectionStatus}
                       onStartInspection={credentialsData.startQuotaInspection}
                       onAfterInvalidAccountAction={credentialsData.refresh}
@@ -2397,6 +2399,8 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
                       aliasSavingId={credentialsData.aliasSavingId}
                       onSaveAlias={credentialsData.saveUsageIdentityAlias}
                       onOpenDetails={(row) => handleCredentialDetailOpen({ kind: 'ai-provider', row })}
+                      statusPendingIdentityIds={credentialsData.credentialStatusPendingIdentityIds}
+                      onToggleStatus={credentialsData.toggleAiProviderStatus}
                       onPageChange={credentialsData.setAiProviderPage}
                       onPageSizeChange={credentialsData.setAiProviderPageSize}
                       onActiveOnlyChange={credentialsData.setAiProviderActiveOnly}
