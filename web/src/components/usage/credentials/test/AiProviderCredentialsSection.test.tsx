@@ -152,18 +152,7 @@ describe('AiProviderCredentialsSection', () => {
 
     const html = renderToStaticMarkup(
       <AiProviderCredentialsSection
-        rows={[row]}
-        total={1}
-        page={1}
-        totalPages={1}
-        pageSize={10}
-        activeOnly={false}
-        sort="priority"
-        loading={false}
-        onPageChange={() => undefined}
-        onPageSizeChange={() => undefined}
-        onActiveOnlyChange={() => undefined}
-        onSortChange={() => undefined}
+        {...createAiProviderSectionProps({ rows: [row], total: 1 })}
       />,
     )
 
