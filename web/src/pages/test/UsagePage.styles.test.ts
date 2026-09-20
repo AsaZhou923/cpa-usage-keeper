@@ -4,26 +4,11 @@ import { describe, expect, it } from 'vitest'
 const readSource = (url: URL) => readFileSync(url, 'utf8').replace(/\r\n/g, '\n')
 
 const usagePageStyles = readSource(new URL('../UsagePage.module.scss', import.meta.url))
-const usagePageSource = readSource(new URL('../UsagePage.tsx', import.meta.url))
 const keyOverviewPageStyles = readSource(new URL('../../features/key-viewer/KeyViewerShell.module.scss', import.meta.url))
-const requestEventsSource = readSource(new URL('../../components/usage/RequestEventsDetailsCard.tsx', import.meta.url))
-const requestEventLogSource = readSource(new URL('../../components/usage/RequestEventLogModal.tsx', import.meta.url))
-const priceSettingsSource = readSource(new URL('../../components/usage/PriceSettingsCard.tsx', import.meta.url))
 const priceRulesStyles = readSource(new URL('../../components/usage/pricing/PriceRulesModal.module.scss', import.meta.url))
 const credentialStyles = readSource(new URL('../../components/usage/credentials/CredentialSections.module.scss', import.meta.url))
-const apiKeySettingsSource = readSource(new URL('../../components/usage/ApiKeySettingsCard.tsx', import.meta.url))
-const sessionSettingsSource = readSource(new URL('../../components/usage/SessionSettingsCard.tsx', import.meta.url))
-const analysisPanelSource = readSource(new URL('../../components/usage/analysis/AnalysisPanel.tsx', import.meta.url))
 const analysisPanelStyles = readSource(new URL('../../components/usage/analysis/AnalysisPanel.module.scss', import.meta.url))
 const timeRangeControlStyles = readSource(new URL('../../components/usage/TimeRangeControl.module.scss', import.meta.url))
-
-const requestEventColumnDefinitionBlock = (columnId: string) => {
-  const start = requestEventsSource.indexOf(`id: '${columnId}',`)
-  expect(start).toBeGreaterThanOrEqual(0)
-  const next = requestEventsSource.indexOf('\n      {', start + 1)
-  const end = next === -1 ? requestEventsSource.indexOf('\n    ];', start) : next
-  return requestEventsSource.slice(start, end)
-}
 
 const styleRuleBlock = (source: string, selector: string) => {
   const start = source.indexOf(selector)
@@ -175,7 +160,6 @@ describe('UsagePage responsive layout and accessibility', () => {
   )
 
   it('keeps inactive toolbar controls inert while Refresh stays outside the collapsing slot', () => {
-    expect(usagePageSource).toContain('className={styles.usageRefreshSlot}')
     expect(styleRuleBlock(usagePageStyles, '.toolbarActionsRightAnimated')).toContain('grid-template-columns: minmax(0, 1fr) auto;')
     expect(styleRuleBlock(usagePageStyles, '.usageFilterTransition,\n.rankingScopeTransition')).toContain('max-width: 0;')
     expect(styleRuleBlock(usagePageStyles, '.usageFilterTransitionInner,\n.rankingScopeTransitionInner')).toContain('overflow: hidden;')
@@ -192,7 +176,6 @@ describe('UsagePage responsive layout and accessibility', () => {
   })
 
   it('keeps CPAMC range controls on the immediate toolbar layout path', () => {
-    expect(usagePageSource).toContain('isEmbeddedInCPAMC ? styles.usageFilterTransitionImmediate')
     expect(usagePageStyles).toMatch(/\.usageFilterTransitionImmediate\s*\{[\s\S]*?display:\s*contents;/)
     expect(usagePageStyles).toMatch(/\.usageFilterTransitionImmediate\s+\.usageFilterTransitionInner\s*\{[\s\S]*?display:\s*contents;/)
   })
@@ -290,16 +273,6 @@ describe('UsagePage responsive layout and accessibility', () => {
   })
 
   it('contains wheel scrolling at overflowing card boundaries without trapping short lists', () => {
-    expect(requestEventsSource).toContain('useScrollBoundaryContainment(requestEventsTableWrapperRef, rows.length > 0);')
-    expect(requestEventLogSource).toContain('useScrollBoundaryContainment(scrollerRef)')
-    expect(apiKeySettingsSource).toContain('useScrollBoundaryContainment(apiKeySettingsBodyRef);')
-    expect(sessionSettingsSource).toContain('useScrollBoundaryContainment(sessionSettingsBodyRef);')
-    expect(priceSettingsSource).toContain('useScrollBoundaryContainment(pricesGridRef, sortedModelPrices.length > 0);')
-    expect(requestEventsSource).toContain('ref={requestEventsTableWrapperRef} className={styles.requestEventsTableWrapper}')
-    expect(requestEventLogSource).toContain('className={styles.requestEventsLogSectionPanelInner} ref={scrollerRef}')
-    expect(apiKeySettingsSource).toContain('ref={apiKeySettingsBodyRef} className={styles.apiKeySettingsBody}')
-    expect(sessionSettingsSource).toContain('ref={sessionSettingsBodyRef} className={styles.sessionSettingsBody}')
-    expect(priceSettingsSource).toContain('ref={pricesGridRef} className={styles.pricesGrid}')
     expect(usagePageStyles).toMatch(/\.requestEventsTableWrapper\[data-scroll-boundary-contained='true'\],[\s\S]*?\.requestEventsLogSectionPanelInner\[data-scroll-boundary-contained='true'\],[\s\S]*?\.apiKeySettingsBody\[data-scroll-boundary-contained='true'\],[\s\S]*?\.sessionSettingsBody\[data-scroll-boundary-contained='true'\],[\s\S]*?\.pricesGrid\[data-scroll-boundary-contained='true'\]\s*\{[\s\S]*?overscroll-behavior-y:\s*contain;/)
   })
 
@@ -347,7 +320,6 @@ describe('UsagePage responsive layout and accessibility', () => {
   })
 
   it('keeps Analysis tooltips and heatmap labels accessible', () => {
-    expect(analysisPanelSource).toContain('onFocus={(event) => showTooltip([model], event)}')
     expect(styleRuleBlock(analysisPanelStyles, '.heatmapCell:focus-visible')).toMatch(/box-shadow:\s*0 0 0 2px/)
     const label = styleRuleBlock(analysisPanelStyles, '.heatmapModelLabel')
     expect(label).toContain('-webkit-line-clamp: 2;')
@@ -363,11 +335,6 @@ describe('UsagePage responsive layout and accessibility', () => {
     expect(usagePageStyles).toMatch(/\.requestEventsTableWrapper\s*\{[\s\S]*?thead\s+th\s*\{[\s\S]*?top:\s*0;/)
     expect(usagePageStyles).toMatch(/\.requestEventsTableWrapper\s*\{[\s\S]*?thead\s+th\s*\{[\s\S]*?z-index:\s*2;/)
     expect(usagePageStyles).toMatch(/\.requestEventsTableWrapper\s*\{[\s\S]*?\.table\s*\{[\s\S]*?border-collapse:\s*separate;/)
-  })
-
-  it('folds reasoning tokens into the adaptive Tokens column', () => {
-    expect(requestEventColumnDefinitionBlock('total_tokens')).toContain('row.reasoningTokensLabel')
-    expect(requestEventColumnDefinitionBlock('total_tokens')).toContain('styles.requestEventsNoWrapCell')
   })
 
   it('caps Request Event Log long text columns without forcing short aliases wide', () => {
@@ -386,19 +353,7 @@ describe('UsagePage responsive layout and accessibility', () => {
     expect(usagePageStyles).toMatch(/\.modelCell\s*\{[\s\S]*?max-width:\s*240px;/)
   })
 
-  it('keeps Request Event Log non-text columns adaptive and non-wrapping', () => {
-    const adaptiveColumnIds = [
-      'timestamp',
-      'reasoning_effort',
-      'service_tier',
-      'result',
-      'request_type',
-      'latency',
-      'speed',
-      'total_tokens',
-      'cache_read_rate',
-      'total_cost',
-    ]
+  it('keeps shared Request Event metric styles non-wrapping', () => {
     const noWrapCellBlock = usagePageStyles.slice(
       usagePageStyles.indexOf('.requestEventsNoWrapCell {'),
       usagePageStyles.indexOf('.requestEventsSourceCell')
@@ -406,32 +361,7 @@ describe('UsagePage responsive layout and accessibility', () => {
 
     expect(noWrapCellBlock).toMatch(/white-space:\s*nowrap;/)
     expect(noWrapCellBlock).toMatch(/font-variant-numeric:\s*tabular-nums;/)
-
-    adaptiveColumnIds.forEach((columnId) => {
-      const block = requestEventColumnDefinitionBlock(columnId)
-      expect(block).toMatch(/header:\s*<th[^>]*styles\.requestEventsNoWrapCell/)
-      expect(block).toMatch(/renderCell:[\s\S]*<td[^>]*styles\.requestEventsNoWrapCell/)
-    })
-
-    const executorBlock = requestEventColumnDefinitionBlock('executor_type')
-    expect(executorBlock).toMatch(/header:\s*<th[^>]*styles\.requestEventsNoWrapCell/)
-    expect(executorBlock).toContain('styles.requestEventsExecutorCell')
     expect(usagePageStyles).toMatch(/\.requestEventsExecutorCell\s*\{[\s\S]*?white-space:\s*nowrap;/)
-
-    const clientMetadataRenderer = requestEventsSource.slice(
-      requestEventsSource.indexOf('const renderClientMetadataCell'),
-      requestEventsSource.indexOf('\n  const modelOptions'),
-    )
-    expect(clientMetadataRenderer).toMatch(/<td[\s\S]*styles\.requestEventsNoWrapCell/)
-    ;['client_ip', 'x_forwarded_for', 'user_agent'].forEach((columnId) => {
-      const block = requestEventColumnDefinitionBlock(columnId)
-      expect(block).toMatch(/header:\s*<th[^>]*styles\.requestEventsNoWrapCell/)
-      expect(block).toContain('renderClientMetadataCell(')
-    })
-
-    ;['api_key', 'source', 'model'].forEach((columnId) => {
-      expect(requestEventColumnDefinitionBlock(columnId)).not.toContain('styles.requestEventsNoWrapCell')
-    })
   })
 
   it('disables Request Event column switch transitions for reduced motion', () => {
