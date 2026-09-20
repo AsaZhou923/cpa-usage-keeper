@@ -150,11 +150,19 @@ export function ActivityHeatmapGrid({
         visibleTooltip.interaction,
       ));
     };
-    const handleScroll = () => {
+    const handleScroll = (event: Event) => {
       if (!document.body.contains(visibleTooltip.anchorEl)) {
         setActiveTooltip(null);
         return;
       }
+      const target = event.target;
+      const isRelevantScroll =
+        target === window
+        || target === document
+        || Boolean((target as { window?: unknown } | null)?.window === target)
+        || (target instanceof Node && target.contains(visibleTooltip.anchorEl));
+      if (!isRelevantScroll) return;
+
       // 鼠标悬停状态不会因为页面滚动触发 pointerleave，滚动时主动清理避免 tooltip 脱离方块后残留。
       if (visibleTooltip.interaction === 'mouse') {
         setActiveTooltip(null);

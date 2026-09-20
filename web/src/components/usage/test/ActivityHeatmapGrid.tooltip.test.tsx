@@ -121,4 +121,18 @@ describe('ActivityHeatmapGrid tooltip lifecycle', () => {
     act(() => cells[0]?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' })));
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
   });
+
+  it('does not dismiss a mouse tooltip when an unrelated container scrolls', () => {
+    const cells = renderGrid();
+    const unrelatedContainer = document.createElement('div');
+    document.body.appendChild(unrelatedContainer);
+
+    act(() => cells[0]?.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' })));
+    expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+
+    act(() => unrelatedContainer.dispatchEvent(new Event('scroll')));
+    expect(document.querySelector('[role="tooltip"]')).not.toBeNull();
+
+    unrelatedContainer.remove();
+  });
 });
