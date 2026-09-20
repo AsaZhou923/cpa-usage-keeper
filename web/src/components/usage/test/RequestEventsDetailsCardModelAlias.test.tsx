@@ -121,6 +121,23 @@ describe('RequestEventsDetailsCard model stack', () => {
 
     expect(cells[modelHeaderIndex]).toBe('claude-sonnetsonnet-business');
   });
+
+  it('keeps matching response and alias values in the whole-field tooltip', () => {
+    const html = renderCard({
+      events: [{
+        ...events[0],
+        response_model: 'claude-sonnet',
+        model_alias: 'CLAUDE-SONNET',
+      }],
+    });
+    const headers = extractTableHeaders(html);
+    const cells = extractFirstTableRowCells(html);
+    const modelHeaderIndex = headers.indexOf('Model');
+
+    expect(cells[modelHeaderIndex]).toBe('claude-sonnet');
+    expect(html).toContain('aria-label="Model: claude-sonnet; Upstream response: claude-sonnet; Model Alias: CLAUDE-SONNET"');
+    expect(html).not.toContain('title="Upstream response:');
+  });
 });
 
 describe('RequestEventsDetailsCard client metadata columns', () => {
