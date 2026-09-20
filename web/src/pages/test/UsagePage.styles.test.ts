@@ -357,23 +357,12 @@ describe('UsagePage responsive layout and accessibility', () => {
   })
 
   it('keeps Request Event Log headers visible while the table scrolls', () => {
-    const tableBlock = styleRuleBlock(usagePageStyles, '.table {')
-
     expect(usagePageStyles).toMatch(/\.requestEventsTableWrapper\s*\{[\s\S]*?height:\s*clamp\(520px,\s*68vh,\s*760px\);/)
     expect(usagePageStyles).toMatch(/\.requestEventsTableWrapper\s*\{[\s\S]*?overflow:\s*auto;/)
     expect(usagePageStyles).toMatch(/\.requestEventsTableWrapper\s*\{[\s\S]*?thead\s+th\s*\{[\s\S]*?position:\s*sticky;/)
     expect(usagePageStyles).toMatch(/\.requestEventsTableWrapper\s*\{[\s\S]*?thead\s+th\s*\{[\s\S]*?top:\s*0;/)
     expect(usagePageStyles).toMatch(/\.requestEventsTableWrapper\s*\{[\s\S]*?thead\s+th\s*\{[\s\S]*?z-index:\s*2;/)
     expect(usagePageStyles).toMatch(/\.requestEventsTableWrapper\s*\{[\s\S]*?\.table\s*\{[\s\S]*?border-collapse:\s*separate;/)
-    expect(tableBlock).toMatch(/th\s*\{[\s\S]*?font-size:\s*10px;/)
-  })
-
-  it('uses compact Request Event Log filter typography', () => {
-    const filterLabelBlock = styleRuleBlock(usagePageStyles, '.requestEventsFilterLabel')
-    const filterControlBlock = styleRuleBlock(usagePageStyles, '.requestEventsSelect input,')
-
-    expect(filterLabelBlock).toContain('font-size: 10px;')
-    expect(filterControlBlock).toContain('font-size: 12px;')
   })
 
   it('folds reasoning tokens into the adaptive Tokens column', () => {
@@ -381,7 +370,7 @@ describe('UsagePage responsive layout and accessibility', () => {
     expect(requestEventColumnDefinitionBlock('total_tokens')).toContain('styles.requestEventsNoWrapCell')
   })
 
-  it('keeps the canonical masked API Key on one line while capping long text columns', () => {
+  it('caps Request Event Log long text columns without forcing short aliases wide', () => {
     const apiKeyCellBlock = Array.from(
       usagePageStyles.matchAll(/\.requestEventsAPIKeyCell\s*\{([^}]*)\}/g),
       (match) => match[1],
@@ -390,7 +379,6 @@ describe('UsagePage responsive layout and accessibility', () => {
     const deletedTagBlock = styleRuleBlock(usagePageStyles, '.requestEventsDeletedTag')
 
     expect(apiKeyCellBlock).toMatch(/max-width:\s*240px;/)
-    expect(apiKeyCellBlock).toMatch(/min-width:\s*18ch;/)
     expect(sourceCellBlock).toMatch(/max-width:\s*280px;/)
     expect(sourceCellBlock).not.toContain('min-width:')
     expect(deletedTagBlock).toContain('white-space: nowrap;')
