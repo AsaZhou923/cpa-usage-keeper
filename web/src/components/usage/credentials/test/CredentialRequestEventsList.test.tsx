@@ -52,12 +52,12 @@ const event: UsageEvent = {
   },
 }
 
-const longModel = 'gpt-5.4-codex-reasoning-ultra-long-context-preview-2026-08-21'
+const longApiKey = 'team-alpha-special-production-api-key-with-long-context-string-2026-08-21'
 
 const mockOverflow = (longUserAgent = '') => {
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100)
   vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function scrollWidth() {
-    return this.textContent === longModel ? 360 : 80
+    return this.textContent === longApiKey ? 360 : 80
   })
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(20)
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function scrollHeight() {
@@ -206,14 +206,20 @@ describe('CredentialRequestEventsList', () => {
     expect(container.querySelector('[data-credential-request-timestamp="1"]')?.textContent)
       .toBe('10:00:002026/08/17')
     expect(container.querySelector('[data-credential-request-model="1"]')?.textContent)
-      .toBe('gpt-5.6keeper-gptusage_stats.reasoning_effort high')
+      .toBe('gpt-5.6keeper-gpt')
+    expect(container.querySelector('[data-credential-request-model="1"]')?.textContent)
+      .not.toContain('usage_stats.reasoning_effort')
+    expect(container.textContent).toContain('usage_stats.request_endpoint: /responses')
+    expect(container.textContent).toContain('usage_stats.reasoning_effort: high')
     expect(container.textContent).not.toContain('usage_stats.model_alias')
     expect(container.querySelector('[data-credential-request-model="1"]')?.getAttribute('title')).toBeNull()
-    expect(Array.from(container.querySelectorAll('[data-credential-request-sub-label]')).map((label) => label.textContent)).toEqual([
-      'usage_stats.reasoning_effort',
-      'usage_stats.ttft',
-      'usage_stats.speed',
-    ])
+    expect(Array.from(container.querySelectorAll('[data-credential-request-sub-label]')).map((label) => label.textContent))
+      .toEqual(expect.arrayContaining([
+        'usage_stats.request_endpoint:',
+        'usage_stats.reasoning_effort:',
+        'usage_stats.ttft:',
+        'usage_stats.speed:',
+      ]))
     const metricCells = container.querySelectorAll<HTMLTableCellElement>('tbody tr:first-child td')
     const tokenCell = metricCells[5]
     const cacheCell = metricCells[6]
@@ -238,6 +244,42 @@ describe('CredentialRequestEventsList', () => {
     expect(container.textContent).not.toContain('usage_stats.request_events_filter_model')
     expect(container.textContent).not.toContain('usage_stats.request_events_filter_source')
     expect(container.textContent).not.toContain('usage_stats.request_events_filter_result')
+  })
+
+  it('stacks a distinct response model between the requested model and alias', async () => {
+    await act(async () => root.render(
+      <CredentialRequestEventsList
+        {...credentialEventListDefaults}
+        events={[{ ...event, response_model: 'gpt-5.6-luna' }]}
+      />,
+    ))
+
+    const modelCell = container.querySelector<HTMLElement>('[data-credential-request-model="1"]')
+    expect(modelCell?.textContent).toBe('gpt-5.6↳ usage_stats.upstream_response_model: gpt-5.6-lunakeeper-gpt')
+    expect(modelCell?.getAttribute('aria-label')).toBe(
+      'usage_stats.model_name: gpt-5.6; usage_stats.upstream_response_model: gpt-5.6-luna; usage_stats.model_alias: keeper-gpt',
+    )
+  })
+
+  it('keeps matching response and alias values in the whole-field model tooltip', async () => {
+    await act(async () => root.render(
+      <CredentialRequestEventsList
+        {...credentialEventListDefaults}
+        events={[{ ...event, response_model: 'gpt-5.6', model_alias: 'GPT-5.6' }]}
+      />,
+    ))
+
+    const modelCell = container.querySelector<HTMLElement>('[data-credential-request-model="1"]')
+    expect(modelCell?.textContent).toBe('gpt-5.6')
+    expect(modelCell?.getAttribute('aria-label')).toBe(
+      'usage_stats.model_name: gpt-5.6; usage_stats.upstream_response_model: gpt-5.6; usage_stats.model_alias: GPT-5.6',
+    )
+
+    await act(async () => modelCell?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+    const tooltipText = document.body.querySelector('[role="tooltip"]')?.textContent
+    expect(tooltipText).toContain('usage_stats.model_name: gpt-5.6')
+    expect(tooltipText).toContain('usage_stats.upstream_response_model: gpt-5.6')
+    expect(tooltipText).toContain('usage_stats.model_alias: GPT-5.6')
   })
 
   it.each([undefined, 0, 3000])('shows the API speed independently of TTFT %s', async (ttft) => {
@@ -363,7 +405,7 @@ describe('CredentialRequestEventsList', () => {
     await act(async () => root.render(
       <CredentialRequestEventsList
         {...credentialEventListDefaults}
-        events={[{ ...event, model: longModel, user_agent: longUserAgent }]}
+        events={[{ ...event, api_key: longApiKey, user_agent: longUserAgent }]}
       />,
     ))
 
@@ -371,16 +413,16 @@ describe('CredentialRequestEventsList', () => {
       container.querySelectorAll<HTMLElement>('[data-credential-request-overflow-target]'),
     ).find((element) => element.textContent === value)
 
-    const modelTarget = findValue(longModel)
-    const aliasTarget = findValue('keeper-gpt')
-    expect(modelTarget!.tabIndex).toBe(0)
-    expect(aliasTarget!.tabIndex).toBe(-1)
+    const apiKeyTarget = findValue(longApiKey)
+    const requestTypeTarget = findValue('SSE')
+    expect(apiKeyTarget!.tabIndex).toBe(0)
+    expect(requestTypeTarget!.tabIndex).toBe(-1)
 
-    await act(async () => modelTarget!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
-    expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(longModel)
-    await act(async () => modelTarget!.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })))
+    await act(async () => apiKeyTarget!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+    expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(longApiKey)
+    await act(async () => apiKeyTarget!.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })))
 
-    await act(async () => aliasTarget!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+    await act(async () => requestTypeTarget!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
     expect(document.body.querySelector('[role="tooltip"]')).toBeNull()
 
     await act(async () => container.querySelector<HTMLButtonElement>('[data-credential-request-event-toggle="1"]')!.click())
@@ -406,27 +448,27 @@ describe('CredentialRequestEventsList', () => {
         <Modal open title="Credential" variant="drawer" onClose={onClose}>
           <CredentialRequestEventsList
             {...credentialEventListDefaults}
-            events={[{ ...event, model: longModel }]}
+            events={[{ ...event, api_key: longApiKey }]}
           />
         </Modal>,
       )
       await vi.advanceTimersByTimeAsync(0)
     })
 
-    const modelTarget = Array.from(
+    const apiKeyTarget = Array.from(
       document.body.querySelectorAll<HTMLElement>('[data-credential-request-overflow-target]'),
-    ).find((element) => element.textContent === longModel)
-    await act(async () => modelTarget!.focus())
-    expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(longModel)
+    ).find((element) => element.textContent === longApiKey)
+    await act(async () => apiKeyTarget!.focus())
+    expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(longApiKey)
 
-    await act(async () => modelTarget!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    await act(async () => apiKeyTarget!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(document.body.querySelector('[role="tooltip"]')).toBeNull()
     expect(onClose).not.toHaveBeenCalled()
 
     const rowToggle = document.body.querySelector<HTMLButtonElement>('[data-credential-request-event-toggle="1"]')
     await act(async () => rowToggle!.focus())
-    await act(async () => modelTarget!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
-    expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(longModel)
+    await act(async () => apiKeyTarget!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+    expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(longApiKey)
 
     await act(async () => rowToggle!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(document.body.querySelector('[role="tooltip"]')).toBeNull()
@@ -437,7 +479,7 @@ describe('CredentialRequestEventsList', () => {
   })
 
   it('opens the selected request log from the result badge', async () => {
-    const logEvent = { ...event, model: longModel }
+    const logEvent = { ...event, api_key: longApiKey }
     const onRequestLogOpen = vi.fn()
     mockOverflow()
     await act(async () => root.render(
@@ -449,11 +491,11 @@ describe('CredentialRequestEventsList', () => {
       />,
     ))
 
-    const modelTarget = Array.from(
+    const apiKeyTarget = Array.from(
       container.querySelectorAll<HTMLElement>('[data-credential-request-overflow-target]'),
-    ).find((element) => element.textContent === longModel)
-    await act(async () => modelTarget!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
-    expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(longModel)
+    ).find((element) => element.textContent === longApiKey)
+    await act(async () => apiKeyTarget!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+    expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(longApiKey)
 
     await act(async () => container.querySelector<HTMLButtonElement>('[data-credential-request-log="1"]')!.click())
     expect(onRequestLogOpen).toHaveBeenCalledWith(logEvent)
@@ -535,7 +577,7 @@ describe('CredentialRequestEventsList', () => {
 
   it('clears an overflow tooltip when its virtual row leaves the window', async () => {
     const events = Array.from({ length: 100 }, (_, index) => (
-      index === 0 ? { ...buildEvent(index), model: longModel } : buildEvent(index)
+      index === 0 ? { ...buildEvent(index), api_key: longApiKey } : buildEvent(index)
     ))
     const onClose = vi.fn()
     mockOverflow()
@@ -552,11 +594,11 @@ describe('CredentialRequestEventsList', () => {
       await vi.advanceTimersByTimeAsync(0)
     })
 
-    const modelTarget = Array.from(
+    const apiKeyTarget = Array.from(
       document.body.querySelectorAll<HTMLElement>('[data-credential-request-overflow-target]'),
-    ).find((element) => element.textContent === longModel)
-    await act(async () => modelTarget!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
-    expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(longModel)
+    ).find((element) => element.textContent === longApiKey)
+    await act(async () => apiKeyTarget!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+    expect(document.body.querySelector('[role="tooltip"]')?.textContent).toBe(longApiKey)
 
     const scroller = document.body.querySelector<HTMLElement>('[data-credential-request-events-scroller="true"]')!
     scroller.scrollTop = 3_500
@@ -564,12 +606,40 @@ describe('CredentialRequestEventsList', () => {
       scroller.dispatchEvent(new Event('scroll'))
       await vi.advanceTimersByTimeAsync(0)
     })
-    expect(modelTarget!.isConnected).toBe(false)
+    expect(apiKeyTarget!.isConnected).toBe(false)
     expect(document.body.querySelector('[role="tooltip"]')).toBeNull()
 
     const visibleToggle = document.body.querySelector<HTMLButtonElement>('[data-credential-request-event-toggle]')
     await act(async () => visibleToggle!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears a model tooltip when its virtual row leaves the window', async () => {
+    const events = Array.from({ length: 100 }, (_, index) => buildEvent(index))
+
+    await act(async () => {
+      root.render(
+        <CredentialRequestEventsList
+          {...credentialEventListDefaults}
+          events={events}
+        />,
+      )
+      await Promise.resolve()
+    })
+
+    const modelCell = container.querySelector<HTMLElement>('[data-credential-request-model="1"]')
+    await act(async () => modelCell?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+    expect(document.body.querySelector('[role="tooltip"]')).not.toBeNull()
+
+    const scroller = container.querySelector<HTMLElement>('[data-credential-request-events-scroller="true"]')!
+    scroller.scrollTop = 3_500
+    await act(async () => {
+      scroller.dispatchEvent(new Event('scroll'))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(modelCell?.isConnected).toBe(false)
+    expect(document.body.querySelector('[role="tooltip"]')).toBeNull()
   })
 
   it('clears a token or cache tooltip when its virtual row leaves the window', async () => {

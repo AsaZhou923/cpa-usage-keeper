@@ -59,10 +59,38 @@ describe('RequestEventsDetailsCard model stack', () => {
     expect(cells[modelHeaderIndex]).toBe('claude-sonnetsonnet-business');
   });
 
-  it.each(['', 'claude-sonnet'])('renders a dash for missing or duplicate alias %j', (modelAlias) => {
+  it.each(['', 'claude-sonnet'])('hides a missing or duplicate alias %j', (modelAlias) => {
     const html = renderCard({ events: [{ ...events[0], model_alias: modelAlias }] });
     const headers = extractTableHeaders(html);
     const cells = extractFirstTableRowCells(html);
-    expect(cells[headers.indexOf('Model')]).toBe('claude-sonnet-');
+    expect(cells[headers.indexOf('Model')]).toBe('claude-sonnet');
+  });
+
+  it('places a distinct response model between model and alias', () => {
+    const html = renderCard({ events: [{ ...events[0], response_model: 'claude-sonnet-4-6' }] });
+    const headers = extractTableHeaders(html);
+    const cells = extractFirstTableRowCells(html);
+
+    expect(cells[headers.indexOf('Model')]).toBe('claude-sonnet↳ Upstream response: claude-sonnet-4-6sonnet-business');
+  });
+
+  it('hides a response model that matches the requested model ignoring case', () => {
+    const html = renderCard({ events: [{ ...events[0], response_model: ' CLAUDE-SONNET ' }] });
+    const headers = extractTableHeaders(html);
+    const cells = extractFirstTableRowCells(html);
+
+    expect(cells[headers.indexOf('Model')]).toBe('claude-sonnetsonnet-business');
+  });
+
+  it('keeps matching response and alias values in the whole-field tooltip', () => {
+    const html = renderCard({
+      events: [{ ...events[0], response_model: 'claude-sonnet', model_alias: 'CLAUDE-SONNET' }],
+    });
+    const headers = extractTableHeaders(html);
+    const cells = extractFirstTableRowCells(html);
+
+    expect(cells[headers.indexOf('Model')]).toBe('claude-sonnet');
+    expect(html).toContain('aria-label="Model: claude-sonnet; Upstream response: claude-sonnet; Model Alias: CLAUDE-SONNET"');
+    expect(html).not.toContain('title="Upstream response:');
   });
 });

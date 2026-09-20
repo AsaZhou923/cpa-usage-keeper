@@ -14,11 +14,13 @@ import (
 func TestUsageServicePreservesEventMetadataForListAndStream(t *testing.T) {
 	db := openUsageServiceTestDatabase(t)
 	modelAlias := " sonnet-business "
+	responseModel := " gpt-5.6-luna "
 	if _, _, err := repository.InsertUsageEvents(db, []entities.UsageEvent{{
 		EventKey:            "model-alias-event",
 		APIGroupKey:         "provider-a",
 		Model:               "claude-sonnet",
 		ModelAlias:          &modelAlias,
+		ResponseModel:       responseModel,
 		ServiceTier:         "auto",
 		ResponseServiceTier: "default",
 		Timestamp:           time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC),
@@ -42,7 +44,7 @@ func TestUsageServicePreservesEventMetadataForListAndStream(t *testing.T) {
 		t.Fatalf("StreamUsageEvents returned error: %v", err)
 	}
 	for name, events := range map[string][]servicedto.UsageEventRecord{"list": page.Events, "stream": streamed} {
-		if len(events) != 1 || events[0].ModelAlias != "sonnet-business" || events[0].ServiceTier != "auto" || events[0].ResponseServiceTier != "default" {
+		if len(events) != 1 || events[0].ModelAlias != "sonnet-business" || events[0].ResponseModel != "gpt-5.6-luna" || events[0].ServiceTier != "auto" || events[0].ResponseServiceTier != "default" {
 			t.Fatalf("%s did not preserve event metadata: %+v", name, events)
 		}
 	}

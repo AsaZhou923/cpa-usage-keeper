@@ -238,7 +238,7 @@ describe('RequestEventsDetailsCard', () => {
   ])('renders only the supplied column selection %j', (props) => {
     const html = renderCard(props);
     expect(tableValues(html)).toEqual({
-      Timestamp: '02:00:002026/04/23', Model: 'claude-sonnet-',
+      Timestamp: '02:00:002026/04/23', Model: 'claude-sonnet',
       ...(props.initialVisibleColumnIds ? { Cost: '$0.1234Claude Style' } : {}),
     });
   });
