@@ -44,6 +44,68 @@ it('preserves proportional areas for tiny shares in wide and narrow treemaps', (
   }
 });
 
+it('keeps five real models before aggregating the sixth and later models as Others', () => {
+  const items = Array.from({ length: 7 }, (_, index) => item(`model-${index}`, {total_tokens: 700 - index * 10}));
+  const view = buildComparisonView(items, 'Others');
+  expect(view.rows.slice(0, 5).every((row) => !row.other)).toBe(true);
+  expect(view.rows[5]).toMatchObject({other: true, label: 'Others'});
+  expect(view.rows).toHaveLength(6);
+  expect(view.rows[5]?.total_tokens).toBe(1290);
+});
+
+it('reserves readable compact treemap cells without overlap', () => {
+  const view = buildComparisonView([
+    item('dominant', {total_tokens: 100_000}),
+    item('second', {total_tokens: 1_000}),
+    item('third', {total_tokens: 100}),
+    item('fourth', {total_tokens: 10}),
+    item('fifth', {total_tokens: 5}),
+    item('sixth', {total_tokens: 1}),
+  ], 'Others');
+  const rects = layoutComparisonTreemap(view.rows, 480 / 224, {widthPx: 480, heightPx: 224, minWidthPx: 60, minHeightPx: 36});
+  expect(rects).toHaveLength(6);
+  for (const rect of rects) {
+    expect(rect.width * 4.8).toBeGreaterThanOrEqual(60 - 0.001);
+    expect(rect.height * 2.24).toBeGreaterThanOrEqual(36 - 0.001);
+  }
+  for (const [index, left] of rects.entries()) {
+    for (const right of rects.slice(index + 1)) {
+      const separated = left.x + left.width <= right.x + 1e-6 || right.x + right.width <= left.x + 1e-6 || left.y + left.height <= right.y + 1e-6 || right.y + right.height <= left.y + 1e-6;
+      expect(separated).toBe(true);
+    }
+  }
+});
+
+it('keeps market-map shapes varied for uneven model shares', () => {
+  const view = buildComparisonView([
+    item('sol', {total_tokens: 698}), item('terra', {total_tokens: 185}), item('codex', {total_tokens: 58}),
+    item('mini', {total_tokens: 23}), item('nano', {total_tokens: 20}), item('tiny', {total_tokens: 16}),
+  ], 'Others');
+  const rects = layoutComparisonTreemap(view.rows, 480 / 224, {widthPx: 480, heightPx: 224, minWidthPx: 60, minHeightPx: 36});
+  expect(new Set(rects.map(rect => Math.round(rect.width * 1000))).size).toBeGreaterThan(2);
+  expect(new Set(rects.map(rect => Math.round(rect.height * 1000))).size).toBeGreaterThan(2);
+});
+
+it('keeps every compact tile readable and non-overlapping at the mobile chart width', () => {
+  const view = buildComparisonView([
+    item('first', {total_tokens: 1000}), item('second', {total_tokens: 120}), item('third', {total_tokens: 60}),
+    item('fourth', {total_tokens: 10}), item('fifth', {total_tokens: 1}), item('sixth', {total_tokens: 1}),
+  ], 'Others');
+  for (const widthPx of [280, 240]) {
+    const rects = layoutComparisonTreemap(view.rows, widthPx / 224, {widthPx, heightPx: 224, minWidthPx: 60, minHeightPx: 36});
+    for (const rect of rects) {
+      expect(rect.width * (widthPx / 100)).toBeGreaterThanOrEqual(60 - 0.001);
+      expect(rect.height * 2.24).toBeGreaterThanOrEqual(36 - 0.001);
+    }
+    for (const [index, left] of rects.entries()) {
+      for (const right of rects.slice(index + 1)) {
+        const separated = left.x + left.width <= right.x + 1e-6 || right.x + right.width <= left.x + 1e-6 || left.y + left.height <= right.y + 1e-6 || right.y + right.height <= left.y + 1e-6;
+        expect(separated).toBe(true);
+      }
+    }
+  }
+});
+
 it('puts model information in the tooltip and Key information in the list without metric switches', async () => {
   await render([item('most-tokens', {total_tokens:800,cost:null}),item('most-requests',{total_tokens:200,requests:1000,cost:50})]);
   const tile=firstChart().querySelector<HTMLButtonElement>('[data-comparison-entry]')!;
