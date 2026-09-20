@@ -76,6 +76,17 @@ it('reserves readable compact treemap cells without overlap', () => {
   }
 });
 
+it('uses both axes instead of collapsing uneven model shares into strips', () => {
+  const view = buildComparisonView([
+    item('sol', {total_tokens: 698}), item('terra', {total_tokens: 185}), item('codex', {total_tokens: 58}),
+    item('mini', {total_tokens: 23}), item('nano', {total_tokens: 20}), item('tiny', {total_tokens: 16}),
+  ], 'Others');
+  const rects = layoutComparisonTreemap(view.rows, 480 / 224, {widthPx: 480, heightPx: 224, minWidthPx: 60, minHeightPx: 36});
+
+  expect(new Set(rects.map(rect => Math.round(rect.width * 1000))).size).toBeGreaterThan(2);
+  expect(new Set(rects.map(rect => Math.round(rect.height * 1000))).size).toBeGreaterThan(2);
+});
+
 it('keeps every compact tile readable and non-overlapping at the mobile chart width', () => {
   const view = buildComparisonView([
     item('first', {total_tokens: 1000}), item('second', {total_tokens: 120}), item('third', {total_tokens: 60}),
