@@ -19,6 +19,7 @@ export const createAuthFileSectionProps = (
   overrides: Partial<ComponentProps<typeof AuthFileCredentialsSection>> = {},
 ): ComponentProps<typeof AuthFileCredentialsSection> => ({
   rows: [],
+  timeZone: 'Asia/Shanghai',
   ...paginationDefaults,
   quotaRefreshing: false,
   quotaRefreshError: '',
