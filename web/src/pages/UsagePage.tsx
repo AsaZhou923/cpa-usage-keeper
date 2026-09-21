@@ -114,6 +114,11 @@ export const getUsageCustomRangeForTab = (
   });
 };
 
+export const resolveCredentialTimeZone = (
+  statusTimeZone?: string,
+  usageTimeZone?: string,
+): string | undefined => statusTimeZone?.trim() || usageTimeZone?.trim() || undefined;
+
 type AnalysisSectionLoadOptions<TCore, TLatency> = {
   loadCore: () => Promise<TCore>;
   loadLatency: () => Promise<TLatency>;
@@ -862,6 +867,7 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
   const activityWindow = manualActivityWindow ?? activity?.window ?? null;
   const activityWindowIsCurrent = manualActivityWindow !== null || activityMatchesRequest;
   const rangeTimeZone = status?.timezone ?? usage?.timezone ?? timeRangeState.timeZone;
+  const credentialTimeZone = resolveCredentialTimeZone(status?.timezone, usage?.timezone);
   const handleTimeRangeChange = useCallback((range: UsageTimeRange, nextCustomRange?: UsageCustomRange) => {
     pendingLegacyCustomRangeRef.current = null;
     try {
@@ -2356,6 +2362,7 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
                   {credentialSectionVisibility.showAuthFiles && (
                     <AuthFileCredentialsSection
                       rows={credentialsData.authFileRows}
+                      timeZone={credentialTimeZone}
                       total={credentialsData.authFileTotal}
                       page={credentialsData.authFilePage}
                       totalPages={credentialsData.authFileTotalPages}
@@ -2448,6 +2455,7 @@ export function UsagePage({ onAuthRequired }: { onAuthRequired?: () => void }) {
       <CredentialDetailDrawer
         open={credentialDetailOpen}
         selection={currentCredentialDetailSelection}
+        timeZone={credentialTimeZone}
         onResetStats={handleCredentialStatsReset}
         onAuthRequired={onAuthRequired}
         requestLogAccessEnabled={requestLogAccessEnabled}
