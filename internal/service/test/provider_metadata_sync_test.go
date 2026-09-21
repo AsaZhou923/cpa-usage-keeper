@@ -29,6 +29,7 @@ func TestProviderMetadataSyncPreservesSourceFields(t *testing.T) {
 	fetcher.standardResults["gemini-interactions"] = &response.ProviderKeyConfigResult{StatusCode: 200, Payload: []providerconfig.ProviderKeyConfig{{APIKey: "secret-interactions", AuthIndex: "auth-interactions", Prefix: "prefix-interactions", BaseURL: "https://interactions.example/v1"}}}
 	fetcher.standardResults["claude"] = &response.ProviderKeyConfigResult{StatusCode: 200, Payload: []providerconfig.ProviderKeyConfig{{APIKey: "secret-claude", AuthIndex: "auth-claude", Prefix: "prefix-claude", BaseURL: "https://claude.example/v1", Name: "Claude Team"}}}
 	fetcher.standardResults["vertex"] = &response.ProviderKeyConfigResult{StatusCode: 200, Payload: []providerconfig.ProviderKeyConfig{{APIKey: "secret-vertex", AuthIndex: "auth-vertex", Prefix: "prefix-vertex", BaseURL: "https://vertex.example/v1", Name: "Vertex Team"}}}
+	fetcher.standardResults["meta"] = &response.ProviderKeyConfigResult{StatusCode: 200, Payload: []providerconfig.ProviderKeyConfig{{APIKey: "secret-meta", AuthIndex: "auth-meta", Prefix: "prefix-meta", BaseURL: "https://meta.example/v1", Priority: &priority, Disabled: &disabled, Note: &note}}}
 	fetcher.openAIResult = &response.OpenAICompatibilityResult{StatusCode: 200, Payload: []providerconfig.OpenAICompatibilityConfig{{Name: "OpenRouter", Prefix: "prefix-openai", BaseURL: "https://openrouter.example/v1", Priority: &priority, Disabled: &disabled, Note: &note, APIKeyEntries: []providerconfig.OpenAIApiKeyEntry{{APIKey: "secret-openai-a", AuthIndex: "auth-openai-a"}, {APIKey: "secret-openai-b", AuthIndex: "auth-openai-b"}}}}}
 	syncer := newMetadataTestSyncer(db, fetcher, func() time.Time { return now })
 	if err := syncer.SyncMetadata(context.Background()); err != nil {
@@ -63,6 +64,10 @@ func TestProviderMetadataSyncPreservesSourceFields(t *testing.T) {
 	if vertexRow.Type != "vertex" || vertexRow.Name != "Vertex Team" || vertexRow.LookupKey != "secret-vertex" {
 		t.Fatalf("vertex provider identity = %+v", vertexRow)
 	}
+	metaRow := identities[metadataIdentityKey(entities.UsageIdentityAuthTypeAIProvider, "auth-meta")]
+	if metaRow.Type != "meta" || metaRow.Name != "Meta" || metaRow.Provider != "Meta" || metaRow.Identity != "auth-meta" || metaRow.LookupKey != "secret-meta" || metaRow.Prefix != "prefix-meta" || metaRow.BaseURL != "https://meta.example/v1" || metaRow.IsDeleted || metaRow.Priority == nil || *metaRow.Priority != priority || metaRow.Disabled == nil || *metaRow.Disabled != disabled || metaRow.Note == nil || *metaRow.Note != note {
+		t.Fatalf("meta provider identity = %+v", metaRow)
+	}
 	openAIFirst := identities[metadataIdentityKey(entities.UsageIdentityAuthTypeAIProvider, "auth-openai-a")]
 	if openAIFirst.Type != "openai" || openAIFirst.Name != "OpenRouter" || openAIFirst.Provider != "OpenRouter" || openAIFirst.LookupKey != "secret-openai-a" || openAIFirst.Prefix != "prefix-openai" || openAIFirst.BaseURL != "https://openrouter.example/v1" {
 		t.Fatalf("first OpenAI compatibility identity = %+v", openAIFirst)
@@ -74,7 +79,7 @@ func TestProviderMetadataSyncPreservesSourceFields(t *testing.T) {
 	if _, ok := identities[metadataIdentityKey(entities.UsageIdentityAuthTypeAIProvider, "prefix-codex")]; ok {
 		t.Fatalf("provider prefix created an identity: %+v", identities)
 	}
-	for _, source := range []string{"codex", "xai", "gemini", "gemini-interactions", "claude", "vertex", "openai"} {
+	for _, source := range []string{"codex", "xai", "gemini", "gemini-interactions", "claude", "vertex", "meta", "openai"} {
 		if fetcher.callCount(source) != 1 {
 			t.Fatalf("%s calls = %d", source, fetcher.callCount(source))
 		}
@@ -87,6 +92,7 @@ func TestProviderMetadataSyncKeepsFailedSourcesAndStalesOnlySuccessfulTypes(t *t
 	now := oldTime.Add(24 * time.Hour)
 	seed := []entities.UsageIdentity{
 		{Name: "Old Gemini", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "old-gemini", Type: "gemini", Provider: "Gemini", CreatedAt: oldTime, UpdatedAt: oldTime},
+		{Name: "Old Meta", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "old-meta", Type: "meta", Provider: "Meta", LookupKey: "old-meta-secret", CreatedAt: oldTime, UpdatedAt: oldTime},
 		{Name: "Old Claude", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "old-claude", Type: "claude", Provider: "Claude", CreatedAt: oldTime, UpdatedAt: oldTime},
 		{Name: "Old Codex", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "old-codex", Type: "codex", Provider: "Codex", CreatedAt: oldTime, UpdatedAt: oldTime},
 		{Name: "Old Vertex", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "old-vertex", Type: "vertex", Provider: "Vertex", CreatedAt: oldTime, UpdatedAt: oldTime},
@@ -97,6 +103,8 @@ func TestProviderMetadataSyncKeepsFailedSourcesAndStalesOnlySuccessfulTypes(t *t
 	fetcher := newMetadataTestFetcher()
 	fetcher.standardResults["gemini"] = nil
 	fetcher.standardErrors["gemini"] = errors.New("gemini unavailable")
+	fetcher.standardResults["meta"] = nil
+	fetcher.standardErrors["meta"] = errors.New("meta unavailable")
 	fetcher.standardResults["claude"] = &response.ProviderKeyConfigResult{StatusCode: 200, Payload: []providerconfig.ProviderKeyConfig{}}
 	fetcher.standardResults["codex"] = nil
 	fetcher.standardResults["vertex"] = &response.ProviderKeyConfigResult{StatusCode: 200, Payload: []providerconfig.ProviderKeyConfig{{APIKey: "invalid-without-auth-index"}}}
@@ -109,6 +117,10 @@ func TestProviderMetadataSyncKeepsFailedSourcesAndStalesOnlySuccessfulTypes(t *t
 	geminiRow := identities[metadataIdentityKey(entities.UsageIdentityAuthTypeAIProvider, "old-gemini")]
 	if geminiRow.IsDeleted || geminiRow.DeletedAt != nil || !geminiRow.UpdatedAt.Equal(oldTime) {
 		t.Fatalf("failed Gemini identity = %+v", geminiRow)
+	}
+	metaRow := identities[metadataIdentityKey(entities.UsageIdentityAuthTypeAIProvider, "old-meta")]
+	if metaRow.IsDeleted || metaRow.DeletedAt != nil || !metaRow.UpdatedAt.Equal(oldTime) {
+		t.Fatalf("failed Meta identity = %+v", metaRow)
 	}
 	codexRow := identities[metadataIdentityKey(entities.UsageIdentityAuthTypeAIProvider, "old-codex")]
 	if codexRow.IsDeleted || codexRow.DeletedAt != nil || !codexRow.UpdatedAt.Equal(oldTime) {
@@ -134,6 +146,7 @@ func TestProviderMetadataSyncNewSourcesTreatOnlyTyped404AsOptional(t *testing.T)
 		{Name: "xAI OAuth", AuthType: entities.UsageIdentityAuthTypeAuthFile, AuthTypeName: "oauth", Identity: "shared-xai-auth", Type: "xai", Provider: "xAI", CreatedAt: oldTime, UpdatedAt: oldTime},
 		{Name: "xAI API Key", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "shared-xai-auth", Type: "xai", Provider: "xAI", LookupKey: "old-xai-secret", CreatedAt: oldTime, UpdatedAt: oldTime},
 		{Name: "Interactions", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "old-interactions", Type: "gemini-interactions", Provider: "Gemini Interactions", LookupKey: "old-interactions-secret", CreatedAt: oldTime, UpdatedAt: oldTime},
+		{Name: "Meta", AuthType: entities.UsageIdentityAuthTypeAIProvider, AuthTypeName: "apikey", Identity: "old-meta", Type: "meta", Provider: "Meta", LookupKey: "old-meta-secret", CreatedAt: oldTime, UpdatedAt: oldTime},
 	}
 	if err := db.Create(&seed).Error; err != nil {
 		t.Fatalf("seed new provider identities: %v", err)
@@ -144,6 +157,8 @@ func TestProviderMetadataSyncNewSourcesTreatOnlyTyped404AsOptional(t *testing.T)
 	fetcher.standardErrors["xai"] = errors.New("xai endpoint missing")
 	fetcher.standardResults["gemini-interactions"] = &response.ProviderKeyConfigResult{StatusCode: 404}
 	fetcher.standardErrors["gemini-interactions"] = errors.New("interactions endpoint missing")
+	fetcher.standardResults["meta"] = &response.ProviderKeyConfigResult{StatusCode: 404}
+	fetcher.standardErrors["meta"] = errors.New("meta endpoint missing")
 	currentNow := firstNow
 	syncer := newMetadataTestSyncer(db, fetcher, func() time.Time { return currentNow })
 	if err := syncer.SyncMetadata(context.Background()); err != nil {
@@ -158,10 +173,16 @@ func TestProviderMetadataSyncNewSourcesTreatOnlyTyped404AsOptional(t *testing.T)
 	if interactions.IsDeleted || interactions.DeletedAt != nil || !interactions.UpdatedAt.Equal(oldTime) {
 		t.Fatalf("Interactions after typed 404 = %+v", interactions)
 	}
+	metaProvider := firstRows[metadataIdentityKey(entities.UsageIdentityAuthTypeAIProvider, "old-meta")]
+	if metaProvider.IsDeleted || metaProvider.DeletedAt != nil || !metaProvider.UpdatedAt.Equal(oldTime) {
+		t.Fatalf("Meta provider after typed 404 = %+v", metaProvider)
+	}
 	fetcher.standardResults["xai"] = &response.ProviderKeyConfigResult{StatusCode: 200, Payload: []providerconfig.ProviderKeyConfig{}}
 	fetcher.standardErrors["xai"] = nil
 	fetcher.standardResults["gemini-interactions"] = &response.ProviderKeyConfigResult{StatusCode: 200, Payload: []providerconfig.ProviderKeyConfig{}}
 	fetcher.standardErrors["gemini-interactions"] = nil
+	fetcher.standardResults["meta"] = &response.ProviderKeyConfigResult{StatusCode: 200, Payload: []providerconfig.ProviderKeyConfig{}}
+	fetcher.standardErrors["meta"] = nil
 	currentNow = secondNow
 	if err := syncer.SyncMetadata(context.Background()); err != nil {
 		t.Fatalf("empty-list SyncMetadata returned error: %v", err)
@@ -174,6 +195,10 @@ func TestProviderMetadataSyncNewSourcesTreatOnlyTyped404AsOptional(t *testing.T)
 	interactions = secondRows[metadataIdentityKey(entities.UsageIdentityAuthTypeAIProvider, "old-interactions")]
 	if !interactions.IsDeleted || interactions.DeletedAt == nil || !interactions.DeletedAt.Equal(secondNow) || !interactions.UpdatedAt.Equal(secondNow) {
 		t.Fatalf("Interactions after empty list = %+v", interactions)
+	}
+	metaProvider = secondRows[metadataIdentityKey(entities.UsageIdentityAuthTypeAIProvider, "old-meta")]
+	if !metaProvider.IsDeleted || metaProvider.DeletedAt == nil || !metaProvider.DeletedAt.Equal(secondNow) || !metaProvider.UpdatedAt.Equal(secondNow) {
+		t.Fatalf("Meta provider after empty list = %+v", metaProvider)
 	}
 	xAIOAuth := secondRows[metadataIdentityKey(entities.UsageIdentityAuthTypeAuthFile, "shared-xai-auth")]
 	// provider stale 不能跨 auth_type 删除 OAuth 行。
@@ -194,14 +219,14 @@ type providerPersistenceProjection struct {
 }
 
 func TestProviderMetadataSyncCompletionOrderDoesNotChangeDatabase(t *testing.T) {
-	registryOrder := []string{"codex", "xai", "gemini", "gemini-interactions", "claude", "vertex", "openai"}
+	registryOrder := []string{"codex", "xai", "gemini", "gemini-interactions", "claude", "vertex", "meta", "openai"}
 	orders := []struct {
 		name            string
 		completionOrder []string
 	}{
-		{name: "forward", completionOrder: []string{"codex", "xai", "gemini", "gemini-interactions", "claude", "vertex", "openai"}},
-		{name: "reverse", completionOrder: []string{"openai", "vertex", "claude", "gemini-interactions", "gemini", "xai", "codex"}},
-		{name: "mixed", completionOrder: []string{"gemini", "openai", "codex", "claude", "xai", "vertex", "gemini-interactions"}},
+		{name: "forward", completionOrder: []string{"codex", "xai", "gemini", "gemini-interactions", "claude", "vertex", "meta", "openai"}},
+		{name: "reverse", completionOrder: []string{"openai", "meta", "vertex", "claude", "gemini-interactions", "gemini", "xai", "codex"}},
+		{name: "mixed", completionOrder: []string{"gemini", "openai", "codex", "claude", "xai", "meta", "vertex", "gemini-interactions"}},
 	}
 	want := make(map[string]providerPersistenceProjection, len(registryOrder))
 	for _, source := range registryOrder {

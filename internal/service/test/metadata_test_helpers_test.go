@@ -22,7 +22,7 @@ type standardMetadataHook func(context.Context) (*response.ProviderKeyConfigResu
 
 type openAIMetadataHook func(context.Context) (*response.OpenAICompatibilityResult, error)
 
-// metadataTestFetcher 是七来源并发安全的函数式测试 fetcher，默认所有 endpoint 成功返回空列表。
+// metadataTestFetcher 是八来源并发安全的函数式测试 fetcher，默认所有 endpoint 成功返回空列表。
 type metadataTestFetcher struct {
 	callsMu                 sync.Mutex
 	calls                   map[string]int
@@ -48,7 +48,7 @@ func newMetadataTestFetcher() *metadataTestFetcher {
 		standardHooks:           make(map[string]standardMetadataHook),
 		openAIResult:            &response.OpenAICompatibilityResult{StatusCode: 200, Payload: []providerconfig.OpenAICompatibilityConfig{}},
 	}
-	for _, source := range []string{"codex", "xai", "gemini", "gemini-interactions", "claude", "vertex"} {
+	for _, source := range []string{"codex", "xai", "gemini", "gemini-interactions", "claude", "vertex", "meta"} {
 		// 每个 source 使用独立 result 指针，测试可以只替换目标来源。
 		fetcher.standardResults[source] = &response.ProviderKeyConfigResult{StatusCode: 200, Payload: []providerconfig.ProviderKeyConfig{}}
 	}
@@ -113,6 +113,10 @@ func (f *metadataTestFetcher) FetchClaudeAPIKeys(ctx context.Context) (*response
 
 func (f *metadataTestFetcher) FetchVertexAPIKeys(ctx context.Context) (*response.ProviderKeyConfigResult, error) {
 	return f.fetchStandardProvider(ctx, "vertex")
+}
+
+func (f *metadataTestFetcher) FetchMetaAPIKeys(ctx context.Context) (*response.ProviderKeyConfigResult, error) {
+	return f.fetchStandardProvider(ctx, "meta")
 }
 
 func (f *metadataTestFetcher) FetchOpenAICompatibility(ctx context.Context) (*response.OpenAICompatibilityResult, error) {
