@@ -8,10 +8,12 @@ const (
 	cpaManagementGeminiAPIKeyEndpoint        = "/v0/management/gemini-api-key"
 	cpaManagementCodexAPIKeyEndpoint         = "/v0/management/codex-api-key"
 	cpaManagementClaudeAPIKeyEndpoint        = "/v0/management/claude-api-key"
+	cpaManagementMetaAPIKeyEndpoint          = "/v0/management/meta-api-key"
 	cpaManagementAmpcodeEndpoint             = "/v0/management/ampcode"
 	cpaManagementOpenAICompatibilityEndpoint = "/v0/management/openai-compatibility"
 	cpaManagementUsageQueueEndpoint          = "/v0/management/usage-queue"
 	cpaManagementAPICallEndpoint             = "/v0/management/api-call"
+	cpaManagementResetQuotaEndpoint          = "/v0/management/reset-quota"
 	cpaManagementRequestLogByIDEndpoint      = "/v0/management/request-log-by-id"
 	cpaModelsEndpoint                        = "/v1/models"
 

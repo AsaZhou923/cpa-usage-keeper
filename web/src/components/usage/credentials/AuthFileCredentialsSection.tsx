@@ -1,22 +1,25 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
+import { Button } from '@/components/ui/Button'
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner'
 import { MainActionButton } from '@/components/ui/MainActionButton'
 import { Modal } from '@/components/ui/Modal'
+import { Select } from '@/components/ui/Select'
 import { IconChartLine, IconGaugeReset, IconRefreshCw, IconSearch, IconSettings, IconShield, IconTrash2 } from '@/components/ui/icons'
 import quotaCostIcon from '@/assets/icons/quota-cost.svg'
 import quotaTokenIcon from '@/assets/icons/quota-token.svg'
 import styles from './CredentialSections.module.scss'
-import type { AuthFileCredentialRow, DisplayQuota } from './credentialViewModels'
+import { formatCredentialTimestamp, type AuthFileCredentialRow, type DisplayQuota } from './credentialViewModels'
 import { deleteAuthFiles, fetchQuotaAutoRefreshSettings, fetchUsageQuotaResetCredits, setAuthFilesDisabled, updateQuotaAutoRefreshSettings, type UsageIdentityPageSort } from '@/lib/api'
 import type { QuotaAutoRefreshScheduleUnit, QuotaAutoRefreshSettings, UsageQuotaInspectionResult, UsageQuotaInspectionResultStatus, UsageQuotaInspectionStatusResponse, UsageQuotaResetCreditsResponse } from '@/lib/types'
 import { CredentialAliasEditor, isCredentialAliasEditorDisabled } from './CredentialAliasEditor'
 import { CredentialHealthPanel } from './CredentialHealthPanel'
 import { CredentialSubscriptionBadge } from './CredentialSubscriptionBadge'
 import { CredentialPriorityBadge, CredentialRowShell, CredentialSectionShell, CredentialTableHeader, CredentialsPagination, MetricPill, RequestMetric, TonePercent, cacheReadRateTone, capitalize, credentialToneClassName, formatCredentialNumber, successRateTone } from './CredentialSectionShell'
-import { ProviderBrandIcon } from '@/components/ProviderBrandIcon'
-import { MONITORING_TIME_ZONE, formatTokyoDateTime, formatTokyoMonthDayTime } from '@/utils/time'
+import { ProviderBrandIcon, providerBrandIconKey } from '@/components/ProviderBrandIcon'
+import { CredentialStatusToggle } from './CredentialStatusToggle'
+import { MONITORING_TIME_ZONE, formatTokyoDateTime } from '@/utils/time'
 
 type Translate = (key: string, options?: Record<string, string>) => string
 type InspectionIndicatorTone = 'idle' | 'running' | 'completed'
@@ -91,6 +94,7 @@ const AUTO_REFRESH_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const
 
 interface AuthFileCredentialsSectionProps {
   rows: AuthFileCredentialRow[]
+  timeZone?: string
   total: number
   page: number
   totalPages: number
@@ -116,12 +120,15 @@ interface AuthFileCredentialsSectionProps {
   aliasSavingId?: string
   onSaveAlias?: (id: string, alias: string) => Promise<void>
   onOpenDetails?: (row: AuthFileCredentialRow) => void
+  /** 正在写入上游状态的 Keeper identity id 集合，用于阻止重复点击。 */
+  statusPendingIdentityIds?: ReadonlySet<string>
+  onToggleStatus?: (identityId: string, authIndex: string, disabled: boolean) => void
   onRefreshInspectionStatus: () => Promise<void>
   onStartInspection: () => Promise<void>
   onAfterInvalidAccountAction?: () => Promise<void>
 }
 
-export function AuthFileCredentialsSection({ rows, total, page, totalPages, pageSize, activeOnly, sort, loading, quotaRefreshing, quotaRefreshError, quotaAutoRefreshEnabled = false, quotaInspectionStatus, quotaInspectionLoading, quotaInspectionStarting, quotaInspectionError, readOnly = false, onPageChange, onPageSizeChange, onActiveOnlyChange, onSortChange, onRefreshQuota, onRefreshQuotaForAuthIndex, onResetQuotaForAuthIndex, aliasSavingId, onSaveAlias, onOpenDetails, onRefreshInspectionStatus, onStartInspection, onAfterInvalidAccountAction }: AuthFileCredentialsSectionProps) {
+export function AuthFileCredentialsSection({ rows, timeZone, total, page, totalPages, pageSize, activeOnly, sort, loading, quotaRefreshing, quotaRefreshError, quotaAutoRefreshEnabled = false, quotaInspectionStatus, quotaInspectionLoading, quotaInspectionStarting, quotaInspectionError, readOnly = false, onPageChange, onPageSizeChange, onActiveOnlyChange, onSortChange, onRefreshQuota, onRefreshQuotaForAuthIndex, onResetQuotaForAuthIndex, aliasSavingId, onSaveAlias, onOpenDetails, statusPendingIdentityIds, onToggleStatus, onRefreshInspectionStatus, onStartInspection, onAfterInvalidAccountAction }: AuthFileCredentialsSectionProps) {
   const { t } = useTranslation()
   const [inspectionOpen, setInspectionOpen] = useState(false)
   const [quotaUsageMode, setQuotaUsageMode] = useState<QuotaUsageMode>('current')
@@ -261,7 +268,22 @@ export function AuthFileCredentialsSection({ rows, total, page, totalPages, page
         return (
           <CredentialRowShell
             key={rowKey}
-            icon={<ProviderBrandIcon providerType={row.identity.type} size={30} ariaLabel={row.typeLabel} />}
+            icon={(
+              // 认证文件 type 直接来自 CPA，可能是不认识的类型；没有品牌图标的类型不给开关，
+              // 否则左侧图标槽位会变成一个看不见却可点、可 Tab 的按钮。
+              canManage && providerBrandIconKey(row.identity.type) ? (
+                <CredentialStatusToggle
+                  providerType={row.identity.type}
+                  displayName={row.displayName}
+                  disabled={row.identity.disabled}
+                  pending={statusPendingIdentityIds?.has(row.identity.id || row.identity.identity) ?? false}
+                  readOnly={row.identity.is_deleted}
+                  onToggle={(disabled) => onToggleStatus?.(row.identity.id || row.identity.identity, row.identity.identity, disabled)}
+                />
+              ) : (
+                <ProviderBrandIcon providerType={row.identity.type} size={30} ariaLabel={row.typeLabel} />
+              )
+            )}
             title={onSaveAlias ? (
               <CredentialAliasEditor
                 identityId={row.identity.id}
@@ -280,7 +302,7 @@ export function AuthFileCredentialsSection({ rows, total, page, totalPages, page
                 onClick={() => onOpenDetails(row)}
               >
                 <span className={styles.credentialDetailNameText}>{row.displayName}</span>
-                <span className={styles.credentialDetailNameArrow} aria-hidden="true">›</span>
+                <span className={styles.credentialDetailNameArrow} aria-hidden="true">‹</span>
               </button>
             ) : <span>{row.displayName}</span>}
             subtitle={row.subscriptionBadge || row.remainingDaysLabel || row.priorityLabel ? (
@@ -321,6 +343,7 @@ export function AuthFileCredentialsSection({ rows, total, page, totalPages, page
               </span>
             ) : undefined}
             badges={null}
+            metricsTitle={row.identity.stats_reset_at ? t('usage_stats.credentials_stats_since', { time: formatCredentialTimestamp(row.identity.stats_reset_at) ?? row.identity.stats_reset_at }) : undefined}
             metrics={(
               <>
                 <MetricPill value={<RequestMetric total={row.totalRequests} success={row.successCount} failure={row.failureCount} />} />
@@ -336,7 +359,7 @@ export function AuthFileCredentialsSection({ rows, total, page, totalPages, page
               <AuthFileQuotaPanel row={row} quotaUsageMode={quotaUsageMode} />
             ) : (
               <div className={styles.credentialQuotaSideWithAction}>
-                <AuthFileQuotaPanel row={row} quotaUsageMode={quotaUsageMode} />
+                <AuthFileQuotaPanel row={row} quotaUsageMode={quotaUsageMode} timeZone={timeZone} />
                 <div className={styles.credentialQuotaActionStack}>
                   {/* reset 按钮只在官方缓存给出可用次数时展示；refresh 始终保留在右侧列居中位置。 */}
                   {resetCredits > 0 && (
@@ -1190,9 +1213,14 @@ export function QuotaInspectionModal({
               <div className={styles.credentialInspectionResultsFooter}>
                 <label className={styles.credentialInspectionPageSizeControl}>
                   <span>{t('usage_stats.rows_per_page')}</span>
-                  <select value={resultPageData.pageSize} onChange={(event) => handleResultPageSizeChange(Number(event.target.value))}>
-                    {INSPECTION_RESULT_PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-                  </select>
+                  <Select
+                    value={String(resultPageData.pageSize)}
+                    options={INSPECTION_RESULT_PAGE_SIZE_OPTIONS.map((option) => ({ value: String(option), label: String(option) }))}
+                    onChange={(next) => handleResultPageSizeChange(Number(next))}
+                    ariaLabel={`${t('usage_stats.rows_per_page')}: ${resultPageData.pageSize}`}
+                    className={styles.credentialInspectionPageSizeSelect}
+                    fullWidth={false}
+                  />
                 </label>
                 <div className={styles.credentialInspectionPagination}>
                   <button type="button" onClick={() => setResultPage(resultPageData.page - 1)} disabled={resultPageData.page <= 1}>{t('usage_stats.previous_page')}</button>
@@ -1328,12 +1356,17 @@ export function QuotaAutoRefreshSettingsModal({
             {unit === 'week' ? (
               <label className={styles.credentialAutoRefreshIntervalField}>
                 <span className={styles.credentialAutoRefreshIntervalLabel}>{t('usage_stats.credentials_auto_refresh_weekday')}</span>
-                <select value={value} onChange={(event) => onValueChange(event.target.value)} disabled={scheduleControlsDisabled}>
-                  <option value="">{t('usage_stats.credentials_auto_refresh_select')}</option>
-                  {AUTO_REFRESH_WEEKDAYS.map((weekday) => (
-                    <option key={weekday} value={weekday}>{t(`usage_stats.credentials_auto_refresh_weekday_${weekday}`)}</option>
-                  ))}
-                </select>
+                <Select
+                  value={value}
+                  options={[
+                    { value: '', label: t('usage_stats.credentials_auto_refresh_select') },
+                    ...AUTO_REFRESH_WEEKDAYS.map((weekday) => ({ value: String(weekday), label: t(`usage_stats.credentials_auto_refresh_weekday_${weekday}`) })),
+                  ]}
+                  onChange={onValueChange}
+                  disabled={scheduleControlsDisabled}
+                  ariaLabel={`${t('usage_stats.credentials_auto_refresh_weekday')}: ${t(value ? `usage_stats.credentials_auto_refresh_weekday_${value}` : 'usage_stats.credentials_auto_refresh_select')}`}
+                  className={styles.credentialAutoRefreshWeekdaySelect}
+                />
               </label>
             ) : (
               <label className={styles.credentialAutoRefreshIntervalField}>
@@ -1399,19 +1432,20 @@ function InvalidInspectionAccountModal({
       closeDisabled={submitting}
       footer={(
         <div className={styles.credentialInvalidAccountFooter}>
-          <button type="button" className={styles.credentialInvalidAccountCancelButton} onClick={onCancel} disabled={submitting}>
+          <Button type="button" variant="secondary" appearance="action" onClick={onCancel} disabled={submitting}>
             {t('common.cancel')}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className={`${styles.credentialInvalidAccountConfirmButton} ${action === 'delete' ? styles.credentialInvalidAccountConfirmButtonDanger : ''}`.trim()}
+            variant={action === 'delete' ? 'danger' : 'primary'}
+            appearance="action"
             onClick={onConfirm}
             disabled={submitting || selectedFileNames.length === 0}
+            loading={submitting}
             aria-busy={submitting}
           >
-            {submitting && <LoadingSpinner size={13} />}
-            <span>{t('usage_stats.credentials_inspection_invalid_accounts_confirm', { action: actionLabel })}</span>
-          </button>
+            {t('usage_stats.credentials_inspection_invalid_accounts_confirm', { action: actionLabel })}
+          </Button>
         </div>
       )}
     >
@@ -1626,7 +1660,7 @@ function isAuthFileDisplayMode(value: string | null | undefined): value is AuthF
   return value === 'quota' || value === 'health'
 }
 
-export function AuthFileQuotaPanel({ row, quotaUsageMode }: { row: AuthFileCredentialRow; quotaUsageMode: QuotaUsageMode }) {
+export function AuthFileQuotaPanel({ row, quotaUsageMode, timeZone }: { row: AuthFileCredentialRow; quotaUsageMode: QuotaUsageMode; timeZone?: string }) {
   const { t } = useTranslation()
 
   // 限额区域按加载、错误、刷新中、无缓存、可展示数据的顺序降级。
@@ -1656,8 +1690,8 @@ export function AuthFileQuotaPanel({ row, quotaUsageMode }: { row: AuthFileCrede
       <div className={styles.credentialQuotaBars}>
         {/* 只有 canonical Antigravity 组提升为共享标题；其它 provider 继续沿用原始扁平 QuotaBar。 */}
         {authFileQuotaPanelItems(row.displayQuotas).map((item) => item.kind === 'group'
-          ? <AntigravityQuotaGroup key={item.renderKey} group={item} quotaUsageMode={quotaUsageMode} />
-          : <QuotaBar key={item.quota.key} quota={item.quota} quotaUsageMode={quotaUsageMode} tooltipAlignRight={item.tooltipAlignRight} />)}
+          ? <AntigravityQuotaGroup key={item.renderKey} group={item} quotaUsageMode={quotaUsageMode} timeZone={timeZone} />
+          : <QuotaBar key={item.quota.key} quota={item.quota} quotaUsageMode={quotaUsageMode} timeZone={timeZone} tooltipAlignRight={item.tooltipAlignRight} />)}
       </div>
     </div>
   )
@@ -1710,7 +1744,7 @@ function authFileQuotaPanelItems(quotas: DisplayQuota[]): AuthFileQuotaPanelItem
   return items
 }
 
-function AntigravityQuotaGroup({ group, quotaUsageMode }: { group: AntigravityQuotaGroupItem; quotaUsageMode: QuotaUsageMode }) {
+function AntigravityQuotaGroup({ group, quotaUsageMode, timeZone }: { group: AntigravityQuotaGroupItem; quotaUsageMode: QuotaUsageMode; timeZone?: string }) {
   return (
     <div className={styles.credentialQuotaGroupBlock} data-quota-group={group.groupKey}>
       <div className={styles.credentialQuotaGroupHeader}>
@@ -1718,7 +1752,7 @@ function AntigravityQuotaGroup({ group, quotaUsageMode }: { group: AntigravityQu
       </div>
       <div className={styles.credentialQuotaGroupBars}>
         {group.quotas.map((quota) => (
-          <QuotaBar key={quota.key} quota={quota} quotaUsageMode={quotaUsageMode} showGroupMetadata={false} />
+          <QuotaBar key={quota.key} quota={quota} quotaUsageMode={quotaUsageMode} timeZone={timeZone} showGroupMetadata={false} />
         ))}
       </div>
     </div>
@@ -1895,13 +1929,32 @@ function truncateQuotaErrorMessage(value: string): string {
   return `${value.slice(0, QUOTA_ERROR_MESSAGE_MAX_LENGTH).trimEnd()}...`
 }
 
-export function formatQuotaResetLabel(resetAt: string): string {
+export function formatQuotaResetLabel(resetAt: string, timeZone?: string): string {
   const resetTime = new Date(resetAt)
   const resetMs = resetTime.getTime()
   if (!Number.isFinite(resetMs)) {
     return ''
   }
-  return formatTokyoMonthDayTime(resetTime)
+  const normalizedTimeZone = timeZone?.trim()
+  if (!normalizedTimeZone || normalizedTimeZone === 'Local') {
+    return ''
+  }
+  try {
+    // resetAt 保留 CPA 给出的绝对时刻，只用 Keeper 项目时区生成墙上时间，避免受浏览器时区影响。
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: normalizedTimeZone,
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(resetTime)
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+    return `${values.month}/${values.day} ${values.hour}:${values.minute}`
+  } catch {
+    // Go 的 Local 或浏览器不认识的 IANA 名称无法可靠映射到 Keeper 墙上时间，隐藏标签而不是猜浏览器时区。
+    return ''
+  }
 }
 
 export function formatQuotaResetDuration(resetAt: string): string {
@@ -1931,13 +1984,13 @@ export function formatQuotaBillingUsageAriaLabel(t: Translate, billingUsage: Non
   })
 }
 
-function QuotaBar({ quota, quotaUsageMode, showGroupMetadata = true, tooltipAlignRight = false }: { quota: DisplayQuota; quotaUsageMode: QuotaUsageMode; showGroupMetadata?: boolean; tooltipAlignRight?: boolean }) {
+function QuotaBar({ quota, quotaUsageMode, timeZone, showGroupMetadata = true, tooltipAlignRight = false }: { quota: DisplayQuota; quotaUsageMode: QuotaUsageMode; timeZone?: string; showGroupMetadata?: boolean; tooltipAlignRight?: boolean }) {
   const { t } = useTranslation()
   // 条宽使用剩余额度百分比，颜色跟随剩余风险状态从绿到黄到红。
   const percent = quota.barPercent ?? 0
   const width = `${Math.max(0, Math.min(100, percent))}%`
   const percentLabel = quota.barPercent === null ? '' : `${Math.round(quota.barPercent)}%`
-  const resetLabel = quota.resetText ? formatQuotaResetLabel(quota.resetText) : ''
+  const resetLabel = quota.resetText ? formatQuotaResetLabel(quota.resetText, timeZone) : ''
   const resetDuration = quota.resetText ? formatQuotaResetDuration(quota.resetText) : ''
   const billingUsage = quota.billingUsage
   const windowUsage = billingUsage ? undefined : quotaWindowUsageForMode(quota, quotaUsageMode)

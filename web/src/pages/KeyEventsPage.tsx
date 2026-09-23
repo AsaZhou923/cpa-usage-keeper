@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MainActionButton } from '@/components/ui/MainActionButton';
-import { IconRefreshCw } from '@/components/ui/icons';
 import { TimeRangeControl } from '@/components/usage';
 import {
   RequestEventsDetailsCard,
@@ -303,45 +301,15 @@ export function KeyEventsPage({ apiKey, onNavigate, onAuthRequired }: KeyEventsP
       : error === 'KEY_OVERVIEW_EVENTS_EXPORT_FAILED'
         ? t('notification.download_failed')
         : error;
-  const toolbar = (
-    <>
-      <div className={styles.usageFilterBar}>
-        <TimeRangeControl
-          value={timeRange}
-          customRange={customRange}
-          timeZone={rangeTimeZone}
-          onChange={handleTimeRangeChange}
-          ariaLabel={t('usage_stats.range_filter')}
-        />
-      </div>
-      <div className={styles.usageRefreshSlot}>
-        <div className={styles.usageFilterActions}>
-          <MainActionButton
-            type="button"
-            shellClassName={styles.refreshMainActionShell}
-            className={styles.refreshMainActionButton}
-            onClick={() => void handleManualRefresh()}
-            disabled={manualRefreshLoading}
-            loading={manualRefreshLoading}
-          >
-            {manualRefreshLoading ? t('common.loading') : (
-              <>
-                <IconRefreshCw size={14} />
-                <span>{t('usage_stats.refresh')}</span>
-              </>
-            )}
-          </MainActionButton>
-        </div>
-      </div>
-    </>
-  );
-
   return (
     <KeyViewerShell
       activePage="events"
       apiKey={apiKey}
       loading={loading && events.length === 0}
-      toolbar={toolbar}
+      filters={[<TimeRangeControl key="range" value={timeRange} customRange={customRange} timeZone={rangeTimeZone} onChange={handleTimeRangeChange} ariaLabel={t('usage_stats.range_filter')} labelInsideTrigger />]}
+      onRefresh={() => void handleManualRefresh()}
+      refreshing={manualRefreshLoading}
+      refreshDisabled={manualRefreshLoading}
       onNavigate={onNavigate}
       onAuthRequired={onAuthRequired}
     >

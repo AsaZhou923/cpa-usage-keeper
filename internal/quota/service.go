@@ -39,6 +39,8 @@ type Service struct {
 
 	refreshMu    sync.Mutex
 	refreshTasks map[string]*RefreshTaskRecord
+	// nextRefreshTaskCleanupAt 由 refreshMu 保护，只限制读取接口的全量清理频率。
+	nextRefreshTaskCleanupAt time.Time
 	// resetInFlight 按 auth_index 记录正在消费的 reset credit，避免并发重复扣减官方次数。
 	resetMu       sync.Mutex
 	resetInFlight map[string]struct{}
@@ -90,6 +92,8 @@ type Service struct {
 	codexQuotaHistoryTrustedQueue chan codexQuotaHistoryInput
 	// codexQuotaHistoryTrustedWake 让可信来源跳过 Header 一分钟窗口并立即触发 runner。
 	codexQuotaHistoryTrustedWake chan struct{}
+	// 删除命令与采样共用唯一 runner，避免事务提交后旧缓存继续写回。
+	codexQuotaHistoryDelete chan codexQuotaHistoryDeleteRequest
 	// codexQuotaHistoryStopCh 只表达 runner 停止；队列不关闭以避免并发发送 panic。
 	codexQuotaHistoryStopCh chan struct{}
 	// codexQuotaHistoryDoneCh 在 shutdown best-effort flush 完成后关闭。
@@ -127,13 +131,13 @@ type CheckResponse struct {
 	RateLimitResetCreditsAvailableCount *int              `json:"rateLimitResetCreditsAvailableCount,omitempty"`
 }
 
-func NewService(db *gorm.DB, caller ManagementAPICaller, pricingCatalog *pricing.Catalog) *Service {
+func NewService(db *gorm.DB, caller ManagementClient, pricingCatalog *pricing.Catalog) *Service {
 	return NewServiceWithOptions(db, caller, ServiceOptions{PricingCatalog: pricingCatalog})
 }
 
-func NewServiceWithOptions(db *gorm.DB, caller ManagementAPICaller, options ServiceOptions) *Service {
+func NewServiceWithOptions(db *gorm.DB, caller ManagementClient, options ServiceOptions) *Service {
 	if options.QuotaUpstreamResponsesEnabled {
-		caller = upstreamResponseRecordingCaller{caller: caller}
+		caller = upstreamResponseRecordingCaller{ManagementClient: caller}
 	}
 	return NewServiceWithRegistryAndOptions(db, NewDefaultProviderRegistry(caller, DefaultProviderConfigs()), options)
 }
@@ -197,6 +201,7 @@ func NewServiceWithRegistryAndOptions(db *gorm.DB, registry ProviderRegistry, op
 		codexQuotaHistoryHeaderWake:        make(chan struct{}, 1),
 		codexQuotaHistoryTrustedQueue:      make(chan codexQuotaHistoryInput, codexHistoryQueueSize),
 		codexQuotaHistoryTrustedWake:       make(chan struct{}, 1),
+		codexQuotaHistoryDelete:            make(chan codexQuotaHistoryDeleteRequest),
 		codexQuotaHistoryStopCh:            make(chan struct{}),
 		codexQuotaHistoryDoneCh:            make(chan struct{}),
 		codexQuotaHistoryFlushInterval:     codexHistoryFlushInterval,

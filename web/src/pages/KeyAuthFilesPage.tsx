@@ -1,7 +1,4 @@
 import { useCallback, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { MainActionButton } from '@/components/ui/MainActionButton';
-import { IconRefreshCw } from '@/components/ui/icons';
 import {
   AuthFileCredentialsSection,
   CredentialProviderFilterBar,
@@ -20,7 +17,6 @@ export interface KeyAuthFilesPageProps {
 }
 
 export function KeyAuthFilesPage({ apiKey, onNavigate, onAuthRequired }: KeyAuthFilesPageProps) {
-  const { t } = useTranslation();
   const [manualRefreshLoading, setManualRefreshLoading] = useState(false);
   const credentialsData = useCredentialsTabData({
     enabledAuthFiles: true,
@@ -42,34 +38,14 @@ export function KeyAuthFilesPage({ apiKey, onNavigate, onAuthRequired }: KeyAuth
     }
   }, [credentialsData, manualRefreshLoading]);
 
-  const toolbar = (
-    <div className={styles.usageRefreshSlot}>
-      <div className={styles.usageFilterActions}>
-        <MainActionButton
-          type="button"
-          shellClassName={styles.refreshMainActionShell}
-          className={styles.refreshMainActionButton}
-          onClick={() => void handleManualRefresh()}
-          disabled={manualRefreshLoading}
-          loading={manualRefreshLoading}
-        >
-          {manualRefreshLoading ? t('common.loading') : (
-            <>
-              <IconRefreshCw size={14} />
-              <span>{t('usage_stats.refresh')}</span>
-            </>
-          )}
-        </MainActionButton>
-      </div>
-    </div>
-  );
-
   return (
     <KeyViewerShell
       activePage="auth-files"
       apiKey={apiKey}
       loading={credentialsData.loading && credentialsData.authFileRows.length === 0}
-      toolbar={toolbar}
+      onRefresh={() => void handleManualRefresh()}
+      refreshing={manualRefreshLoading}
+      refreshDisabled={manualRefreshLoading}
       onNavigate={onNavigate}
       onAuthRequired={onAuthRequired}
     >

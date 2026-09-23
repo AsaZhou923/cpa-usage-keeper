@@ -183,7 +183,7 @@ function App() {
           ? <KeyAuthFilesPage apiKey={sessionAPIKey} onNavigate={handleKeyViewerNavigate} onAuthRequired={clearSession} />
           : keyViewerPath === '/key-ranking'
             ? <KeyRankingPage apiKey={sessionAPIKey} onNavigate={handleKeyViewerNavigate} onAuthRequired={clearSession} />
-            : <KeyOverviewPage apiKey={sessionAPIKey} onNavigate={handleKeyViewerNavigate} onAuthRequired={clearSession} />;
+            : <KeyOverviewPage page={keyViewerPath === '/key-realtime' ? 'realtime' : 'overview'} apiKey={sessionAPIKey} onNavigate={handleKeyViewerNavigate} onAuthRequired={clearSession} />;
   } else {
     page = <UsagePage onAuthRequired={clearSession} />;
   }

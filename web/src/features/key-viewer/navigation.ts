@@ -1,8 +1,9 @@
-export type KeyViewerPage = 'overview' | 'analysis' | 'events' | 'auth-files' | 'ranking';
-export type KeyViewerPath = '/key-overview' | '/key-analysis' | '/key-events' | '/key-auth-files' | '/key-ranking';
+export type KeyViewerPage = 'overview' | 'realtime' | 'analysis' | 'events' | 'auth-files' | 'ranking';
+export type KeyViewerPath = '/key-overview' | '/key-realtime' | '/key-analysis' | '/key-events' | '/key-auth-files' | '/key-ranking';
 
 export const KEY_VIEWER_PAGE_PATHS: Record<KeyViewerPage, KeyViewerPath> = {
   overview: '/key-overview',
+  realtime: '/key-realtime',
   analysis: '/key-analysis',
   events: '/key-events',
   'auth-files': '/key-auth-files',

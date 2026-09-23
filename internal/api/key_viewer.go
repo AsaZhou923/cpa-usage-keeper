@@ -1,7 +1,6 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,29 +17,13 @@ import (
 
 const keyViewerSourceOptionPageSize = 10000
 
-func requireActiveAPIKeyViewer(c *gin.Context, cpaAPIKeyProvider service.CPAAPIKeyProvider, authHandler *authHandler) (string, auth.Session, entities.CPAAPIKey, bool) {
-	tokenValue, _ := c.Get("auth_token")
-	token := fmt.Sprint(tokenValue)
-	sessionValue, _ := c.Get("auth_session")
-	session, ok := sessionValue.(auth.Session)
-	if !ok || session.Role != auth.RoleAPIKeyViewer || session.CPAAPIKeyID <= 0 {
+func requireActiveAPIKeyViewer(c *gin.Context, _ service.CPAAPIKeyProvider, _ *authHandler) (auth.Session, entities.CPAAPIKey, bool) {
+	session, apiKey, ok := activeAPIKeyViewerContext(c)
+	if !ok {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
-		return token, auth.Session{}, entities.CPAAPIKey{}, false
+		return auth.Session{}, entities.CPAAPIKey{}, false
 	}
-	if cpaAPIKeyProvider == nil {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
-		return token, auth.Session{}, entities.CPAAPIKey{}, false
-	}
-	apiKey, err := cpaAPIKeyProvider.FindActiveCPAAPIKeyByID(c.Request.Context(), session.CPAAPIKeyID)
-	if err != nil {
-		if authHandler != nil {
-			authHandler.deleteSession(token)
-			clearSessionCookie(c, authHandler.config.BasePath, resolveSessionToken(c).CookieKind)
-		}
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
-		return token, auth.Session{}, entities.CPAAPIKey{}, false
-	}
-	return token, session, apiKey, true
+	return session, apiKey, true
 }
 
 func forceViewerAPIKeyFilter(filter servicedto.UsageFilter, apiKey entities.CPAAPIKey) servicedto.UsageFilter {
@@ -56,12 +39,8 @@ func registerKeyUsageEventsRoute(
 	authHandler *authHandler,
 ) {
 	router.GET("/key-overview/events/filters/models", func(c *gin.Context) {
-		token, _, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
+		_, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
 		if !ok {
-			return
-		}
-		if authHandler != nil && !authHandler.allowKeyOverviewRequest(token, "events_models") {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
 			return
 		}
 		options, err := loadUsageEventModelFilterOptions(c, usageProvider, forceViewerAPIKeyFilter(servicedto.UsageFilter{}, apiKey))
@@ -73,12 +52,8 @@ func registerKeyUsageEventsRoute(
 	})
 
 	router.GET("/key-overview/events/filters/sources", func(c *gin.Context) {
-		token, _, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
+		_, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
 		if !ok {
-			return
-		}
-		if authHandler != nil && !authHandler.allowKeyOverviewRequest(token, "events_sources") {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
 			return
 		}
 		sources, err := loadKeyUsageEventSourceFilterOptions(c, usageIdentityProvider, apiKey.APIKey)
@@ -90,7 +65,7 @@ func registerKeyUsageEventsRoute(
 	})
 
 	router.GET("/key-overview/events", func(c *gin.Context) {
-		token, _, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
+		_, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
 		if !ok {
 			return
 		}
@@ -105,10 +80,6 @@ func registerKeyUsageEventsRoute(
 		}
 		if err := applyUsageEventsSourceFilter(&filter); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		if authHandler != nil && !authHandler.allowKeyOverviewRequest(token, "events") {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
 			return
 		}
 		filter = forceViewerAPIKeyFilter(filter, apiKey)
@@ -144,12 +115,8 @@ func registerKeyUsageEventsRoute(
 	})
 
 	router.GET("/key-overview/events/export", func(c *gin.Context) {
-		token, _, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
+		_, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
 		if !ok {
-			return
-		}
-		if authHandler != nil && !authHandler.allowKeyOverviewRequest(token, "events_export") {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
 			return
 		}
 		format := strings.ToLower(strings.TrimSpace(c.Query("format")))
@@ -209,16 +176,12 @@ func registerKeyUsageIdentityRoutes(
 	authHandler *authHandler,
 ) {
 	router.GET("/key-overview/usage/identities/page", func(c *gin.Context) {
-		token, _, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
+		_, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
 		if !ok {
 			return
 		}
 		if usageIdentityProvider == nil {
 			c.JSON(http.StatusOK, usageIdentitiesPageResponse{Identities: []usageIdentityResponse{}, Page: 1, PageSize: 10, TypeCounts: []usageIdentityTypeCount{}})
-			return
-		}
-		if authHandler != nil && !authHandler.allowKeyOverviewRequest(token, "identities_page") {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
 			return
 		}
 		request, ok := parseUsageIdentitiesPageRequest(c)
@@ -266,7 +229,7 @@ func registerKeyQuotaRoutes(
 	authHandler *authHandler,
 ) {
 	router.POST("/key-overview/quota/cache", func(c *gin.Context) {
-		token, _, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
+		_, apiKey, ok := requireActiveAPIKeyViewer(c, cpaAPIKeyProvider, authHandler)
 		if !ok {
 			return
 		}
@@ -276,10 +239,6 @@ func registerKeyQuotaRoutes(
 		}
 		if usageIdentityProvider == nil {
 			writeInternalError(c, "usage identity provider is not configured", nil)
-			return
-		}
-		if authHandler != nil && !authHandler.allowKeyOverviewRequest(token, "quota_cache") {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
 			return
 		}
 		var request quotaRequest
