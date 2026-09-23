@@ -26,7 +26,6 @@ func TestLoadOptionalAccessFlags(t *testing.T) {
 	}{
 		{"CPA_REQUEST_LOG_ACCESS_ENABLED", func(cfg *config.Config) bool { return cfg.CPARequestLogAccessEnabled }},
 		{"QUOTA_UPSTREAM_RESPONSES_ENABLED", func(cfg *config.Config) bool { return cfg.QuotaUpstreamResponsesEnabled }},
-		{"API_KEY_VIEWER_LOCAL_RANKING_ENABLED", func(cfg *config.Config) bool { return cfg.APIKeyViewerLocalRankingEnabled }},
 	} {
 		for _, enabled := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/%t", tc.key, enabled), func(t *testing.T) {
@@ -44,6 +43,32 @@ func TestLoadOptionalAccessFlags(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAPIKeyViewerLocalRankingEnabledByDefaultWithExplicitOptOut(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		want        bool
+	}{
+		{name: "default", want: true},
+		{name: "explicitly disabled", value: "false", want: false},
+		{name: "explicitly enabled", value: "true", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateConfigEnv(t)
+			setRequiredConfig(t)
+			if tc.value != "" {
+				t.Setenv("API_KEY_VIEWER_LOCAL_RANKING_ENABLED", tc.value)
+			}
+			cfg, err := config.LoadFromEnv()
+			if err != nil {
+				t.Fatalf("LoadFromEnv: %v", err)
+			}
+			if cfg.APIKeyViewerLocalRankingEnabled != tc.want {
+				t.Fatalf("local ranking enabled = %t, want %t", cfg.APIKeyViewerLocalRankingEnabled, tc.want)
+			}
+		})
 	}
 }
 

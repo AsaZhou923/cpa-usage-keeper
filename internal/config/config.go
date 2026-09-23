@@ -241,7 +241,7 @@ func Load(options LoadOptions) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	apiKeyViewerLocalRankingEnabled, err := getBool("API_KEY_VIEWER_LOCAL_RANKING_ENABLED", false)
+	apiKeyViewerLocalRankingEnabled, err := getBool("API_KEY_VIEWER_LOCAL_RANKING_ENABLED", true)
 	if err != nil {
 		return nil, err
 	}
