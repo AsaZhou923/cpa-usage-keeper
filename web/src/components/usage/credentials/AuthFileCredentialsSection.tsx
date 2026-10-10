@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/Button'
@@ -6,17 +6,20 @@ import { LoadingSpinner } from '@/components/ui/LoadingSpinner'
 import { MainActionButton } from '@/components/ui/MainActionButton'
 import { Modal } from '@/components/ui/Modal'
 import { Select } from '@/components/ui/Select'
-import { IconChartLine, IconGaugeReset, IconRefreshCw, IconSearch, IconSettings, IconShield, IconTrash2 } from '@/components/ui/icons'
+import { IconChartLine, IconInfo, IconGaugeReset, IconRefreshCw, IconSearch, IconSettings, IconShield, IconTrash2 } from '@/components/ui/icons'
+import { PortalTooltip, usePortalTooltip } from '@/components/ui/PortalTooltip'
 import quotaCostIcon from '@/assets/icons/quota-cost.svg'
 import quotaTokenIcon from '@/assets/icons/quota-token.svg'
 import styles from './CredentialSections.module.scss'
 import { formatCredentialTimestamp, type AuthFileCredentialRow, type DisplayQuota } from './credentialViewModels'
-import { deleteAuthFiles, fetchQuotaAutoRefreshSettings, fetchUsageQuotaResetCredits, setAuthFilesDisabled, updateQuotaAutoRefreshSettings, type UsageIdentityPageSort } from '@/lib/api'
-import type { QuotaAutoRefreshScheduleUnit, QuotaAutoRefreshSettings, UsageQuotaInspectionResult, UsageQuotaInspectionResultStatus, UsageQuotaInspectionStatusResponse, UsageQuotaResetCreditsResponse } from '@/lib/types'
-import { CredentialAliasEditor, isCredentialAliasEditorDisabled } from './CredentialAliasEditor'
+import { deleteAuthFiles, fetchClaudeResetGrants, fetchQuotaAutoRefreshSettings, fetchUsageQuotaResetCredits, setAuthFilesDisabled, updateQuotaAutoRefreshSettings, type UsageIdentityPageSort } from '@/lib/api'
+import type { ClaudeResetGrantsResponse, QuotaAutoRefreshScheduleUnit, QuotaAutoRefreshSettings, UsageQuotaInspectionResult, UsageQuotaInspectionResultStatus, UsageQuotaInspectionStatusResponse, UsageQuotaResetCreditsResponse, UsageQuotaResetResponse } from '@/lib/types'
+import { CredentialAliasEditor } from './CredentialAliasEditor'
 import { CredentialHealthPanel } from './CredentialHealthPanel'
 import { CredentialSubscriptionBadge } from './CredentialSubscriptionBadge'
-import { CredentialPriorityBadge, CredentialRowShell, CredentialSectionShell, CredentialTableHeader, CredentialsPagination, MetricPill, RequestMetric, TonePercent, cacheReadRateTone, capitalize, credentialToneClassName, formatCredentialNumber, successRateTone } from './CredentialSectionShell'
+import { CredentialKimiSiteBadge, kimiCredentialSite } from './CredentialKimiSiteBadge'
+import { CredentialRowShell, CredentialSectionShell, CredentialTableHeader, CredentialsPagination, MetricPill, RequestMetric, TonePercent, cacheReadRateTone, capitalize, credentialToneClassName, formatCredentialNumber, successRateTone } from './CredentialSectionShell'
+import { CredentialPriorityEditor } from './CredentialPriorityEditor'
 import { ProviderBrandIcon, providerBrandIconKey } from '@/components/ProviderBrandIcon'
 import { CredentialStatusToggle } from './CredentialStatusToggle'
 import { MONITORING_TIME_ZONE, formatTokyoDateTime } from '@/utils/time'
@@ -59,6 +62,8 @@ const RESET_CREDITS_LOOKUP_TIMEOUT_MS = 5_000
 const RESET_CREDITS_POPOVER_VIEWPORT_MARGIN = 12
 const RESET_CREDITS_POPOVER_OFFSET = 8
 const RESET_CREDITS_POPOVER_MAX_HEIGHT = 360
+// 与后端默认额度处理器一致；品牌图标支持的类型不等于额度接口支持的类型。
+const QUOTA_PROVIDER_TYPES = new Set(['antigravity', 'codex', 'gemini-cli', 'claude', 'kimi', 'xai'])
 const CREDENTIAL_EXPIRY_TOOLTIP_SAFE_WIDTH = 300
 const CREDENTIAL_EXPIRY_TOOLTIP_ESTIMATED_HEIGHT = 48
 const CREDENTIAL_EXPIRY_TOOLTIP_OFFSET = 10
@@ -116,19 +121,21 @@ interface AuthFileCredentialsSectionProps {
   onSortChange: (sort: UsageIdentityPageSort) => void
   onRefreshQuota: () => Promise<void>
   onRefreshQuotaForAuthIndex: (authIndex: string) => Promise<void>
-  onResetQuotaForAuthIndex: (authIndex: string) => Promise<void>
-  aliasSavingId?: string
-  onSaveAlias?: (id: string, alias: string) => Promise<void>
+  onResetQuotaForAuthIndex: (authIndex: string, grantId?: string, organizationId?: string) => Promise<UsageQuotaResetResponse | void>
+  /** 编辑行消失时，焦点留在当前列表的原生筛选控件，不改变页面容器。 */
+  editFallbackRef?: Ref<HTMLInputElement>
+  onEdit?: (row: AuthFileCredentialRow) => void
   onOpenDetails?: (row: AuthFileCredentialRow) => void
   /** 正在写入上游状态的 Keeper identity id 集合，用于阻止重复点击。 */
   statusPendingIdentityIds?: ReadonlySet<string>
   onToggleStatus?: (identityId: string, authIndex: string, disabled: boolean) => void
+  onSavePriority?: (identityId: string, authIndex: string, priority: number) => Promise<void>
   onRefreshInspectionStatus: () => Promise<void>
   onStartInspection: () => Promise<void>
   onAfterInvalidAccountAction?: () => Promise<void>
 }
 
-export function AuthFileCredentialsSection({ rows, timeZone, total, page, totalPages, pageSize, activeOnly, sort, loading, quotaRefreshing, quotaRefreshError, quotaAutoRefreshEnabled = false, quotaInspectionStatus, quotaInspectionLoading, quotaInspectionStarting, quotaInspectionError, readOnly = false, onPageChange, onPageSizeChange, onActiveOnlyChange, onSortChange, onRefreshQuota, onRefreshQuotaForAuthIndex, onResetQuotaForAuthIndex, aliasSavingId, onSaveAlias, onOpenDetails, statusPendingIdentityIds, onToggleStatus, onRefreshInspectionStatus, onStartInspection, onAfterInvalidAccountAction }: AuthFileCredentialsSectionProps) {
+export function AuthFileCredentialsSection({ rows, timeZone, total, page, totalPages, pageSize, activeOnly, sort, loading, quotaRefreshing, quotaRefreshError, quotaAutoRefreshEnabled = false, quotaInspectionStatus, quotaInspectionLoading, quotaInspectionStarting, quotaInspectionError, readOnly = false, onPageChange, onPageSizeChange, onActiveOnlyChange, onSortChange, onRefreshQuota, onRefreshQuotaForAuthIndex, onResetQuotaForAuthIndex, editFallbackRef, onEdit, onOpenDetails, statusPendingIdentityIds, onToggleStatus, onSavePriority, onRefreshInspectionStatus, onStartInspection, onAfterInvalidAccountAction }: AuthFileCredentialsSectionProps) {
   const { t } = useTranslation()
   const [inspectionOpen, setInspectionOpen] = useState(false)
   const [quotaUsageMode, setQuotaUsageMode] = useState<QuotaUsageMode>('current')
@@ -210,7 +217,7 @@ export function AuthFileCredentialsSection({ rows, timeZone, total, page, totalP
           <div className={styles.credentialAuthFileTitleControls}>
             <label className={styles.credentialActiveOnlySwitch}>
               <span className={styles.credentialActiveOnlyLabel}>{t('usage_stats.credentials_auth_files_active_only')}</span>
-              <input type="checkbox" checked={activeOnly} onChange={(event) => onActiveOnlyChange(event.target.checked)} />
+              <input ref={editFallbackRef} type="checkbox" checked={activeOnly} onChange={(event) => onActiveOnlyChange(event.target.checked)} />
               <span className={styles.credentialActiveOnlyTrack} aria-hidden="true">
                 <span className={styles.credentialActiveOnlyThumb} />
               </span>
@@ -259,7 +266,10 @@ export function AuthFileCredentialsSection({ rows, timeZone, total, page, totalP
       )}
       {rows.map((row) => {
         const rowRefreshing = isRowRefreshing(row)
-        const resetCredits = row.quotaResetCreditsAvailableCount ?? 0
+        const normalizedProvider = row.identity.provider?.trim().toLowerCase() ?? ''
+        const quotaProvider = QUOTA_PROVIDER_TYPES.has(normalizedProvider) ? normalizedProvider : row.identity.type?.trim().toLowerCase()
+        const isClaude = quotaProvider === 'claude'
+        const resetCredits = (isClaude ? row.claudeResetGrants?.availableCount : row.quotaResetCreditsAvailableCount) ?? 0
         const canResetQuota = canManage && resetCredits > 0 && !row.identity.is_deleted && !rowRefreshing && !row.quotaResetting
         const rowKey = row.identity.id || row.identity.identity
         const rowExpiryTooltipText = row.expiresAtLabel
@@ -284,15 +294,14 @@ export function AuthFileCredentialsSection({ rows, timeZone, total, page, totalP
                 <ProviderBrandIcon providerType={row.identity.type} size={30} ariaLabel={row.typeLabel} />
               )
             )}
-            title={onSaveAlias ? (
+            title={canManage && onEdit ? (
               <CredentialAliasEditor
                 identityId={row.identity.id}
                 displayName={row.displayName}
-                alias={row.identity.alias}
-                saving={aliasSavingId === row.identity.id}
-                disabled={isCredentialAliasEditorDisabled(row.identity.id, row.identity.is_deleted, aliasSavingId)}
+
+                disabled={row.identity.is_deleted}
                 onOpenDetails={onOpenDetails ? () => onOpenDetails(row) : undefined}
-                onSaveAlias={onSaveAlias}
+                onEdit={() => onEdit(row)}
               />
             ) : onOpenDetails ? (
               <button
@@ -305,8 +314,9 @@ export function AuthFileCredentialsSection({ rows, timeZone, total, page, totalP
                 <span className={styles.credentialDetailNameArrow} aria-hidden="true">‹</span>
               </button>
             ) : <span>{row.displayName}</span>}
-            subtitle={row.subscriptionBadge || row.remainingDaysLabel || row.priorityLabel ? (
+            subtitle={kimiCredentialSite(row.identity.type) || row.subscriptionBadge || row.remainingDaysLabel || row.priorityLabel || (canManage && onSavePriority && !row.identity.is_deleted) ? (
               <span className={styles.credentialIdentityBadges}>
+                <CredentialKimiSiteBadge identityType={row.identity.type} />
                 {row.subscriptionBadge && <CredentialSubscriptionBadge model={row.subscriptionBadge} />}
                 {row.remainingDaysLabel && row.expiresAtLabel
                   ? (
@@ -339,7 +349,12 @@ export function AuthFileCredentialsSection({ rows, timeZone, total, page, totalP
                     </span>
                   )
                   : row.remainingDaysLabel && <span className={styles.credentialRemainingDaysBadge}>{row.remainingDaysLabel}</span>}
-                {row.priorityLabel && <CredentialPriorityBadge>{row.priorityLabel}</CredentialPriorityBadge>}
+                <CredentialPriorityEditor
+                  priority={row.identity.priority}
+                  displayName={row.displayName}
+                  readOnly={readOnly || row.identity.is_deleted}
+                  onSave={canManage && onSavePriority ? (priority) => onSavePriority(row.identity.id || row.identity.identity, row.identity.identity, priority) : undefined}
+                />
               </span>
             ) : undefined}
             badges={null}
@@ -356,7 +371,7 @@ export function AuthFileCredentialsSection({ rows, timeZone, total, page, totalP
             side={showHealthMode ? (
               <CredentialHealthPanel displayName={row.displayName} health={row.credentialHealth} lastUsedAt={row.identity.last_used_at} statsUpdatedAt={row.identity.stats_updated_at} windowCacheReadRate={row.windowCacheReadRate} />
             ) : readOnly ? (
-              <AuthFileQuotaPanel row={row} quotaUsageMode={quotaUsageMode} />
+              <AuthFileQuotaPanel row={row} quotaUsageMode={quotaUsageMode} timeZone={timeZone} />
             ) : (
               <div className={styles.credentialQuotaSideWithAction}>
                 <AuthFileQuotaPanel row={row} quotaUsageMode={quotaUsageMode} timeZone={timeZone} />
@@ -368,7 +383,9 @@ export function AuthFileCredentialsSection({ rows, timeZone, total, page, totalP
                       resetCredits={resetCredits}
                       disabled={!canResetQuota}
                       loading={row.quotaResetting === true}
-                      onConfirm={() => onResetQuotaForAuthIndex(row.identity.identity)}
+                      provider={isClaude ? 'claude' : 'codex'}
+                      key={`${row.identity.id}:${row.identity.identity}:${isClaude}`}
+                      onConfirm={(grantId, organizationId) => isClaude ? onResetQuotaForAuthIndex(row.identity.identity, grantId, organizationId) : onResetQuotaForAuthIndex(row.identity.identity)}
                     />
                   )}
                   <button
@@ -452,6 +469,8 @@ export function QuotaResetAction({
   disabled,
   loading,
   fetchResetCredits = fetchUsageQuotaResetCredits,
+  provider = 'codex',
+  fetchClaudeGrants = fetchClaudeResetGrants,
   onConfirm,
 }: {
   authIndex: string
@@ -459,7 +478,9 @@ export function QuotaResetAction({
   disabled: boolean
   loading: boolean
   fetchResetCredits?: (authIndex: string, signal?: AbortSignal) => Promise<UsageQuotaResetCreditsResponse>
-  onConfirm: () => Promise<void>
+  provider?: 'claude' | 'codex'
+  fetchClaudeGrants?: typeof fetchClaudeResetGrants
+  onConfirm: (grantId?: string, organizationId?: string) => Promise<UsageQuotaResetResponse | void>
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -467,6 +488,15 @@ export function QuotaResetAction({
   const [resetCreditsDetails, setResetCreditsDetails] = useState<UsageQuotaResetCreditsResponse | null>(null)
   const [resetCreditsLoading, setResetCreditsLoading] = useState(false)
   const [resetCreditsFailed, setResetCreditsFailed] = useState(false)
+  const [claudeDetails, setClaudeDetails] = useState<ClaudeResetGrantsResponse | null>(null)
+  const [selectedClaudeGrantId, setSelectedClaudeGrantId] = useState('')
+  const [claudeMessage, setClaudeMessage] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
+  const currentActionRef = useRef(`${provider}:${authIndex}`)
+  currentActionRef.current = `${provider}:${authIndex}`
+  const mountedRef = useRef(true)
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false } }, [])
   const tooltipId = useId()
   const actionRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
@@ -483,17 +513,18 @@ export function QuotaResetAction({
     const viewportHeight = window.innerHeight
     const spaceBelow = Math.max(0, viewportHeight - rect.bottom - RESET_CREDITS_POPOVER_VIEWPORT_MARGIN - RESET_CREDITS_POPOVER_OFFSET)
     const spaceAbove = Math.max(0, rect.top - RESET_CREDITS_POPOVER_VIEWPORT_MARGIN - RESET_CREDITS_POPOVER_OFFSET)
-    const openBelow = spaceBelow >= RESET_CREDITS_POPOVER_MAX_HEIGHT || spaceBelow >= spaceAbove
+    const maxHeight = provider === 'claude' ? 400 : RESET_CREDITS_POPOVER_MAX_HEIGHT
+    const openBelow = spaceBelow >= maxHeight || spaceBelow >= spaceAbove
     const availableHeight = openBelow ? spaceBelow : spaceAbove
     const sharedPosition = {
       right: Math.max(RESET_CREDITS_POPOVER_VIEWPORT_MARGIN, Math.round(window.innerWidth - rect.right)),
-      maxHeight: Math.max(0, Math.min(RESET_CREDITS_POPOVER_MAX_HEIGHT, availableHeight)),
+      maxHeight: Math.max(0, Math.min(maxHeight, availableHeight)),
     }
     // popover 使用 fixed 并选择空间更充足的一侧，避免被卡片或视口底部裁切。
     setPopoverPosition(openBelow
       ? { ...sharedPosition, top: Math.round(rect.bottom + RESET_CREDITS_POPOVER_OFFSET) }
       : { ...sharedPosition, bottom: Math.round(viewportHeight - rect.top + RESET_CREDITS_POPOVER_OFFSET) })
-  }, [])
+  }, [provider])
 
   useEffect(() => {
     if (!open) {
@@ -522,12 +553,17 @@ export function QuotaResetAction({
       controller.abort()
       setResetCreditsFailed(true)
       setResetCreditsLoading(false)
-    }, RESET_CREDITS_LOOKUP_TIMEOUT_MS)
-    // 明细是确认前的软门禁：查询期间禁用确认，失败后仍允许按缓存次数继续。
-    void fetchResetCredits(authIndex, controller.signal)
+    }, provider === 'claude' ? 20_000 : RESET_CREDITS_LOOKUP_TIMEOUT_MS)
+    // Claude 确认需要本次查询的 grant 与组织 UUID；Codex 保留明细失败后的缓存回退。
+    const lookup = provider === 'claude' ? fetchClaudeGrants(authIndex, controller.signal) : fetchResetCredits(authIndex, controller.signal)
+    void lookup
       .then((response) => {
         if (active) {
-          setResetCreditsDetails(response)
+          if (provider === 'claude') {
+            const details = response as ClaudeResetGrantsResponse
+            setClaudeDetails(details)
+            setSelectedClaudeGrantId(details.selectedGrantId ?? '')
+          } else setResetCreditsDetails(response as UsageQuotaResetCreditsResponse)
         }
       })
       .catch(() => {
@@ -548,7 +584,7 @@ export function QuotaResetAction({
       window.clearTimeout(timeoutID)
       controller.abort()
     }
-  }, [authIndex, fetchResetCredits, open])
+  }, [authIndex, fetchResetCredits, fetchClaudeGrants, open, provider])
 
   useEffect(() => {
     if (!open || typeof document === 'undefined') {
@@ -578,8 +614,22 @@ export function QuotaResetAction({
   }, [open])
 
   const handleConfirm = async () => {
-    await onConfirm()
-    setOpen(false)
+    if (provider !== 'claude') { await onConfirm(); setOpen(false); return }
+    if (submittingRef.current || !selectedClaudeGrantId || !claudeDetails?.organizationId) return
+    const actionKey = `${provider}:${authIndex}`
+    const isCurrent = () => mountedRef.current && currentActionRef.current === actionKey
+    submittingRef.current = true
+    setSubmitting(true)
+    try {
+      const result = await onConfirm(selectedClaudeGrantId, claudeDetails.organizationId)
+      if (!isCurrent()) return
+      if (result?.code === 'reset' || result?.code === 'already_used') setOpen(false)
+      else { setClaudeMessage(result?.code ?? 'unknown'); setClaudeDetails(null) }
+    } catch {
+      if (isCurrent()) { setClaudeMessage('unknown'); setClaudeDetails(null) }
+    } finally {
+      if (isCurrent()) { submittingRef.current = false; setSubmitting(false) }
+    }
   }
 
   const handleToggleOpen = () => {
@@ -591,6 +641,9 @@ export function QuotaResetAction({
     setResetCreditsDetails(null)
     setResetCreditsFailed(false)
     setResetCreditsLoading(true)
+    setClaudeDetails(null)
+    setClaudeMessage('')
+    setSelectedClaudeGrantId('')
     setOpen(true)
   }
 
@@ -598,7 +651,7 @@ export function QuotaResetAction({
     ? resetCreditsDetails.credits.length
     : null
   // 与 CPAMC 保持一致：实时次数未知时先使用有效明细数量，仍未知则回退打开前的缓存次数。
-  const displayResetCredits = resetCreditsDetails?.availableCount ?? resetCreditsCountFromDetails ?? resetCredits
+  const displayResetCredits = provider === 'claude' ? claudeDetails?.status?.availableCount ?? resetCredits : resetCreditsDetails?.availableCount ?? resetCreditsCountFromDetails ?? resetCredits
   const resetCreditsExplicitlyUnavailable = resetCreditsDetails !== null
     && resetCreditsDetails.availableCount !== null
     && resetCreditsDetails.availableCount <= 0
@@ -606,7 +659,11 @@ export function QuotaResetAction({
     (resetCreditsDetails.availableCount === null && resetCreditsDetails.credits.length === 0)
     || (resetCreditsDetails.availableCount !== null && resetCreditsDetails.availableCount > resetCreditsDetails.credits.length)
   )
-  const confirmDisabled = loading || resetCreditsLoading || resetCreditsExplicitlyUnavailable
+  const confirmDisabled = loading || submitting || resetCreditsLoading || (provider === 'claude'
+    ? resetCreditsFailed || !claudeDetails?.status?.grants.some((grant) => grant.id === selectedClaudeGrantId) || !claudeDetails.organizationId
+    : resetCreditsExplicitlyUnavailable)
+  const busy = loading || submitting
+  const resetTitle = t(provider === 'claude' ? 'usage_stats.claude_reset_title' : 'usage_stats.credentials_quota_reset_title')
 
   return (
     <div ref={actionRef} className={styles.credentialQuotaResetAction}>
@@ -632,12 +689,12 @@ export function QuotaResetAction({
       )}
       {open && (
         <div
-          className={styles.credentialQuotaResetPopover}
+          className={`${styles.credentialQuotaResetPopover} ${provider === 'claude' ? styles.credentialQuotaResetClaudePopover : ''}`.trim()}
           role="dialog"
-          aria-label={t('usage_stats.credentials_quota_reset_title')}
+          aria-label={resetTitle}
           style={popoverPosition ?? undefined}
         >
-          <p className={styles.credentialQuotaResetTitle}>{t('usage_stats.credentials_quota_reset_title')}</p>
+          <p className={styles.credentialQuotaResetTitle}>{resetTitle}</p>
           <p className={styles.credentialQuotaResetMessage}>
             <span className={styles.credentialQuotaResetCountLine}>
               <span className={styles.credentialQuotaResetCount}>{displayResetCredits}</span>
@@ -646,11 +703,11 @@ export function QuotaResetAction({
             <span>{t('usage_stats.credentials_quota_reset_message_prompt')}</span>
           </p>
           <div className={styles.credentialQuotaResetExpiry} aria-live="polite">
-            <p className={styles.credentialQuotaResetExpiryTitle}>{t('usage_stats.credentials_quota_reset_expiry_title')}</p>
+            <p className={styles.credentialQuotaResetExpiryTitle}>{t(provider === 'claude' ? 'usage_stats.claude_reset_grants_title' : 'usage_stats.credentials_quota_reset_expiry_title')}</p>
             {resetCreditsLoading && (
               <div className={styles.credentialQuotaResetExpiryStatus}>
                 <LoadingSpinner size={12} />
-                <span>{t('usage_stats.credentials_quota_reset_expiry_loading')}</span>
+                <span>{t(provider === 'claude' ? 'usage_stats.claude_reset_loading' : 'usage_stats.credentials_quota_reset_expiry_loading')}</span>
               </div>
             )}
             {!resetCreditsLoading && resetCreditsDetails && resetCreditsDetails.credits.length > 0 && (
@@ -663,26 +720,66 @@ export function QuotaResetAction({
                 ))}
               </div>
             )}
-            {!resetCreditsLoading && resetCreditsExplicitlyUnavailable && (
+            {!resetCreditsLoading && provider === 'claude' && (
+              <ClaudeResetDetails details={claudeDetails ? { ...claudeDetails, selectedGrantId: selectedClaudeGrantId } : null} failed={resetCreditsFailed} message={claudeMessage} disabled={busy || !!claudeMessage} groupName={`${tooltipId}-grants`} onSelect={(grantId) => { if (!submittingRef.current && !loading) setSelectedClaudeGrantId(grantId) }} />
+            )}
+            {!resetCreditsLoading && provider !== 'claude' && resetCreditsExplicitlyUnavailable && (
               <p className={styles.credentialQuotaResetExpiryStatus}>{t('usage_stats.credentials_quota_reset_expiry_empty')}</p>
             )}
-            {!resetCreditsLoading && (resetCreditsFailed || resetCreditsDetailsIncomplete) && (
+            {!resetCreditsLoading && provider !== 'claude' && (resetCreditsFailed || resetCreditsDetailsIncomplete) && (
               <p className={`${styles.credentialQuotaResetExpiryStatus} ${styles.credentialQuotaResetExpiryWarning}`.trim()}>
                 {t('usage_stats.credentials_quota_reset_expiry_failed')}
               </p>
             )}
           </div>
           <div className={styles.credentialQuotaResetActions}>
-            <button type="button" className={styles.credentialQuotaResetCancelButton} onClick={() => setOpen(false)} disabled={loading}>
+            <button type="button" className={styles.credentialQuotaResetCancelButton} onClick={() => setOpen(false)} disabled={busy}>
               {t('common.cancel')}
             </button>
-            <button type="button" className={styles.credentialQuotaResetConfirmButton} onClick={() => void handleConfirm()} disabled={confirmDisabled} aria-busy={loading}>
-              {loading ? <LoadingSpinner size={12} /> : t('usage_stats.credentials_quota_reset_confirm')}
+            <button type="button" className={styles.credentialQuotaResetConfirmButton} onClick={() => void handleConfirm()} disabled={confirmDisabled} aria-busy={busy}>
+              {busy ? <LoadingSpinner size={12} /> : t('usage_stats.credentials_quota_reset_confirm')}
             </button>
           </div>
         </div>
       )}
     </div>
+  )
+}
+
+function ClaudeResetDetails({ details, failed, message, disabled, groupName, onSelect }: { details: ClaudeResetGrantsResponse | null; failed: boolean; message: string; disabled: boolean; groupName: string; onSelect: (grantId: string) => void }) {
+  const { t } = useTranslation()
+  const status = details?.status
+  const grant = status?.grants.find((item) => item.id === details?.selectedGrantId)
+  // 上游范围直接展示原值，保留顺序与重复值。
+  const scope = (clears: string[]) => clears.length ? clears.join(' / ') : t('usage_stats.claude_reset_scope_unknown')
+  const messages = new Set(['unknown', 'not_limited', 'cooldown', 'ineligible', 'unavailable', 'rate_limited', 'auth_error', 'status_unavailable'])
+  let code = message
+  if (!code && (failed || !details?.status || !details.organizationId)) code = 'status_unavailable'
+  if (!code && !details?.selectedGrantId) code = 'unavailable'
+  const empty = !message && !failed && !!status && !!details?.organizationId && status.grants.length === 0
+  return (
+    <>
+      {status && status.grants.length > 0 && <div role="radiogroup" aria-label={t('usage_stats.claude_reset_grants_title')} className={styles.credentialQuotaResetExpiryList}>
+      {status.grants.map((item, index) => {
+        const selected = item.id === details?.selectedGrantId
+        return (
+          <label key={item.id} data-claude-grant={item.id} className={`${styles.credentialQuotaResetExpiryRow} ${styles.credentialQuotaResetGrant} ${selected ? styles.credentialQuotaResetGrantSelected : ''}`.trim()}>
+            <div className={styles.credentialQuotaResetGrantLine}>
+              <span className={styles.credentialQuotaResetGrantChoice}><input type="radio" name={groupName} value={item.id} checked={selected} disabled={disabled} onChange={() => onSelect(item.id)} aria-label={item.label || t('usage_stats.claude_reset_grant', { index: index + 1 })} />{item.label || t('usage_stats.claude_reset_grant', { index: index + 1 })}</span>
+              <strong>{t('usage_stats.claude_reset_grant_count', { left: item.resetsLeft })}</strong>
+            </div>
+            <p className={styles.credentialQuotaResetExpiryStatus}>{scope(item.clears)}</p>
+            <div className={styles.credentialQuotaResetGrantLine}>
+              <span>{t('usage_stats.claude_reset_expires')}</span>
+              <strong>{item.endsAt ? formatResetCreditExpiry(item.endsAt) : t('usage_stats.claude_reset_no_expiry')}</strong>
+            </div>
+          </label>
+        )
+      })}
+      </div>}
+      {grant && <p className={styles.credentialQuotaResetExpiryStatus}>{scope(grant.clears)}</p>}
+      {code && <p role="status" className={`${styles.credentialQuotaResetExpiryStatus} ${empty ? '' : styles.credentialQuotaResetExpiryWarning}`.trim()}>{t(`usage_stats.claude_reset_${messages.has(code) ? code : 'unavailable'}`)}</p>}
+    </>
   )
 }
 
@@ -1998,8 +2095,9 @@ function QuotaBar({ quota, quotaUsageMode, timeZone, showGroupMetadata = true, t
   return (
     <div className={`${styles.credentialQuotaBarBlock} ${tooltipAlignRight ? styles.credentialQuotaBarTooltipRight : ''}`.trim()}>
       <div className={styles.credentialQuotaBarHeader}>
-        <span className={styles.credentialQuotaLabelGroup}>
+        <span className={`${styles.credentialQuotaLabelGroup} ${quota.usageBreakdown?.length ? styles.credentialQuotaLabelWithInfo : ''}`.trim()}>
           <span>{quota.label}</span>
+          {Boolean(quota.usageBreakdown?.length) && <QuotaUsageBreakdownInfo quota={quota} />}
         </span>
         {(resetDuration || percentLabel) && (
           <span className={styles.credentialQuotaValueGroup}>
@@ -2008,9 +2106,9 @@ function QuotaBar({ quota, quotaUsageMode, timeZone, showGroupMetadata = true, t
           </span>
         )}
       </div>
-      <div className={styles.credentialQuotaTrack}>
+      {!(quota.usageBreakdown?.length && quota.barPercent === null) && <div className={styles.credentialQuotaTrack}>
         <span className={`${styles.credentialQuotaFill} ${credentialToneClassName('credentialQuotaFill', quota.status)}`.trim()} style={{ width }} />
-      </div>
+      </div>}
       <div className={styles.credentialQuotaMeta}>
         {showGroupMetadata && quota.scope === 'quota_group' && quota.groupLabel && (
           <QuotaGroupLabel label={quota.groupLabel} description={quota.groupDescription} />
@@ -2039,6 +2137,57 @@ function QuotaBar({ quota, quotaUsageMode, timeZone, showGroupMetadata = true, t
       </div>
     </div>
   )
+}
+
+function QuotaUsageBreakdownInfo({ quota }: { quota: DisplayQuota }) {
+  const { t } = useTranslation()
+  const tooltipId = useId()
+  const anchorRef = useRef<HTMLButtonElement>(null)
+  const { tooltip, showOnMouseEnter, hideOnMouseLeave, showOnFocus, hideOnBlur, dismiss } = usePortalTooltip()
+  const formatUsed = (value: number | null | undefined) => typeof value === 'number' && Number.isFinite(value)
+    ? `${Math.round(Math.max(0, Math.min(100, value)) * 100) / 100}%`
+    : t('usage_stats.credentials_quota_usage_unknown')
+  const lines = [
+    t('usage_stats.credentials_quota_shared_usage'),
+    `${t('usage_stats.credentials_quota_total_used')}: ${formatUsed(quota.percent)}`,
+    ...(quota.usageBreakdown ?? []).map((item) => `${item.product}: ${formatUsed(item.usedPercent)}`),
+    t('usage_stats.credentials_quota_shared_usage_note'),
+  ]
+
+  useEffect(() => {
+    if (!tooltip) return
+    const closeOutside = (event: PointerEvent) => {
+      if (!anchorRef.current?.contains(event.target as Node)) dismiss()
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') dismiss()
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [tooltip, dismiss])
+
+  return <>
+    <button
+      ref={anchorRef}
+      type="button"
+      className={styles.credentialQuotaInfoButton}
+      aria-label={t('usage_stats.credentials_quota_shared_usage')}
+      aria-describedby={tooltip ? tooltipId : undefined}
+      onMouseEnter={(event) => showOnMouseEnter(lines, event.currentTarget)}
+      onMouseLeave={(event) => hideOnMouseLeave(event.currentTarget)}
+      onFocus={(event) => showOnFocus(lines, event.currentTarget)}
+      onBlur={(event) => hideOnBlur(event.currentTarget)}
+      onClick={(event) => showOnFocus(lines, event.currentTarget)}
+    >
+      <IconInfo width="1em" height="1em" />
+    </button>
+    {/* 保留浮层位置，文本始终来自当前缓存快照，避免后台刷新后仍显示旧用量。 */}
+    <PortalTooltip tooltip={tooltip ? { ...tooltip, lines } : null} id={tooltipId} />
+  </>
 }
 
 function QuotaGroupLabel({ label, description }: { label: string; description?: string }) {

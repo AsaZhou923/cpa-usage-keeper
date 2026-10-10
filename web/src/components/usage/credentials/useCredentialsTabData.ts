@@ -4,14 +4,15 @@ import {
   buildAuthFileCredentialRows,
   selectQuotaEligibleAuthIndexes,
   type AiProviderCredentialRow,
+  type CredentialEditChange,
   type AuthFileCredentialRow,
 } from './credentialViewModels'
 import { useCredentialPages, type FetchUsageIdentitiesPage } from './useCredentialPages'
 import { useQuotaCache, type FetchUsageQuotaCache } from './useQuotaCache'
 import { useQuotaInspection } from './useQuotaInspection'
-import { ApiError, resetUsageQuota, setCredentialDisabled, updateUsageIdentityAlias, type CredentialStatusKind, type UsageIdentityPageSort } from '@/lib/api'
+import { ApiError, resetUsageQuota, setCredentialDisabled, setCredentialPriority, updateUsageIdentityAlias, type CredentialStatusKind, type UsageIdentityPageSort } from '@/lib/api'
 import i18n from '@/i18n'
-import type { UsageIdentity, UsageIdentityTypeCount, UsageQuotaCheckResponse, UsageQuotaInspectionStatusResponse, UsageQuotaResetResponse } from '@/lib/types'
+import type { UsageIdentity, UsageIdentityTypeCount, UsageQuotaInspectionStatusResponse, UsageQuotaResetResponse } from '@/lib/types'
 import { quotaRefreshDisplayError, useQuotaRefreshTasks, type QuotaState } from './useQuotaRefreshTasks'
 import type { CredentialProviderFilterKey } from './credentialProviderFilters'
 
@@ -60,6 +61,7 @@ interface UseCredentialsTabDataOptions {
   onNotice?: (kind: 'success' | 'info' | 'error', message: string) => void
   fetchUsageIdentitiesPage?: FetchUsageIdentitiesPage
   fetchUsageQuotaCache?: FetchUsageQuotaCache
+  onPrioritySaved?: () => void
 }
 
 export interface CredentialsTabData {
@@ -99,28 +101,29 @@ export interface CredentialsTabData {
   quotaInspectionLoading: boolean
   quotaInspectionStarting: boolean
   quotaInspectionError: string
-  aliasSavingId: string
   /** 正在写入上游状态的 Keeper identity id 集合，两个列表共用同一份进行中状态。 */
   credentialStatusPendingIdentityIds: ReadonlySet<string>
   toggleAuthFileStatus: (identityId: string, authIndex: string, disabled: boolean) => void
   toggleAiProviderStatus: (identityId: string, authIndex: string, disabled: boolean) => void
+  saveAuthFilePriority: (identityId: string, authIndex: string, priority: number) => Promise<void>
+  saveAiProviderPriority: (identityId: string, authIndex: string, priority: number) => Promise<void>
   refresh: () => Promise<void>
-  saveUsageIdentityAlias: (id: string, alias: string) => Promise<void>
+  saveCredentialField: (kind: CredentialStatusKind, id: string, authIndex: string, change: CredentialEditChange) => Promise<void>
   resetUsageIdentityStats: (id: string) => Promise<UsageIdentity>
   refreshQuotaForCurrentAuthFilePage: () => Promise<void>
   refreshQuotaForAuthIndex: (authIndex: string) => Promise<void>
-  resetQuotaForAuthIndex: (authIndex: string) => Promise<void>
+  resetQuotaForAuthIndex: (authIndex: string, grantId?: string, organizationId?: string) => Promise<UsageQuotaResetResponse | void>
   refreshQuotaInspectionStatus: () => Promise<void>
   startQuotaInspection: () => Promise<void>
 }
 
-export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, quotaAutoRefreshEnabled = false, readOnly = false, onAuthRequired, onNotice, fetchUsageIdentitiesPage, fetchUsageQuotaCache }: UseCredentialsTabDataOptions): CredentialsTabData {
+export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, quotaAutoRefreshEnabled = false, readOnly = false, onAuthRequired, onNotice, onPrioritySaved, fetchUsageIdentitiesPage, fetchUsageQuotaCache }: UseCredentialsTabDataOptions): CredentialsTabData {
   const credentialPages = useCredentialPages({ enabledAuthFiles, enabledAiProviders, onAuthRequired, fetchUsageIdentitiesPage })
   const currentAuthIndexes = useMemo(
     () => selectQuotaEligibleAuthIndexes(credentialPages.authFileIdentities),
     [credentialPages.authFileIdentities],
   )
-  const { quotaResponseByAuthIndex, cachedQuotaStateByAuthIndex, setQuotaResponseByAuthIndex, refreshQuotaCache } = useQuotaCache({
+  const { quotaResponseByAuthIndex, quotaStateByAuthIndex, applyRefreshUpdates, refreshQuotaCache } = useQuotaCache({
     enabled: enabledAuthFiles,
     authIndexes: currentAuthIndexes,
     onAuthRequired,
@@ -129,12 +132,12 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
   const quotaRefreshTasks = useQuotaRefreshTasks({
     enabled: enabledAuthFiles && !readOnly,
     currentAuthIndexes,
-    setQuotaResponseByAuthIndex,
+    quotaStateByAuthIndex,
+    applyRefreshUpdates,
     onAuthRequired,
   })
   const { refreshQuotaForAuthIndex } = quotaRefreshTasks
   const [quotaResetStateByAuthIndex, setQuotaResetStateByAuthIndex] = useState<Record<string, CredentialResetState>>({})
-  const [aliasSavingId, setAliasSavingId] = useState('')
   const [credentialStatusPending, setCredentialStatusPending] = useState<Record<string, boolean>>({})
   const quotaInspection = useQuotaInspection({
     enabled: enabledAuthFiles && !readOnly,
@@ -146,8 +149,8 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
 
   const quotaResponsesByAuthIndex = useMemo(() => new Map(Object.entries(quotaResponseByAuthIndex)), [quotaResponseByAuthIndex])
   const quotaStates = useMemo(
-    () => buildCredentialQuotaStateMap(cachedQuotaStateByAuthIndex, quotaRefreshTasks.quotaStateByAuthIndex, quotaResponseByAuthIndex, quotaResetStateByAuthIndex),
-    [cachedQuotaStateByAuthIndex, quotaRefreshTasks.quotaStateByAuthIndex, quotaResponseByAuthIndex, quotaResetStateByAuthIndex],
+    () => buildCredentialQuotaStateMap(quotaStateByAuthIndex, quotaResetStateByAuthIndex),
+    [quotaStateByAuthIndex, quotaResetStateByAuthIndex],
   )
 
   const authFileRows = useMemo(
@@ -223,29 +226,67 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
     void toggleCredentialStatus('ai-provider', identityId, authIndex, disabled)
   }, [toggleCredentialStatus])
 
-  const saveUsageIdentityAlias = useCallback(async (id: string, alias: string) => {
+  const saveCredentialPriority = useCallback(async (kind: CredentialStatusKind, _identityId: string, authIndex: string, priority: number) => {
     if (readOnly) {
       return
     }
-    setAliasSavingId(id)
     try {
-      const updated = await updateUsageIdentityAlias(id, alias)
-      credentialPages.replaceUsageIdentity(updated)
-      onNotice?.('success', i18n.t('usage_stats.credentials_alias_save_success'))
+      await setCredentialPriority(kind, authIndex, priority)
+      // 重新读取当前筛选和排序；OpenAI provider 的其它 key 也通过服务端结果对齐。
+      await refreshCredentialPagesRef.current()
+      onPrioritySaved?.()
+      onNotice?.('success', i18n.t('usage_stats.credentials_priority_save_success'))
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        if (onAuthRequired) {
-          onAuthRequired()
-        }
+      if (error instanceof ApiError && error.status === 401) onAuthRequired?.()
+      if (error instanceof ApiError && error.status === 404) {
+        await refreshCredentialPagesRef.current()
       }
-      onNotice?.('error', i18n.t('usage_stats.credentials_alias_save_failed'))
+      const key = error instanceof ApiError && error.status === 404
+        ? 'usage_stats.credentials_priority_stale_target'
+        : error instanceof ApiError && error.status === 409 && kind === 'auth-file'
+          ? 'usage_stats.credentials_priority_conflict_auth_file'
+          : 'usage_stats.credentials_priority_save_failed'
+      onNotice?.('error', i18n.t(key))
       throw error
-    } finally {
-      setAliasSavingId((current) => (current === id ? '' : current))
     }
-  }, [credentialPages, onAuthRequired, onNotice, readOnly])
+  }, [onAuthRequired, onNotice, onPrioritySaved, readOnly])
 
-  const resetQuotaForAuthIndex = useCallback(async (authIndex: string) => {
+  const saveAuthFilePriority = useCallback((identityId: string, authIndex: string, priority: number) =>
+    saveCredentialPriority('auth-file', identityId, authIndex, priority), [saveCredentialPriority])
+  const saveAiProviderPriority = useCallback((identityId: string, authIndex: string, priority: number) =>
+    saveCredentialPriority('ai-provider', identityId, authIndex, priority), [saveCredentialPriority])
+
+  const saveCredentialField = useCallback(async (kind: CredentialStatusKind, id: string, authIndex: string, change: CredentialEditChange) => {
+    if (readOnly) {
+      return
+    }
+    try {
+      if (change.field === 'alias') {
+        const updated = await updateUsageIdentityAlias(id, change.value)
+        credentialPages.replaceUsageIdentity(updated)
+      } else if (change.field === 'priority') {
+        await setCredentialPriority(kind, authIndex, change.value)
+      } else {
+        await setCredentialDisabled(kind, authIndex, change.value)
+      }
+      // 每项成功立即对齐列表和详情；弹框在页面层保留，不随当前行卸载。
+      await refreshCredentialPagesRef.current()
+      onPrioritySaved?.()
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) onAuthRequired?.()
+      if (error instanceof ApiError && error.status === 404) await refreshCredentialPagesRef.current()
+      throw error
+    }
+  }, [credentialPages, onAuthRequired, onPrioritySaved, readOnly])
+
+  const resetUsageIdentityStats = useCallback(async (id: string) => {
+    if (readOnly) {
+      throw new Error('Credentials are read-only.')
+    }
+    return credentialPages.resetStats(id)
+  }, [credentialPages, readOnly])
+
+  const resetQuotaForAuthIndex = useCallback(async (authIndex: string, grantId?: string, organizationId?: string) => {
     if (readOnly) {
       return
     }
@@ -255,8 +296,9 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
     }))
     try {
       const outcome = await runQuotaResetForAuthIndex(authIndex, {
-        resetUsageQuota,
+        resetUsageQuota: grantId ? (value) => resetUsageQuota(value, undefined, grantId, organizationId) : resetUsageQuota,
         refreshQuotaForAuthIndex,
+        grantId,
       })
       setQuotaResetStateByAuthIndex((current) => ({
         ...current,
@@ -267,6 +309,7 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
       } else if (outcome.kind === 'warning') {
         onNotice?.('info', outcome.message)
       }
+      return outcome.result
     } catch {
       setQuotaResetStateByAuthIndex((current) => ({
         ...current,
@@ -313,13 +356,14 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
     quotaInspectionLoading: quotaInspection.quotaInspectionLoading,
     quotaInspectionStarting: quotaInspection.quotaInspectionStarting,
     quotaInspectionError: quotaInspection.quotaInspectionError,
-    aliasSavingId,
     credentialStatusPendingIdentityIds,
     toggleAuthFileStatus,
     toggleAiProviderStatus,
+    saveAuthFilePriority,
+    saveAiProviderPriority,
     refresh: refresh,
-    saveUsageIdentityAlias,
-    resetUsageIdentityStats: credentialPages.resetStats,
+    saveCredentialField,
+    resetUsageIdentityStats,
     refreshQuotaForCurrentAuthFilePage: readOnly ? noopAction : quotaRefreshTasks.refreshQuotaForCurrentAuthFilePage,
     refreshQuotaForAuthIndex: readOnly ? noopAuthIndexAction : quotaRefreshTasks.refreshQuotaForAuthIndex,
     resetQuotaForAuthIndex: readOnly ? noopAuthIndexAction : resetQuotaForAuthIndex,
@@ -330,16 +374,18 @@ export function useCredentialsTabData({ enabledAuthFiles, enabledAiProviders, qu
 
 export { quotaRefreshDisplayError }
 
-export type QuotaResetOutcome =
+export type QuotaResetOutcome = (
   | { kind: 'success' }
   | { kind: 'warning'; message: string }
   | { kind: 'error'; message: string }
+) & { result?: UsageQuotaResetResponse }
 
 export async function runQuotaResetForAuthIndex(
   authIndex: string,
   deps: {
     resetUsageQuota: (authIndex: string) => Promise<UsageQuotaResetResponse>
     refreshQuotaForAuthIndex: (authIndex: string) => Promise<void>
+    grantId?: string
   },
 ): Promise<QuotaResetOutcome> {
   let result: UsageQuotaResetResponse
@@ -347,10 +393,16 @@ export async function runQuotaResetForAuthIndex(
     // 后端在官方重置后恢复 CPA 路由；只有官方重置失败才中止额度刷新。
     result = await deps.resetUsageQuota(authIndex)
   } catch {
+    if (deps.grantId) return { kind: 'warning', message: i18n.t('usage_stats.claude_reset_unknown'), result: { authIndex, code: 'unknown' } }
     return {
       kind: 'error',
       message: quotaResetDisplayError(),
     }
+  }
+
+  const response = deps.grantId ? { result } : {}
+  if (deps.grantId && result.code !== 'reset' && result.code !== 'already_used') {
+    return { kind: 'warning', message: i18n.t(`usage_stats.claude_reset_${claudeResetResultKey(result.code)}`), ...response }
   }
 
   try {
@@ -360,9 +412,13 @@ export async function runQuotaResetForAuthIndex(
     // reset 已成功消费官方次数，后续刷新失败不影响本次 reset 的成功提示。
   }
   if (result.recoveryFailed) {
-    return { kind: 'warning', message: i18n.t('usage_stats.credentials_quota_reset_recovery_failed') }
+    return { kind: 'warning', message: i18n.t('usage_stats.credentials_quota_reset_recovery_failed'), ...response }
   }
-  return { kind: 'success' }
+  return { kind: 'success', ...response }
+}
+
+export function claudeResetResultKey(code?: string): string {
+  return ['not_limited', 'cooldown', 'ineligible', 'unavailable', 'rate_limited', 'auth_error', 'status_unavailable', 'unknown'].includes(code ?? '') ? code! : 'unavailable'
 }
 
 export function quotaResetDisplayError(): string {
@@ -370,25 +426,20 @@ export function quotaResetDisplayError(): string {
 }
 
 export function buildCredentialQuotaStateMap(
-  cachedQuotaStateByAuthIndex: Record<string, QuotaState>,
   quotaStateByAuthIndex: Record<string, QuotaState>,
-  quotaResponseByAuthIndex: Record<string, UsageQuotaCheckResponse>,
   resetStateByAuthIndex: Record<string, CredentialResetState> = {},
 ): Map<string, CredentialQuotaState> {
-  const mergedStates = { ...cachedQuotaStateByAuthIndex, ...quotaStateByAuthIndex }
   const authIndexes = new Set([
-    ...Object.keys(mergedStates),
+    ...Object.keys(quotaStateByAuthIndex),
     ...Object.keys(resetStateByAuthIndex),
   ])
   return new Map(Array.from(authIndexes).map((authIndex) => {
-    const state = mergedStates[authIndex] ?? {}
+    const state = quotaStateByAuthIndex[authIndex] ?? {}
     const resetState = resetStateByAuthIndex[authIndex] ?? {}
-    const hasCachedQuota = Object.prototype.hasOwnProperty.call(quotaResponseByAuthIndex, authIndex)
-    const staleFailedState = hasCachedQuota && state.refreshStatus === 'failed'
     return [authIndex, {
       quotaLoading: state.loading ?? false,
-      quotaError: staleFailedState ? undefined : state.error,
-      refreshStatus: staleFailedState ? undefined : state.refreshStatus,
+      quotaError: state.error,
+      refreshStatus: state.refreshStatus,
       quotaResetting: resetState.quotaResetting ?? false,
     }]
   }))

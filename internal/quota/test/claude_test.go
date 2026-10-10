@@ -31,6 +31,9 @@ func TestClaudeProviderCallsUsageAndProfile(t *testing.T) {
 		t.Fatalf("expected two api-call requests, got %d", len(caller.requests))
 	}
 	for index, path := range []string{"usage", "profile"} {
+		if path == "usage" {
+			path += "?cedar_ember=1&skip_spend=1"
+		}
 		request := caller.requests[index]
 		if request.AuthIndex != "claude-auth" || request.Method != "GET" || request.URL != "https://api.anthropic.com/api/oauth/"+path {
 			t.Fatalf("unexpected %s request: %+v", path, request)
@@ -57,6 +60,22 @@ func TestClaudeProviderCallsUsageAndProfile(t *testing.T) {
 	body := string(encoded)
 	if !contains(body, `"usage":{"fiveHour"`) || !contains(body, `"profile":{"account"`) || contains(body, "bodyText") || contains(body, "statusCode") {
 		t.Fatalf("unexpected claude result JSON: %s", body)
+	}
+}
+
+func TestClaudeActiveHistoryRequiresExplicitUtilization(t *testing.T) {
+	now := time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)
+	caller := &recordingManagementCaller{responses: []*apicall.Response{
+		quotaAPIResponse(200, `{"five_hour":{"resets_at":"2026-09-23T15:00:00Z"},"seven_day":{"utilization":0,"resets_at":"2026-09-30T10:00:00Z"},"seven_day_sonnet":{"utilization":80,"resets_at":"2026-09-30T10:00:00Z"}}`),
+	}}
+	configs := quota.DefaultProviderConfigs()
+	output, err := quota.NewClaudeProvider(caller, configs.ClaudeUsage, configs.ClaudeProfile).Check(context.Background(), quota.ProviderInput{Identity: entities.UsageIdentity{Identity: "claude-auth"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observations := quota.BuildMainQuotaObservations("claude-auth", output, now)
+	if len(observations) != 1 || observations[0].Provider != "claude" || observations[0].QuotaKey != "seven_day" || observations[0].RemainingPercent != 100 {
+		t.Fatalf("missing utilization must not become trusted 100%% history; got %+v", observations)
 	}
 }
 

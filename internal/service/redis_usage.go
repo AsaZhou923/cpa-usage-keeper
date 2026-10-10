@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -42,6 +43,7 @@ type queuedUsageDetail struct {
 	Source              string          `json:"source"`
 	AuthIndex           string          `json:"auth_index"`
 	ClientIP            *string         `json:"client_ip"`
+	ResolvedClientIP    *string         `json:"resolved_client_ip"`
 	XForwardedFor       *string         `json:"x_forwarded_for"`
 	UserAgent           *string         `json:"user_agent"`
 	Tokens              dto.TokenStats  `json:"tokens"`
@@ -59,8 +61,13 @@ type queuedUsageDetail struct {
 	AuthType            string          `json:"auth_type"`
 	APIKey              string          `json:"api_key"`
 	RequestID           string          `json:"request_id"`
+	ExecutionID         *string         `json:"execution_id"`
+	TraceID             *string         `json:"trace_id"`
 	SessionID           string          `json:"session_id"`
 	ParentSessionID     string          `json:"parent_session_id"`
+	NodeKind            *string         `json:"node_kind"`
+	IsFork              *bool           `json:"is_fork"`
+	IsCompaction        *bool           `json:"is_compaction"`
 	Stream              *bool           `json:"stream"`
 	Fail                redisUsageFail  `json:"fail"`
 	ResponseHeaders     json.RawMessage `json:"response_headers"`
@@ -88,6 +95,15 @@ func trimRedisOptionalString(value *string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func (d queuedUsageDetail) clientIP() *string {
+	// CPA resolves forwarding headers against its trusted proxies. Legacy messages
+	// retain their original client_ip; do not independently trust X-Forwarded-For.
+	if resolved := trimRedisOptionalString(d.ResolvedClientIP); resolved != nil && net.ParseIP(*resolved) != nil {
+		return resolved
+	}
+	return d.ClientIP
 }
 
 func normalizeRedisGenerate(value *bool, failed bool, executorType string, tokens dto.TokenStats) *bool {
@@ -130,9 +146,14 @@ func (d queuedUsageDetail) toUsageEvent(fetchedAt time.Time) entities.UsageEvent
 		Endpoint:            strings.TrimSpace(d.Endpoint),
 		AuthType:            normalizeRedisAuthType(d.AuthType),
 		RequestID:           strings.TrimSpace(d.RequestID),
+		ExecutionID:         d.ExecutionID,
+		TraceID:             d.TraceID,
 		SessionID:           strings.TrimSpace(d.SessionID),
 		ParentSessionID:     trimRedisOptionalString(&d.ParentSessionID),
-		ClientIP:            d.ClientIP,
+		NodeKind:            d.NodeKind,
+		IsFork:              d.IsFork,
+		IsCompaction:        d.IsCompaction,
+		ClientIP:            d.clientIP(),
 		XForwardedFor:       d.XForwardedFor,
 		UserAgent:           d.UserAgent,
 		Model:               model,

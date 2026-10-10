@@ -1,13 +1,18 @@
+// @vitest-environment happy-dom
+
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { URL as NodeURL } from 'node:url'
+import { act, createElement, useEffect } from 'react'
+import { createRoot } from 'react-dom/client'
+import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api'
-import { buildCredentialQuotaStateMap, quotaRefreshDisplayError, quotaResetDisplayError, runQuotaResetForAuthIndex } from '../useCredentialsTabData'
+import { buildCredentialQuotaStateMap, quotaRefreshDisplayError, quotaResetDisplayError, runQuotaResetForAuthIndex, useCredentialsTabData, type CredentialsTabData } from '../useCredentialsTabData'
 import { CREDENTIAL_PAGES_REFRESH_INTERVAL_MS, mergeUsageIdentityAliasUpdate } from '../useCredentialPages'
 import { buildQuotaCacheAuthIndexesKey, QUOTA_CACHE_REFRESH_INTERVAL_MS } from '../useQuotaCache'
 import { buildQuotaRefreshSubmissionUpdate, buildQuotaRefreshTaskErrorUpdate } from '../useQuotaRefreshTasks'
 import type { UsageIdentity } from '@/lib/types'
 
-const credentialsTabDataSource = readFileSync(new URL('../useCredentialsTabData.ts', import.meta.url), 'utf8')
+const credentialsTabDataSource = readFileSync(new NodeURL('../useCredentialsTabData.ts', import.meta.url), 'utf8')
 const resetQuotaForAuthIndexSource = credentialsTabDataSource.match(/const resetQuotaForAuthIndex = useCallback[\s\S]*?\n {2}}, \[onNotice, readOnly, refreshQuotaForAuthIndex\]\)/)?.[0] ?? ''
 
 describe('Credentials polling intervals', () => {
@@ -31,26 +36,9 @@ describe('buildQuotaCacheAuthIndexesKey', () => {
 })
 
 describe('Credentials quota inspection cache refresh', () => {
-  it('lets completed cache quota clear stale row refresh failures after inspection', () => {
-    const states = buildCredentialQuotaStateMap(
-      {},
-      { 'auth-1': { refreshStatus: 'failed', error: 'HTTP 401: stale failure' } },
-      { 'auth-1': { id: 'auth-1', quota: [{ key: 'rate_limit.primary_window', label: '5h' }] } },
-    )
-
-    expect(states.get('auth-1')).toEqual({
-      quotaLoading: false,
-      quotaError: undefined,
-      refreshStatus: undefined,
-      quotaResetting: false,
-    })
-  })
-
   it('keeps reset loading separate from quota panel errors', () => {
     const states = buildCredentialQuotaStateMap(
-      {},
       { 'auth-1': { error: 'refresh failed' } },
-      {},
       { 'auth-1': { quotaResetting: true } },
     )
 
@@ -64,8 +52,6 @@ describe('Credentials quota inspection cache refresh', () => {
 
   it('keeps reset loading separate from quota panel loading', () => {
     const states = buildCredentialQuotaStateMap(
-      {},
-      {},
       {},
       { 'auth-1': { quotaResetting: true } },
     )
@@ -269,5 +255,94 @@ describe('useCredentialsTabData quota response contract', () => {
   it('guards credential status mutation when the credentials tab is read-only', () => {
     expect(credentialsTabDataSource).toMatch(/const toggleCredentialStatus = useCallback\(async[\s\S]*?if \(readOnly\) \{\s*return\s*\}/)
     expect(credentialsTabDataSource).toMatch(/}, \[onAuthRequired, onNotice, readOnly\]\)/)
+  })
+})
+
+describe('read-only credential mutations', () => {
+  it('blocks priority, modal edits, stats reset and quota mutations before calling APIs', async () => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({}))
+    const onPrioritySaved = vi.fn()
+    const onNotice = vi.fn()
+    let data: CredentialsTabData | undefined
+    function Harness() {
+      const tabData = useCredentialsTabData({
+        enabledAuthFiles: false,
+        enabledAiProviders: false,
+        readOnly: true,
+        onPrioritySaved,
+        onNotice,
+      })
+      useEffect(() => { data = tabData }, [tabData])
+      return null
+    }
+    try {
+      await act(async () => root.render(createElement(Harness)))
+      await act(async () => {
+        await data!.saveAuthFilePriority('auth-id', 'auth-index', 5)
+        await data!.saveAiProviderPriority('provider-id', 'provider-index', 3)
+        await data!.saveCredentialField('auth-file', 'auth-id', 'auth-index', { field: 'alias', value: 'Edited' })
+        await data!.saveCredentialField('ai-provider', 'provider-id', 'provider-index', { field: 'priority', value: 0 })
+        await data!.saveCredentialField('auth-file', 'auth-id', 'auth-index', { field: 'disabled', value: true })
+        await expect(data!.resetUsageIdentityStats('auth-id')).rejects.toThrow('read-only')
+        data!.toggleAuthFileStatus('auth-id', 'auth-index', true)
+        data!.toggleAiProviderStatus('provider-id', 'provider-index', true)
+        await data!.resetQuotaForAuthIndex('auth-index', 'spring', 'organization')
+        await data!.refreshQuotaForAuthIndex('auth-index')
+        await data!.refreshQuotaForCurrentAuthFilePage()
+        await data!.startQuotaInspection()
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(onPrioritySaved).not.toHaveBeenCalled()
+      expect(onNotice).not.toHaveBeenCalled()
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+      fetchMock.mockRestore()
+    }
+  })
+})
+
+describe('Claude manual quota reset outcomes', () => {
+  it('does not refresh or retry when the official result is unknown or refused', async () => {
+    for (const code of ['unknown', 'not_limited', 'cooldown', 'ineligible', 'unavailable', 'rate_limited', 'auth_error']) {
+      const calls: string[] = []
+      const result = { authIndex: 'claude', code }
+      const outcome = await runQuotaResetForAuthIndex('claude', {
+        grantId: 'spring',
+        resetUsageQuota: async () => { calls.push('claim'); return result },
+        refreshQuotaForAuthIndex: async () => { calls.push('refresh') },
+      })
+      expect(calls).toEqual(['claim'])
+      expect(outcome.kind).toBe('warning')
+      expect(outcome.result).toEqual(result)
+    }
+  })
+  it('reports a lost management response as unknown without a quota refresh', async () => {
+    let refreshed = false
+    const outcome = await runQuotaResetForAuthIndex('claude', {
+      grantId: 'spring',
+      resetUsageQuota: async () => { throw new Error('connection lost') },
+      refreshQuotaForAuthIndex: async () => { refreshed = true },
+    })
+    expect(refreshed).toBe(false)
+    expect(outcome.result?.code).toBe('unknown')
+    expect('message' in outcome ? outcome.message : '').toContain('check quota before deciding whether to submit again')
+  })
+  it('uses the existing recovery warning and single-row refresh after confirmed success', async () => {
+    const calls: string[] = []
+    const result = { authIndex: 'claude', code: 'reset', recoveryFailed: true }
+    const outcome = await runQuotaResetForAuthIndex('claude', {
+      grantId: 'spring',
+      resetUsageQuota: async () => { calls.push('claim'); return result },
+      refreshQuotaForAuthIndex: async () => { calls.push('refresh') },
+    })
+    expect(calls).toEqual(['claim', 'refresh'])
+    expect(outcome.kind).toBe('warning')
+    expect(outcome.result).toEqual(result)
+    expect('message' in outcome ? outcome.message : '').toContain('CPA')
   })
 })

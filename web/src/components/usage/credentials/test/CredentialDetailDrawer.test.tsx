@@ -126,7 +126,7 @@ const authFileRow = {
 
 const authFileSelection: CredentialDetailSelection = { kind: 'auth-file', row: authFileRow }
 
-const nonCodexAuthFileSelection: CredentialDetailSelection = {
+const claudeAuthFileSelection: CredentialDetailSelection = {
   kind: 'auth-file',
   row: {
     ...authFileRow,
@@ -134,6 +134,16 @@ const nonCodexAuthFileSelection: CredentialDetailSelection = {
     displayName: 'Claude Auth File',
     typeLabel: 'claude',
     providerLabel: 'claude',
+  },
+}
+
+const unsupportedAuthFileSelection: CredentialDetailSelection = {
+  kind: 'auth-file',
+  row: {
+    ...authFileRow,
+    identity: { ...authFileRow.identity, id: 'gemini-auth-file', identity: 'gemini-auth', type: 'gemini', provider: 'gemini' },
+    typeLabel: 'gemini',
+    providerLabel: 'gemini',
   },
 }
 
@@ -234,6 +244,29 @@ describe('CredentialDetailDrawer', () => {
     ))
   }
 
+  it.each([
+    ['kimi', 'china'],
+    ['kimi-ai', 'international'],
+    ['kimi.ai', 'international'],
+    ['kimi.com', 'china'],
+  ])('shows the %s site in the Auth File detail badges', async (type, site) => {
+    await renderDrawer({ selection: {
+      kind: 'auth-file',
+      row: { ...authFileRow, identity: { ...authFileRow.identity, type }, typeLabel: type },
+    } })
+
+    const badge = document.body.querySelector(`[data-kimi-site="${site}"]`)
+    expect(badge?.textContent).toBe(`usage_stats.credentials_kimi_site_${site}`)
+    expect(badge?.parentElement?.textContent).toContain('P1')
+  })
+
+  it('keeps site badges restricted to Kimi Auth Files', async () => {
+    await renderDrawer({ selection: { kind: 'ai-provider', row: { ...row, identity: { ...row.identity, type: 'kimi-ai' } } } })
+    expect(document.body.querySelector('[data-kimi-site]')).toBeNull()
+    await renderDrawer({ selection: { kind: 'auth-file', row: { ...authFileRow, identity: { ...authFileRow.identity, type: 'generic', provider: 'kimi-ai' } } } })
+    expect(document.body.querySelector('[data-kimi-site]')).toBeNull()
+  })
+
   it('shows the concrete Auth File filename as the subtitle without a cumulative heading', async () => {
     await renderDrawer({ selection: authFileSelection })
 
@@ -242,7 +275,7 @@ describe('CredentialDetailDrawer', () => {
     expect(document.body.textContent).not.toContain('usage_stats.credentials_detail_cumulative')
   })
 
-  it('shows and lazily loads quota history only for a Codex Auth File', async () => {
+  it('shows the shared quota history for Codex and Claude Auth Files', async () => {
     await renderDrawer({ selection: authFileSelection })
 
     const quotaTab = document.body.querySelector<HTMLButtonElement>('[data-credential-detail-tab="quota-history"]')!
@@ -255,9 +288,36 @@ describe('CredentialDetailDrawer', () => {
     expect(document.body.textContent).toContain('usage_stats.credentials_quota_history_no_current')
     expect(document.body.textContent).not.toContain('usage_stats.credentials_quota_history_window_selector')
 
-    await renderDrawer({ selection: nonCodexAuthFileSelection })
+    await renderDrawer({ selection: claudeAuthFileSelection })
+    const claudeTab = document.body.querySelector<HTMLButtonElement>('[data-credential-detail-tab="quota-history"]')!
+    expect(claudeTab).not.toBeNull()
+    await act(async () => { claudeTab.click() })
+    expect(fetchCodexQuotaHistory).toHaveBeenCalledWith('claude-auth', {}, expect.any(AbortSignal))
+    expect(document.body.querySelector('[data-codex-quota-history-panel="true"]')).not.toBeNull()
+
+    await renderDrawer({ selection: unsupportedAuthFileSelection })
     expect(document.body.querySelector('[data-credential-detail-tab="quota-history"]')).toBeNull()
     expect(document.body.querySelector('[data-credential-detail-tab="overview"]')?.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('reloads quota history when the same Auth File changes provider type', async () => {
+    await renderDrawer({ selection: authFileSelection })
+    await act(async () => { document.body.querySelector<HTMLButtonElement>('[data-credential-detail-tab="quota-history"]')!.click() })
+    expect(fetchCodexQuotaHistory).toHaveBeenCalledTimes(1)
+
+    const changedType: CredentialDetailSelection = {
+      kind: 'auth-file',
+      row: {
+        ...authFileRow,
+        identity: { ...authFileRow.identity, type: 'claude', provider: 'claude' },
+        typeLabel: 'claude',
+        providerLabel: 'claude',
+      },
+    }
+    await renderDrawer({ selection: changedType })
+    expect(document.body.querySelector('[data-credential-detail-tab="quota-history"]')?.getAttribute('aria-selected')).toBe('true')
+    expect(fetchCodexQuotaHistory).toHaveBeenCalledTimes(2)
+    expect(fetchCodexQuotaHistory).toHaveBeenLastCalledWith('auth-file-identity-1', {}, expect.any(AbortSignal))
   })
 
   it('includes the Codex quota history tab in roving keyboard order', async () => {

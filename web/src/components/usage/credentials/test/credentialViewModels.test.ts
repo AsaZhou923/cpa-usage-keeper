@@ -6,6 +6,7 @@ import {
   paginateCredentials,
   selectQuotaEligibleAuthIndexes,
   splitCredentialIdentities,
+  updateCredentialDetailStats,
 } from '../credentialViewModels'
 
 function quotaResponse(authIndex: string, quota: UsageQuotaRow[], rateLimitResetCreditsAvailableCount?: number | null, subscription?: UsageSubscriptionInfo): UsageQuotaCheckResponse {
@@ -61,6 +62,16 @@ function health(overrides: Partial<UsageCredentialHealth> = {}): UsageCredential
 describe('credentialViewModels', () => {
   afterEach(() => vi.useRealTimers())
 
+  it('updates the open detail priority from a fresh identity even if its row left the current page', () => {
+    const original = identity({ auth_type: 2, priority: 4 })
+    const selection = { kind: 'ai-provider' as const, row: buildAiProviderCredentialRows([original])[0] }
+    const updated = updateCredentialDetailStats(selection, identity({ auth_type: 2, priority: -3 }))
+    expect(updated.row.priorityLabel).toBe('P-3')
+    expect(updated.row.identity.priority).toBe(-3)
+    const cleared = updateCredentialDetailStats(updated, identity({ auth_type: 2, priority: 0 }))
+    expect(cleared.row.priorityLabel).toBe('P0')
+  })
+
   it('splits usage identities by auth type while keeping deleted rows for traffic display', () => {
     const groups = splitCredentialIdentities([
       identity({ id: '1', auth_type: 1, identity: 'auth-file' }),
@@ -99,6 +110,8 @@ describe('credentialViewModels', () => {
       ['free-auth', quotaResponse('free-auth', [], undefined, { provider: 'claude', plan: 'free' })],
       ['pro-auth', quotaResponse('pro-auth', [], undefined, { provider: 'claude', plan: 'pro' })],
       ['max-auth', quotaResponse('max-auth', [], undefined, { provider: 'claude', plan: 'max' })],
+      ['max5x-auth', quotaResponse('max5x-auth', [], undefined, { provider: 'claude', plan: 'max-5x' })],
+      ['max20x-auth', quotaResponse('max20x-auth', [], undefined, { provider: 'claude', plan: 'max-20x' })],
       ['team-auth', quotaResponse('team-auth', [], undefined, { provider: 'claude', plan: 'team' })],
     ])
 
@@ -106,6 +119,8 @@ describe('credentialViewModels', () => {
       identity({ identity: 'free-auth', provider: 'claude' }),
       identity({ identity: 'pro-auth', provider: 'claude' }),
       identity({ identity: 'max-auth', provider: 'claude' }),
+      identity({ identity: 'max5x-auth', provider: 'claude' }),
+      identity({ identity: 'max20x-auth', provider: 'claude' }),
       identity({ identity: 'team-auth', provider: 'claude' }),
     ], quotas)
 
@@ -113,6 +128,8 @@ describe('credentialViewModels', () => {
       { kind: 'claude-free', labelKey: 'usage_stats.credentials_subscription_claude_free' },
       { kind: 'claude-pro', labelKey: 'usage_stats.credentials_subscription_claude_pro' },
       { kind: 'claude-max', labelKey: 'usage_stats.credentials_subscription_claude_max' },
+      { kind: 'claude-max5x', labelKey: 'usage_stats.credentials_subscription_claude_max_5x' },
+      { kind: 'claude-max20x', labelKey: 'usage_stats.credentials_subscription_claude_max_20x' },
       { kind: 'claude-team', labelKey: 'usage_stats.credentials_subscription_claude_team' },
     ])
   })
@@ -359,13 +376,12 @@ describe('credentialViewModels', () => {
     })
   })
 
-  it('keeps xai weekly, monthly, pay-as-you-go, and product rows in provider order', () => {
+  it('keeps xai billing order with product usage nested in weekly', () => {
     const quotas = new Map<string, UsageQuotaCheckResponse>([
       ['xai-auth', quotaResponse('xai-auth', [
-        { key: 'billing.weekly', label: 'Weekly', scope: 'billing', metric: 'weekly', usedPercent: 25, window: { seconds: 604800 }, resetAt: '2026-07-13T00:00:00Z' },
+        { key: 'billing.weekly', label: 'Weekly', scope: 'billing', metric: 'weekly', usageBreakdown: [{ product: 'Grok 4', usedPercent: 80 }], usedPercent: 25, window: { seconds: 604800 }, resetAt: '2026-07-13T00:00:00Z' },
         { key: 'billing.monthly', label: 'Monthly Spend', scope: 'billing', metric: 'usd_cents', used: 500, limit: 1000, remaining: 500, usedPercent: 50, window: { seconds: 2592000 }, resetAt: '2026-08-01T00:00:00Z' },
         { key: 'billing.on_demand', label: 'Pay-as-you-go', scope: 'billing', metric: 'usd_cents', used: 100, limit: 500, remaining: 400, usedPercent: 20, window: { seconds: 2592000 }, resetAt: '2026-08-01T00:00:00Z' },
-        { key: 'billing.weekly.product.grok+4', label: 'Grok 4 Usage', scope: 'product', metric: 'Grok 4', usedPercent: 80, window: { seconds: 604800 }, resetAt: '2026-07-13T00:00:00Z' },
       ])],
     ])
 
@@ -375,13 +391,12 @@ describe('credentialViewModels', () => {
       'Weekly',
       'Monthly Spend',
       'Pay-as-you-go',
-      'Grok 4 Usage',
     ])
+    expect(rows[0].displayQuotas[0].usageBreakdown).toEqual([{ product: 'Grok 4', usedPercent: 80 }])
     expect(rows[0].displayQuotas.map((quota) => quota.billingUsage)).toEqual([
       undefined,
       { used: '$5.00', limit: '$10.00', remaining: '$5.00' },
       { used: '$1.00', limit: '$5.00', remaining: '$4.00' },
-      undefined,
     ])
   })
 
@@ -488,6 +503,21 @@ describe('credentialViewModels', () => {
 
     expect(rows[0].displayQuotas.map((quota) => quota.label)).toEqual(['Monthly', 'Code Review Monthly', 'GPT-5.3-Codex-Spark Monthly'])
     expect(rows[0].displayQuotas.map((quota) => quota.barPercent)).toEqual([80, 60, 40])
+  })
+
+  it('displays international Kimi short and monthly quotas without changing its identity type', () => {
+    const quotas = new Map<string, UsageQuotaCheckResponse>([
+      ['kimi-ai-auth', quotaResponse('kimi-ai-auth', [
+        { key: 'limits.0', label: '5h', used: 25, limit: 100, remaining: 75, usedPercent: 25, window: { seconds: 18000 } },
+        { key: 'usages.limit_month_total', label: 'Monthly', used: 7.95, limit: 100, remaining: 92.05, usedPercent: 7.95, resetAt: '2026-11-05T00:00:00Z' },
+      ])],
+    ])
+
+    const rows = buildAuthFileCredentialRows([identity({ identity: 'kimi-ai-auth', provider: 'kimi-ai', type: 'kimi-ai' })], quotas)
+
+    expect(rows[0].identity.type).toBe('kimi-ai')
+    expect(rows[0].displayQuotas.map((quota) => quota.label)).toEqual(['5h', 'Monthly'])
+    expect(rows[0].displayQuotas.map((quota) => quota.barPercent)).toEqual([75, 92.05])
   })
 
   it('keeps unknown Codex windows displayable without showing a generic Window quota', () => {
