@@ -3,10 +3,17 @@
 import { act, type ComponentProps } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ActivityHeatmapGrid } from '../ActivityHeatmapGrid';
+import { ActivityHeatmapGrid, createActivityDateTimeFormatter, formatActivityDateTime, parseActivityTime } from '../ActivityHeatmapGrid';
 import { buildUsageActivityFixture } from './activityFixtures';
 
 describe('ActivityHeatmapGrid', () => {
+  it('uses Tokyo for absent or invalid display zones and offsetless activity timestamps', () => {
+    const instant = Date.parse('2026-10-08T15:30:00Z');
+    expect(formatActivityDateTime(instant, createActivityDateTimeFormatter())).toBe('10/09 00:30');
+    expect(formatActivityDateTime(instant, createActivityDateTimeFormatter('invalid'))).toBe('10/09 00:30');
+    expect(parseActivityTime('2026-10-09T00:30:00')).toBe(instant);
+  });
+
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
 

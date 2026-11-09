@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import {
-  AuthFileCredentialsSection,
+  CredentialsSection,
   CredentialProviderFilterBar,
   useCredentialsTabData,
 } from '@/components/usage/credentials';
@@ -8,6 +8,7 @@ import { KeyViewerShell } from '@/features/key-viewer/KeyViewerShell';
 import type { KeyViewerPath } from '@/features/key-viewer/navigation';
 import { fetchKeyOverviewUsageIdentitiesPage, fetchKeyOverviewUsageQuotaCache } from '@/lib/api';
 import type { AuthSessionAPIKeySummary } from '@/lib/types';
+import { MONITORING_TIME_ZONE } from '@/utils/time';
 import styles from '@/features/key-viewer/KeyViewerShell.module.scss';
 
 export interface KeyAuthFilesPageProps {
@@ -19,7 +20,7 @@ export interface KeyAuthFilesPageProps {
 export function KeyAuthFilesPage({ apiKey, onNavigate, onAuthRequired }: KeyAuthFilesPageProps) {
   const [manualRefreshLoading, setManualRefreshLoading] = useState(false);
   const credentialsData = useCredentialsTabData({
-    enabledAuthFiles: true,
+    enabledCredentials: true,
     enabledAiProviders: false,
     quotaAutoRefreshEnabled: false,
     readOnly: true,
@@ -42,7 +43,7 @@ export function KeyAuthFilesPage({ apiKey, onNavigate, onAuthRequired }: KeyAuth
     <KeyViewerShell
       activePage="auth-files"
       apiKey={apiKey}
-      loading={credentialsData.loading && credentialsData.authFileRows.length === 0}
+      loading={credentialsData.loading && credentialsData.credentialRows.length === 0}
       onRefresh={() => void handleManualRefresh()}
       refreshing={manualRefreshLoading}
       refreshDisabled={manualRefreshLoading}
@@ -51,20 +52,21 @@ export function KeyAuthFilesPage({ apiKey, onNavigate, onAuthRequired }: KeyAuth
     >
       {credentialsData.error && <div className={styles.errorBox}>{credentialsData.error}</div>}
       <CredentialProviderFilterBar
-        scope="auth-files"
-        typeCounts={credentialsData.authFileTypeCounts}
-        value={credentialsData.authFileProviderFilter}
-        onChange={credentialsData.setAuthFileProviderFilter}
+        scope="credentials"
+        typeCounts={credentialsData.credentialTypeCounts}
+        value={credentialsData.credentialProviderFilter}
+        onChange={credentialsData.setCredentialProviderFilter}
       />
       <div className={styles.credentialsSections}>
-        <AuthFileCredentialsSection
-          rows={credentialsData.authFileRows}
-          total={credentialsData.authFileTotal}
-          page={credentialsData.authFilePage}
-          totalPages={credentialsData.authFileTotalPages}
-          pageSize={credentialsData.authFilePageSize}
-          activeOnly={credentialsData.authFileActiveOnly}
-          sort={credentialsData.authFileSort}
+        <CredentialsSection
+          timeZone={MONITORING_TIME_ZONE}
+          rows={credentialsData.credentialRows}
+          total={credentialsData.credentialTotal}
+          page={credentialsData.credentialPage}
+          totalPages={credentialsData.credentialTotalPages}
+          pageSize={credentialsData.credentialPageSize}
+          activeOnly={credentialsData.credentialActiveOnly}
+          sort={credentialsData.credentialSort}
           loading={credentialsData.loading}
           quotaRefreshing={credentialsData.quotaRefreshing}
           quotaRefreshError={credentialsData.quotaRefreshError}
@@ -74,11 +76,11 @@ export function KeyAuthFilesPage({ apiKey, onNavigate, onAuthRequired }: KeyAuth
           quotaInspectionStarting={credentialsData.quotaInspectionStarting}
           quotaInspectionError={credentialsData.quotaInspectionError}
           readOnly
-          onPageChange={credentialsData.setAuthFilePage}
-          onPageSizeChange={credentialsData.setAuthFilePageSize}
-          onActiveOnlyChange={credentialsData.setAuthFileActiveOnly}
-          onSortChange={credentialsData.setAuthFileSort}
-          onRefreshQuota={credentialsData.refreshQuotaForCurrentAuthFilePage}
+          onPageChange={credentialsData.setCredentialPage}
+          onPageSizeChange={credentialsData.setCredentialPageSize}
+          onActiveOnlyChange={credentialsData.setCredentialActiveOnly}
+          onSortChange={credentialsData.setCredentialSort}
+          onRefreshQuota={credentialsData.refreshQuotaForCurrentCredentialPage}
           onRefreshQuotaForAuthIndex={credentialsData.refreshQuotaForAuthIndex}
           onResetQuotaForAuthIndex={credentialsData.resetQuotaForAuthIndex}
           onRefreshInspectionStatus={credentialsData.refreshQuotaInspectionStatus}

@@ -107,7 +107,7 @@ describe('quotaRefreshDisplayError', () => {
   it('turns refresh rejection codes into friendly messages', () => {
     expect(quotaRefreshDisplayError('duplicate')).toBe('Quota refresh is already running for this credential.')
     expect(quotaRefreshDisplayError('duplicate_request')).toBe('This credential was already included in the refresh request.')
-    expect(quotaRefreshDisplayError('not_auth_file')).toBe('Quota refresh only supports local auth files.')
+    expect(quotaRefreshDisplayError('not_credential')).toBe('Quota refresh only supports local credentials.')
     expect(quotaRefreshDisplayError('unsupported')).toBe('Quota refresh is not supported for this credential type.')
   })
 
@@ -253,7 +253,7 @@ describe('useCredentialsTabData quota response contract', () => {
   })
 
   it('guards credential status mutation when the credentials tab is read-only', () => {
-    expect(credentialsTabDataSource).toMatch(/const toggleCredentialStatus = useCallback\(async[\s\S]*?if \(readOnly\) \{\s*return\s*\}/)
+    expect(credentialsTabDataSource).toMatch(/const toggleStatusByKind = useCallback\(async[\s\S]*?if \(readOnly\) \{\s*return\s*\}/)
     expect(credentialsTabDataSource).toMatch(/}, \[onAuthRequired, onNotice, readOnly\]\)/)
   })
 })
@@ -267,33 +267,43 @@ describe('read-only credential mutations', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({}))
     const onPrioritySaved = vi.fn()
     const onNotice = vi.fn()
+    const fetchUsageIdentitiesPage = vi.fn(async () => ({
+      identities: [{ id: 'auth-id', identity: 'auth-index', auth_type: 1, type: 'codex', is_deleted: false } as UsageIdentity],
+      total_count: 1, total_pages: 1, page: 1, page_size: 10,
+    }))
+    const fetchUsageQuotaCache = vi.fn(async () => ({ items: [] }))
     let data: CredentialsTabData | undefined
     function Harness() {
       const tabData = useCredentialsTabData({
-        enabledAuthFiles: false,
+        enabledCredentials: true,
         enabledAiProviders: false,
         readOnly: true,
         onPrioritySaved,
         onNotice,
+        fetchUsageIdentitiesPage,
+        fetchUsageQuotaCache,
       })
       useEffect(() => { data = tabData }, [tabData])
       return null
     }
     try {
       await act(async () => root.render(createElement(Harness)))
+      expect(fetchUsageIdentitiesPage).toHaveBeenCalledOnce()
+      expect(fetchUsageQuotaCache).toHaveBeenCalledWith(['auth-index'], expect.any(AbortSignal))
       await act(async () => {
-        await data!.saveAuthFilePriority('auth-id', 'auth-index', 5)
+        await data!.saveCredentialPriority('auth-id', 'auth-index', 5)
         await data!.saveAiProviderPriority('provider-id', 'provider-index', 3)
-        await data!.saveCredentialField('auth-file', 'auth-id', 'auth-index', { field: 'alias', value: 'Edited' })
+        await data!.saveCredentialField('credential', 'auth-id', 'auth-index', { field: 'alias', value: 'Edited' })
         await data!.saveCredentialField('ai-provider', 'provider-id', 'provider-index', { field: 'priority', value: 0 })
-        await data!.saveCredentialField('auth-file', 'auth-id', 'auth-index', { field: 'disabled', value: true })
+        await data!.saveCredentialField('credential', 'auth-id', 'auth-index', { field: 'disabled', value: true })
         await expect(data!.resetUsageIdentityStats('auth-id')).rejects.toThrow('read-only')
-        data!.toggleAuthFileStatus('auth-id', 'auth-index', true)
+        data!.toggleCredentialStatus('auth-id', 'auth-index', true)
         data!.toggleAiProviderStatus('provider-id', 'provider-index', true)
         await data!.resetQuotaForAuthIndex('auth-index', 'spring', 'organization')
         await data!.refreshQuotaForAuthIndex('auth-index')
-        await data!.refreshQuotaForCurrentAuthFilePage()
+        await data!.refreshQuotaForCurrentCredentialPage()
         await data!.startQuotaInspection()
+        await data!.refreshAfterRecalculation()
       })
       expect(fetchMock).not.toHaveBeenCalled()
       expect(onPrioritySaved).not.toHaveBeenCalled()

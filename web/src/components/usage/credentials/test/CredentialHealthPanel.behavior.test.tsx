@@ -1,3 +1,7 @@
+// @vitest-environment happy-dom
+
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { UsageCredentialHealth } from '@/lib/types'
@@ -132,11 +136,15 @@ describe('CredentialHealthPanel health semantics', () => {
     expect(html).not.toContain('usage_stats.credentials_health_summary_degraded')
   })
 
-  it('uses the same sample-aware policy for the 5-hour summary', () => {
+  it.each(['full', 'compact'] as const)('shows all four 5-hour summary states with the same sample-aware policy in %s panels', (variant) => {
     const renderSummary = (success: number, failure: number) => renderToStaticMarkup(
       <CredentialHealthPanel
         displayName="Provider Key"
         health={healthWithBuckets([bucket(0, success, failure)])}
+        variant={variant}
+        showCompactMeta
+        lastUsedAt="2026-07-16T14:58:00+08:00"
+        windowCacheReadRate={null}
       />,
     )
 
@@ -145,5 +153,80 @@ describe('CredentialHealthPanel health semantics', () => {
     expect(renderSummary(95, 5)).toContain('usage_stats.credentials_health_summary_healthy')
     expect(renderSummary(1, 1)).toContain('usage_stats.credentials_health_summary_degraded')
     expect(renderSummary(1, 2)).toContain('usage_stats.credentials_health_summary_unhealthy')
+    const quiet = renderSummary(0, 0)
+    expect(quiet).toContain('usage_stats.credentials_health_summary_quiet')
+    expect(quiet).toContain('0.0%')
+    expect(quiet).toContain('—')
+    expect(quiet).toContain(variant === 'compact' ? '07-16 15:58' : '07/16 15:58')
   })
+
+  it('keeps the same ordered buckets and tooltip details in compact cards and the default full panel', () => {
+    const health = healthWithBuckets([
+      bucket(0, 9, 1),
+      bucket(10, 90, 10),
+      bucket(20, 1, 2),
+    ])
+    const renderPanel = (variant?: 'compact') => {
+      const element = document.createElement('div')
+      element.innerHTML = renderToStaticMarkup(<CredentialHealthPanel
+        displayName="Provider Key"
+        health={health}
+        variant={variant}
+        lastUsedAt="2026-07-16T14:58:00+08:00"
+        statsUpdatedAt="2026-07-16T15:00:00+08:00"
+        windowCacheReadRate={37.5}
+      />)
+      return element
+    }
+    const compact = renderPanel('compact')
+    const full = renderPanel()
+    const bucketLabels = (element: HTMLElement) => Array.from(element.querySelectorAll('[role="listitem"]'), (cell) => cell.getAttribute('aria-label'))
+    const bucketTooltips = (element: HTMLElement) => Array.from(element.querySelectorAll('[role="tooltip"]'), (tooltip) => tooltip.textContent)
+
+    expect(bucketLabels(compact)).toHaveLength(30)
+    expect(bucketLabels(compact)).toEqual(bucketLabels(full))
+    expect(bucketLabels(compact).slice(0, 4)).toEqual([
+      '11:00 - 11:10|usage_stats.credentials_health_status_success|9/1|90.0%',
+      '11:10 - 11:20|usage_stats.credentials_health_status_warning|90/10|90.0%',
+      '11:20 - 11:30|usage_stats.credentials_health_status_failure|1/2|33.3%',
+      '11:30 - 11:40|usage_stats.credentials_health_status_empty|0/0|0.0%',
+    ])
+    expect(bucketLabels(compact).at(-1)).toContain('15:50 - 16:00')
+    expect(bucketTooltips(compact)).toEqual(bucketTooltips(full))
+    expect(full.textContent).toContain('Failed requests in 5h: 13 · latest 11:20 - 11:30')
+    expect(full.textContent).toContain('37.50%')
+    expect(full.textContent).toContain('07/16 15:58')
+    expect(full.textContent).toContain('07/16 16:00')
+  })
+
+  it('updates bucket details and accessible names when health data changes', async () => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    const renderHealth = async (success: number, failure: number) => {
+      await act(async () => root.render(<CredentialHealthPanel
+        displayName="Provider Key"
+        health={healthWithBuckets([bucket(0, success, failure)])}
+        variant="compact"
+      />))
+    }
+    try {
+      await renderHealth(9, 1)
+      expect(container.querySelector('[role="tooltip"]')?.textContent).toContain('90.0%')
+
+      await renderHealth(1, 2)
+
+      const cell = container.querySelector<HTMLElement>('[role="listitem"]')!
+      expect(cell.getAttribute('aria-label')).toBe('11:00 - 11:10|usage_stats.credentials_health_status_failure|1/2|33.3%')
+      const tooltip = cell.querySelector('[role="tooltip"]')!
+      expect(tooltip.textContent).toContain('usage_stats.credentials_health_ok 1')
+      expect(tooltip.textContent).toContain('usage_stats.credentials_health_fail 2')
+      expect(tooltip.textContent).toContain('33.3%')
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+    }
+  })
+
 })

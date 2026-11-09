@@ -7,6 +7,7 @@ import {
   normalizeRequestEventVisibleColumnIds,
   type RequestEventColumnId,
 } from '@/components/usage/RequestEventsDetailsCard';
+import { useRequestEventsFeed } from '@/components/usage/useRequestEventsFeed';
 import { KeyViewerShell } from '@/features/key-viewer/KeyViewerShell';
 import type { KeyViewerPath } from '@/features/key-viewer/navigation';
 import { loadKeyViewerTimeRange, persistKeyViewerTimeRange } from '@/features/key-viewer/timeRange';
@@ -15,14 +16,12 @@ import {
   exportKeyOverviewUsageEvents,
   fetchKeyOverviewUsageEventModelFilterOptions,
   fetchKeyOverviewUsageEventSourceFilterOptions,
-  fetchKeyOverviewUsageEvents,
   isUsageRangeBoundsConflict,
   type UsageEventsExportFormat,
 } from '@/lib/api';
 import type {
   AuthSessionAPIKeySummary,
   UsageCustomRange,
-  UsageEvent,
   UsageSourceFilterOption,
   UsageTimeRange,
 } from '@/lib/types';
@@ -38,25 +37,6 @@ import styles from '@/features/key-viewer/KeyViewerShell.module.scss';
 const REQUEST_EVENTS_PAGE_SIZE = 50;
 const ALL_REQUEST_EVENTS_FILTER = '__all__';
 const KEY_REQUEST_EVENT_COLUMN_IDS = REQUEST_EVENT_COLUMN_IDS.filter((columnId) => columnId !== 'api_key');
-
-const appendUniqueUsageEvents = (
-  currentEvents: readonly UsageEvent[],
-  incomingEvents: readonly UsageEvent[],
-): UsageEvent[] => {
-  const seenEventIds = new Set(
-    currentEvents
-      .map((event) => String(event.id ?? '').trim())
-      .filter(Boolean),
-  );
-  const merged = [...currentEvents];
-  for (const event of incomingEvents) {
-    const eventId = String(event.id ?? '').trim();
-    if (eventId && seenEventIds.has(eventId)) continue;
-    if (eventId) seenEventIds.add(eventId);
-    merged.push(event);
-  }
-  return merged;
-};
 
 const triggerBrowserFileDownload = (blob: Blob, filename: string) => {
   const url = window.URL.createObjectURL(blob);
@@ -79,14 +59,8 @@ export function KeyEventsPage({ apiKey, onNavigate, onAuthRequired }: KeyEventsP
   const { t } = useTranslation();
   const [timeRangeState, setTimeRangeState] = useState<StoredUsageRangeState>(loadKeyViewerTimeRange);
   const { range: timeRange, customRange } = timeRangeState;
-  const [events, setEvents] = useState<UsageEvent[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [manualRefreshLoading, setManualRefreshLoading] = useState(false);
   const [error, setError] = useState('');
-  const [totalCount, setTotalCount] = useState(0);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [autoLoadMore, setAutoLoadMore] = useState(true);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [sourceOptions, setSourceOptions] = useState<UsageSourceFilterOption[]>([]);
   const [modelFilter, setModelFilter] = useState(ALL_REQUEST_EVENTS_FILTER);
@@ -97,8 +71,6 @@ export function KeyEventsPage({ apiKey, onNavigate, onAuthRequired }: KeyEventsP
     normalizeRequestEventVisibleColumnIds(KEY_REQUEST_EVENT_COLUMN_IDS, KEY_REQUEST_EVENT_COLUMN_IDS)
   ));
   const [columnOrder, setColumnOrder] = useState<RequestEventColumnId[]>(KEY_REQUEST_EVENT_COLUMN_IDS);
-  const requestControllerRef = useRef<AbortController | null>(null);
-  const loadMoreControllerRef = useRef<AbortController | null>(null);
   const filterOptionsControllerRef = useRef<AbortController | null>(null);
 
   const usageRangeQuery = useMemo(() => buildUsageRangeQuery({
@@ -107,7 +79,7 @@ export function KeyEventsPage({ apiKey, onNavigate, onAuthRequired }: KeyEventsP
     customStart: customRange?.start,
     customEnd: customRange?.end,
   }), [customRange?.end, customRange?.start, customRange?.unit, timeRange]);
-  const rangeTimeZone = timeRangeState.timeZone ?? MONITORING_TIME_ZONE;
+  const rangeTimeZone = MONITORING_TIME_ZONE;
 
   const recoverRangeBoundsConflict = useCallback((loadError: unknown) => {
     if (!isUsageRangeBoundsConflict(loadError)) return false;
@@ -161,85 +133,15 @@ export function KeyEventsPage({ apiKey, onNavigate, onAuthRequired }: KeyEventsP
     }
   }, [onAuthRequired]);
 
-  const loadEvents = useCallback(async () => {
-    if (!usageRangeQuery.valid) return;
-    requestControllerRef.current?.abort();
-    loadMoreControllerRef.current?.abort();
-    loadMoreControllerRef.current = null;
-    const controller = new AbortController();
-    requestControllerRef.current = controller;
-    setLoading(true);
-    setLoadingMore(false);
-    setAutoLoadMore(true);
-    setError('');
-    try {
-      const response = await fetchKeyOverviewUsageEvents(usageRangeQuery, controller.signal, {
-        pageSize: REQUEST_EVENTS_PAGE_SIZE,
-        cursorMode: true,
-        ...eventFilters,
-      });
-      if (requestControllerRef.current !== controller) return;
-      setEvents(response.events ?? []);
-      setTotalCount(Math.max(response.total_count ?? 0, 0));
-      setNextCursor(response.has_more === true ? response.next_cursor?.trim() || null : null);
-    } catch (loadError) {
-      if (controller.signal.aborted) return;
-      setEvents([]);
-      setTotalCount(0);
-      setNextCursor(null);
-      if (recoverRangeBoundsConflict(loadError)) return;
-      if (loadError instanceof ApiError && loadError.status === 401) {
-        onAuthRequired?.();
-        return;
-      }
-      setError(loadError instanceof ApiError && loadError.status === 429
-        ? 'KEY_OVERVIEW_RATE_LIMITED'
-        : 'KEY_OVERVIEW_EVENTS_LOAD_FAILED');
-    } finally {
-      if (requestControllerRef.current === controller) {
-        setLoading(false);
-        requestControllerRef.current = null;
-      }
-    }
-  }, [eventFilters, onAuthRequired, recoverRangeBoundsConflict, usageRangeQuery]);
-
-  const loadMoreEvents = useCallback(async () => {
-    const cursor = nextCursor?.trim();
-    if (!cursor || loadMoreControllerRef.current || !usageRangeQuery.valid) return;
-    const controller = new AbortController();
-    loadMoreControllerRef.current = controller;
-    setLoadingMore(true);
-    setError('');
-    try {
-      const response = await fetchKeyOverviewUsageEvents(usageRangeQuery, controller.signal, {
-        pageSize: REQUEST_EVENTS_PAGE_SIZE,
-        cursorMode: true,
-        cursor,
-        ...eventFilters,
-      });
-      if (loadMoreControllerRef.current !== controller) return;
-      setEvents((currentEvents) => appendUniqueUsageEvents(currentEvents, response.events ?? []));
-      if (response.total_count >= 0) setTotalCount(response.total_count);
-      setNextCursor(response.has_more === true ? response.next_cursor?.trim() || null : null);
-      setAutoLoadMore(true);
-    } catch (loadError) {
-      if (controller.signal.aborted) return;
-      setAutoLoadMore(false);
-      if (recoverRangeBoundsConflict(loadError)) return;
-      if (loadError instanceof ApiError && loadError.status === 401) {
-        onAuthRequired?.();
-        return;
-      }
-      setError(loadError instanceof ApiError && loadError.status === 429
-        ? 'KEY_OVERVIEW_RATE_LIMITED'
-        : 'KEY_OVERVIEW_EVENTS_LOAD_FAILED');
-    } finally {
-      if (loadMoreControllerRef.current === controller) {
-        setLoadingMore(false);
-        loadMoreControllerRef.current = null;
-      }
-    }
-  }, [eventFilters, nextCursor, onAuthRequired, recoverRangeBoundsConflict, usageRangeQuery]);
+  const feed = useRequestEventsFeed({
+    enabled: usageRangeQuery.valid,
+    request: usageRangeQuery,
+    options: { pageSize: REQUEST_EVENTS_PAGE_SIZE, cursorMode: true, ...eventFilters },
+    keyViewer: true,
+    onAuthRequired,
+    onRangeBoundsConflict: recoverRangeBoundsConflict,
+  });
+  const { events, loading, loadingMore, totalCount, autoLoadMore } = feed;
 
   useEffect(() => {
     void loadFilterOptions();
@@ -248,16 +150,6 @@ export function KeyEventsPage({ apiKey, onNavigate, onAuthRequired }: KeyEventsP
       filterOptionsControllerRef.current = null;
     };
   }, [loadFilterOptions]);
-
-  useEffect(() => {
-    void loadEvents();
-    return () => {
-      requestControllerRef.current?.abort();
-      requestControllerRef.current = null;
-      loadMoreControllerRef.current?.abort();
-      loadMoreControllerRef.current = null;
-    };
-  }, [loadEvents]);
 
   useEffect(() => {
     persistKeyViewerTimeRange(timeRangeState);
@@ -288,19 +180,22 @@ export function KeyEventsPage({ apiKey, onNavigate, onAuthRequired }: KeyEventsP
     if (manualRefreshLoading) return;
     setManualRefreshLoading(true);
     try {
-      await Promise.all([loadFilterOptions(), loadEvents()]);
+      await Promise.all([loadFilterOptions(), feed.refresh()]);
     } finally {
       setManualRefreshLoading(false);
     }
-  }, [loadEvents, loadFilterOptions, manualRefreshLoading]);
+  }, [feed, loadFilterOptions, manualRefreshLoading]);
 
-  const displayError = error === 'KEY_OVERVIEW_RATE_LIMITED'
+  const currentError = error || feed.error;
+  const displayError = currentError === 'COSTS_BUSY'
+    ? t('key_overview.costs_busy')
+    : currentError === 'KEY_OVERVIEW_RATE_LIMITED'
     ? t('key_overview.rate_limited')
-    : error === 'KEY_OVERVIEW_EVENTS_LOAD_FAILED'
+    : currentError === 'KEY_OVERVIEW_EVENTS_LOAD_FAILED'
       ? t('usage_stats.request_events_load_failed', { defaultValue: 'Failed to load request events.' })
-      : error === 'KEY_OVERVIEW_EVENTS_EXPORT_FAILED'
+      : currentError === 'KEY_OVERVIEW_EVENTS_EXPORT_FAILED'
         ? t('notification.download_failed')
-        : error;
+        : currentError;
   return (
     <KeyViewerShell
       activePage="events"
@@ -324,7 +219,7 @@ export function KeyEventsPage({ apiKey, onNavigate, onAuthRequired }: KeyEventsP
         sourceFilter={sourceFilter}
         resultFilter={resultFilter}
         exportingFormat={exportingFormat}
-        hasMore={Boolean(nextCursor)}
+        hasMore={Boolean(feed.historyCursor)}
         loadingMore={loadingMore}
         autoLoadMore={autoLoadMore}
         visibleColumnIds={visibleColumnIds}
@@ -333,7 +228,12 @@ export function KeyEventsPage({ apiKey, onNavigate, onAuthRequired }: KeyEventsP
         onSourceFilterChange={setSourceFilter}
         onResultFilterChange={setResultFilter}
         onExport={handleExport}
-        onLoadMore={loadMoreEvents}
+        onLoadMore={feed.loadMore}
+        reading={feed.reading}
+        restoring={feed.restoring}
+        onStartReading={feed.startReading}
+        onTablePositionChange={feed.setAtTop}
+        onReturnToTop={feed.returnToTop}
         onVisibleColumnIdsChange={setVisibleColumnIds}
         onColumnOrderChange={setColumnOrder}
       />

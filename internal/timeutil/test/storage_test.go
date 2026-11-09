@@ -38,3 +38,27 @@ func TestParseStorageTime(t *testing.T) {
 		})
 	}
 }
+
+func TestTokyoBusinessTimePreservesStoredInstants(t *testing.T) {
+	useTimezone(t, "Asia/Tokyo")
+	instant := time.Date(2026, 11, 8, 15, 30, 0, 123, time.UTC)
+	if got := timeutil.FormatStorageTime(instant); got != "2026-11-09T00:30:00.000000123+09:00" {
+		t.Fatalf("Tokyo storage time = %q", got)
+	}
+	if got := timeutil.FormatSortableStorageTime(instant); got != "2026-11-08T15:30:00.000000123Z" {
+		t.Fatalf("sortable UTC time = %q", got)
+	}
+	for _, stored := range []string{"2026-11-08T15:30:00.000000123Z", "2026-11-08T23:30:00.000000123+08:00"} {
+		parsed, err := timeutil.ParseStorageTime(stored)
+		if err != nil || !parsed.Equal(instant) {
+			t.Fatalf("parse existing %q = %v, %v", stored, parsed, err)
+		}
+	}
+	day, err := timeutil.ParseUsageQueryRange("today", "", "", "", instant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := day.StartTime.Format(time.RFC3339); got != "2026-11-09T00:00:00+09:00" {
+		t.Fatalf("Tokyo business day start = %q", got)
+	}
+}

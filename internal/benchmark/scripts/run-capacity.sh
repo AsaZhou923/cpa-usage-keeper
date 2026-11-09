@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPOSITORY_ROOT=$(cd -- "$SCRIPT_DIR/../../.." && pwd)
-export TZ=Asia/Shanghai
+export TZ=Asia/Tokyo
 
 # 设置 BENCHMARK_HOST 时在远端仓库执行；未设置时直接在当前主机运行。
 if [[ ${BENCHMARK_REMOTE_STAGE:-0} != 1 && -n ${BENCHMARK_HOST:-} ]]; then

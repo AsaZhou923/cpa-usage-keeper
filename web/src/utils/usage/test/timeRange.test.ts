@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as rangeQuery from '../rangeQuery';
 import { resolveUsageFilterWindow } from '../../usage';
 import { isDailyAverageRange } from '../overview';
@@ -57,17 +57,16 @@ describe('usage rolling time ranges', () => {
     });
   });
 
-  it('keeps 1d visible while using today request and local-window semantics', () => {
+  it('keeps 1d visible while using today request and Tokyo-window semantics', () => {
     const nowMs = Date.parse('2026-07-16T12:00:00.000Z');
-    const todayStart = new Date(nowMs);
-    todayStart.setHours(0, 0, 0, 0);
+    const todayStart = Date.parse('2026-07-16T00:00:00+09:00');
 
     expect(rangeQuery.parseSelectableUsageRange('1d')).toEqual({ mode: 'day', value: 1 });
     expect(rangeQuery.buildUsageRangeQuery({ range: '1d' })).toEqual({ valid: true, range: 'today' });
     expect(resolveUsageFilterWindow(null, '1d', { nowMs })).toEqual({
-      startMs: todayStart.getTime(),
+      startMs: todayStart,
       endMs: nowMs,
-      windowMinutes: Math.max((nowMs - todayStart.getTime()) / 60_000, 1),
+      windowMinutes: Math.max((nowMs - todayStart) / 60_000, 1),
     });
   });
 
@@ -96,6 +95,24 @@ describe('usage rolling time ranges', () => {
       start: '2026-07-17T10:00:00+08:00',
       end: '2026-07-17T14:00:00+08:00',
     });
+  });
+
+  it('validates calendar dates independently of skipped browser-local dates', () => {
+    vi.stubEnv('TZ', 'Pacific/Apia');
+    try {
+      for (const day of ['2011-12-30', '2024-02-29']) {
+        expect(rangeQuery.buildUsageRangeQuery({
+          range: 'custom', customUnit: 'day', customStart: day, customEnd: day,
+        }).valid).toBe(true);
+      }
+      for (const day of ['2026-02-29', '2026-04-31']) {
+        expect(rangeQuery.buildUsageRangeQuery({
+          range: 'custom', customUnit: 'day', customStart: day, customEnd: day,
+        }).valid).toBe(false);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('rejects custom hour requests outside the 5-24 slot length', () => {

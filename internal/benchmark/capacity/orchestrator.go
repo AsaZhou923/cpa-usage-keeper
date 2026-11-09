@@ -1162,7 +1162,7 @@ func writeKeeperEnvironment(path, workDir string, appPort, redisPort int, passwo
 		"BACKUP_ENABLED=false",
 		"LOG_FILE_ENABLED=false",
 		"LOG_LEVEL=warn",
-		"TZ=Asia/Shanghai",
+		"TZ=Asia/Tokyo",
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write Keeper benchmark environment: %w", err)

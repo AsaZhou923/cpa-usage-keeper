@@ -20,6 +20,20 @@ describe('Tokyo monitoring time formatting', () => {
     expect(formatTokyoDateTime('2026-05-10T16:30:00Z')).toBe('2026/05/11 01:30:00')
   })
 
+  it('reads offsetless legacy timestamps as Tokyo time independently of the browser', () => {
+    const previous = process.env.TZ
+    process.env.TZ = 'America/Los_Angeles'
+    try {
+      expect(formatTokyoDateTime('2026-11-09T00:30:20')).toBe('2026/11/09 00:30:20')
+      expect(formatTokyoDateTime('2026-11-09 00:30:20.123')).toBe('2026/11/09 00:30:20')
+      expect(formatTokyoDateTime('2026-11-09')).toBe('2026/11/09 00:00:00')
+      expect(formatTokyoDateTime('2026-11-08T15:30:20Z')).toBe('2026/11/09 00:30:20')
+    } finally {
+      if (previous === undefined) delete process.env.TZ
+      else process.env.TZ = previous
+    }
+  })
+
   it('returns an empty label for invalid timestamps', () => {
     expect(formatTokyoDateTime('invalid')).toBe('')
   })

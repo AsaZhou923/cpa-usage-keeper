@@ -1,7 +1,7 @@
 package test
 
 import (
-	"strings"
+	"os"
 	"testing"
 	"time"
 
@@ -9,6 +9,9 @@ import (
 )
 
 func TestDefaultTimeZoneIsLoadable(t *testing.T) {
+	if config.DefaultTimeZone != "Asia/Tokyo" {
+		t.Fatalf("default timezone = %q, want Asia/Tokyo", config.DefaultTimeZone)
+	}
 	location, err := time.LoadLocation(config.DefaultTimeZone)
 	if err != nil {
 		t.Fatalf("expected default timezone %s to be loadable: %v", config.DefaultTimeZone, err)
@@ -18,32 +21,25 @@ func TestDefaultTimeZoneIsLoadable(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvTimeZone(t *testing.T) {
-	for _, tc := range []struct{ value, want string }{
-		{"", config.DefaultTimeZone},
-		{"UTC", "UTC"},
-		{"America/New_York", "America/New_York"},
-	} {
-		t.Run(tc.want, func(t *testing.T) {
+func TestLoadFromEnvNormalizesProjectTimeZone(t *testing.T) {
+	for _, value := range []string{"", "Asia/Tokyo", "Asia/Shanghai", "UTC", "America/New_York", "Local", "Not/AZone"} {
+		t.Run(value, func(t *testing.T) {
 			isolateConfigEnv(t)
 			setRequiredConfig(t)
-			t.Setenv("TZ", tc.value)
+			t.Setenv("TZ", value)
 			if _, err := config.LoadFromEnv(); err != nil {
 				t.Fatalf("LoadFromEnv: %v", err)
 			}
-			if got := time.Local.String(); got != tc.want {
-				t.Fatalf("time.Local = %q, want %q", got, tc.want)
+			if got := time.Local.String(); got != "Asia/Tokyo" {
+				t.Fatalf("time.Local = %q, want Asia/Tokyo", got)
+			}
+			if got := os.Getenv("TZ"); got != "Asia/Tokyo" {
+				t.Fatalf("TZ = %q, want Asia/Tokyo", got)
+			}
+			instant := time.Date(2026, 11, 8, 15, 0, 0, 0, time.UTC)
+			if got := instant.In(time.Local).Format(time.RFC3339); got != "2026-11-09T00:00:00+09:00" {
+				t.Fatalf("project day boundary = %q, want Tokyo midnight", got)
 			}
 		})
-	}
-}
-
-func TestLoadFromEnvRejectsInvalidTimeZone(t *testing.T) {
-	isolateConfigEnv(t)
-	setRequiredConfig(t)
-	t.Setenv("TZ", "Not/AZone")
-	_, err := config.LoadFromEnv()
-	if err == nil || !strings.Contains(err.Error(), "TZ is invalid") {
-		t.Fatalf("expected invalid TZ error, got %v", err)
 	}
 }

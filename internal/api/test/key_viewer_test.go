@@ -64,7 +64,7 @@ func TestKeyOverviewEventsForceCurrentViewerAPIKey(t *testing.T) {
 	identityProvider := usageIdentitiesStub{items: []entities.UsageIdentity{{
 		ID:           1,
 		Name:         "Codex Account",
-		AuthType:     entities.UsageIdentityAuthTypeAuthFile,
+		AuthType:     entities.UsageIdentityAuthTypeCredential,
 		AuthTypeName: "oauth",
 		Identity:     "auth-1",
 		Type:         "codex",
@@ -115,7 +115,7 @@ func TestKeyOverviewEventModelFiltersForceCurrentViewerAPIKey(t *testing.T) {
 }
 
 func TestKeyOverviewAuthFilesPageScopesToCurrentAPIGroupKey(t *testing.T) {
-	authType := entities.UsageIdentityAuthTypeAuthFile
+	authType := entities.UsageIdentityAuthTypeCredential
 	var captured service.ListUsageIdentitiesRequest
 	identityProvider := identityMetadataStub{
 		pagedActiveReq:   &captured,

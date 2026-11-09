@@ -14,7 +14,6 @@ const KEY_VIEWER_PAGE_LABEL_KEYS: Record<KeyViewerPage, string> = {
   analysis: 'usage_stats.tab_analysis',
   events: 'usage_stats.tab_events',
   'auth-files': 'usage_stats.tab_auth_files',
-  ranking: 'usage_stats.tab_ranking',
 };
 
 interface KeyViewerShellProps {

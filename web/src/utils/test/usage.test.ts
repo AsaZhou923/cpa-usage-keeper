@@ -1,36 +1,48 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { calculateCacheReadRate, calculateDisplayInputTokens, resolveUsageFilterWindow } from '@/utils/usage';
 
 describe('resolveUsageFilterWindow', () => {
-  it('resolves today from local day start through the refresh anchor', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('resolves today from Tokyo day start through the refresh anchor', () => {
     const nowMs = Date.parse('2026-04-23T12:34:56.000Z');
-    const expectedStart = new Date(nowMs);
-    expectedStart.setHours(0, 0, 0, 0);
+    const expectedStart = Date.parse('2026-04-23T00:00:00+09:00');
 
     const window = resolveUsageFilterWindow(null, 'today', { nowMs });
 
     expect(window).toEqual({
-      startMs: expectedStart.getTime(),
+      startMs: expectedStart,
       endMs: nowMs,
-      windowMinutes: Math.max((nowMs - expectedStart.getTime()) / 60000, 1),
+      windowMinutes: Math.max((nowMs - expectedStart) / 60000, 1),
     });
   });
 
-  it('resolves yesterday as the previous local day boundary', () => {
+  it('resolves yesterday as the previous Tokyo day boundary', () => {
     const nowMs = Date.parse('2026-04-23T12:34:56.000Z');
-    const expectedStart = new Date(nowMs);
-    expectedStart.setHours(0, 0, 0, 0);
-    expectedStart.setDate(expectedStart.getDate() - 1);
-    const expectedEnd = new Date(expectedStart);
-    expectedEnd.setDate(expectedEnd.getDate() + 1);
-    expectedEnd.setMilliseconds(expectedEnd.getMilliseconds() - 1);
+    const expectedStart = Date.parse('2026-04-22T00:00:00+09:00');
+    const expectedEnd = Date.parse('2026-04-22T23:59:59.999+09:00');
 
     const window = resolveUsageFilterWindow(null, 'yesterday', { nowMs });
 
     expect(window).toEqual({
-      startMs: expectedStart.getTime(),
-      endMs: expectedEnd.getTime(),
+      startMs: expectedStart,
+      endMs: expectedEnd,
       windowMinutes: 24 * 60,
+    });
+  });
+
+  it.each(['UTC', 'America/Los_Angeles'])('uses Tokyo midnight while the browser timezone is %s', (timezone) => {
+    vi.stubEnv('TZ', timezone);
+    const nowMs = Date.parse('2026-04-23T15:00:30Z');
+    expect(resolveUsageFilterWindow(null, 'today', { nowMs })).toEqual({
+      startMs: Date.parse('2026-04-24T00:00:00+09:00'),
+      endMs: nowMs,
+      windowMinutes: 1,
+    });
+    expect(resolveUsageFilterWindow(null, 'yesterday', { nowMs })).toEqual({
+      startMs: Date.parse('2026-04-23T00:00:00+09:00'),
+      endMs: Date.parse('2026-04-23T23:59:59.999+09:00'),
+      windowMinutes: 1440,
     });
   });
 

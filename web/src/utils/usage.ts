@@ -1,6 +1,7 @@
 import type { UsageFilterWindow, UsageTimeRange } from '@/lib/types';
 import type { UsagePayload } from '@/components/usage/hooks/useUsageData';
 import { parseSelectableUsageRange, resolveUsageRequestRange } from '@/utils/usage/rangeQuery';
+import { parseTokyoDate } from '@/utils/time';
 import {
   LATENCY_SOURCE_FIELD,
   LATENCY_SOURCE_UNIT,
@@ -46,7 +47,7 @@ export function calculateDisplayOutputTokens({ outputTokens, reasoningTokens }: 
 }
 
 const toValidTimestamp = (value: unknown): number | null => {
-  const timestamp = typeof value === 'number' ? value : Date.parse(String(value ?? ''));
+  const timestamp = typeof value === 'number' ? value : parseTokyoDate(String(value ?? '')).getTime();
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
 };
 
@@ -134,13 +135,12 @@ export function resolveUsageFilterWindow(
   }
 
   if (requestRange === 'today' || requestRange === 'yesterday') {
-    const start = new Date(fallbackNow);
-    start.setHours(0, 0, 0, 0);
-    if (requestRange === 'yesterday') {
-      start.setDate(start.getDate() - 1);
-    }
-    const startMs = start.getTime();
-    const endMs = requestRange === 'today' ? fallbackNow : startMs + (24 * 60 * 60 * 1000) - 1;
+    const dayMs = 24 * 60 * 60 * 1000;
+    const tokyoOffsetMs = 9 * 60 * 60 * 1000;
+    // 东京没有夏令时，以 UTC+9 的自然日取整，避免依赖浏览器本地日期。
+    const todayStartMs = Math.floor((fallbackNow + tokyoOffsetMs) / dayMs) * dayMs - tokyoOffsetMs;
+    const startMs = todayStartMs - (requestRange === 'yesterday' ? dayMs : 0);
+    const endMs = requestRange === 'today' ? fallbackNow : todayStartMs - 1;
     return {
       startMs,
       endMs,

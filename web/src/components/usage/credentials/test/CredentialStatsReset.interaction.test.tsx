@@ -55,7 +55,7 @@ describe('credential stats reset confirmation', () => {
     await act(async () => button('Reset').click())
     expect(reset).toHaveBeenCalledExactlyOnceWith('1')
     await act(async () => pending.resolve(resetIdentity))
-    expect(document.body.textContent).toContain('2026-09-10 16:00:00 UTC+08:00')
+    expect(document.body.textContent).toContain('2026-09-10 17:00:00 UTC+09:00')
     const metrics = document.querySelector('[role="tabpanel"]')?.querySelectorAll('strong')
     expect(Array.from(metrics ?? []).slice(0, 4).map((node) => node.textContent)).toEqual(['0', '—', '0', '—'])
   })

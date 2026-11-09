@@ -1,5 +1,6 @@
 import type { ClaudeResetGrantStatus, UsageCredentialHealth, UsageIdentity, UsageQuotaCheckResponse, UsageQuotaRow } from '@/lib/types'
 import { calculateCacheReadRate, formatCompactTokenValue } from '@/utils/usage'
+import { formatTokyoDateTime, parseTokyoDate } from '@/utils/time'
 import { resolveCredentialSubscriptionBadge, type SubscriptionBadgeModel } from './credentialSubscription'
 
 export const CREDENTIALS_PAGE_SIZE = 10
@@ -44,7 +45,7 @@ export interface DisplayQuota {
   status: QuotaStatus
 }
 
-export interface AuthFileCredentialRow {
+export interface CredentialRow {
   identity: UsageIdentity
   displayName: string
   maskedIdentity: string
@@ -96,7 +97,7 @@ export interface AiProviderCredentialRow {
 }
 
 export type CredentialDetailSelection =
-  | { kind: 'auth-file'; row: AuthFileCredentialRow }
+  | { kind: 'credential'; row: CredentialRow }
   | { kind: 'ai-provider'; row: AiProviderCredentialRow }
 
 export type CredentialEditChange =
@@ -105,7 +106,7 @@ export type CredentialEditChange =
   | { field: 'disabled'; value: boolean }
 
 export interface CredentialIdentityGroups {
-  authFiles: UsageIdentity[]
+  credentials: UsageIdentity[]
   aiProviders: UsageIdentity[]
 }
 
@@ -120,12 +121,12 @@ export interface CredentialsPage<T> {
 export function splitCredentialIdentities(identities: UsageIdentity[]): CredentialIdentityGroups {
   return identities.reduce<CredentialIdentityGroups>((groups, identity) => {
     if (identity.auth_type === 1) {
-      groups.authFiles.push(identity)
+      groups.credentials.push(identity)
     } else if (identity.auth_type === 2) {
       groups.aiProviders.push(identity)
     }
     return groups
-  }, { authFiles: [], aiProviders: [] })
+  }, { credentials: [], aiProviders: [] })
 }
 
 export function selectQuotaEligibleAuthIndexes(identities: UsageIdentity[]): string[] {
@@ -149,12 +150,12 @@ export function paginateCredentials<T>(items: T[], page: number, pageSize = CRED
   }
 }
 
-export function buildAuthFileCredentialRows(
-  // Auth Files 行合并 usage identity、缓存 quota 和刷新任务状态，组件不再重复拼装字段。
+export function buildCredentialRows(
+  // Credentials 行合并 usage identity、缓存 quota 和刷新任务状态，组件不再重复拼装字段。
   identities: UsageIdentity[],
   quotas: Map<string, UsageQuotaCheckResponse> = new Map(),
-  quotaStates: Map<string, Pick<AuthFileCredentialRow, 'quotaLoading' | 'quotaError' | 'refreshStatus' | 'quotaResetting'>> = new Map(),
-): AuthFileCredentialRow[] {
+  quotaStates: Map<string, Pick<CredentialRow, 'quotaLoading' | 'quotaError' | 'refreshStatus' | 'quotaResetting'>> = new Map(),
+): CredentialRow[] {
   return identities.map((identity) => {
     const quotaResponse = quotas.get(identity.identity)
     const quota = quotaResponse?.quota ?? []
@@ -461,7 +462,7 @@ function credentialTypeLabel(identity: UsageIdentity): string {
 }
 
 function credentialAuthTypeLabel(identity: UsageIdentity): string {
-  return firstNonEmpty(identity.auth_type_name) ?? (identity.auth_type === 1 ? 'Auth file' : 'AI provider')
+  return firstNonEmpty(identity.auth_type_name) ?? (identity.auth_type === 1 ? 'Credential' : 'AI provider')
 }
 
 function credentialPriorityLabel(priority: number | undefined): string | undefined {
@@ -475,7 +476,7 @@ function remainingDaysLabel(activeUntil?: string): string | undefined {
   if (!activeUntil) {
     return undefined
   }
-  const untilMs = Date.parse(activeUntil)
+  const untilMs = parseTokyoDate(activeUntil).getTime()
   if (!Number.isFinite(untilMs)) {
     return undefined
   }
@@ -484,20 +485,10 @@ function remainingDaysLabel(activeUntil?: string): string | undefined {
 }
 
 export function formatCredentialTimestamp(activeUntil?: string): string | undefined {
-  if (!activeUntil || !Number.isFinite(Date.parse(activeUntil))) {
+  if (!activeUntil || !Number.isFinite(parseTokyoDate(activeUntil).getTime())) {
     return undefined
   }
-  const match = activeUntil.trim().match(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/i,
-  )
-  if (!match) {
-    return undefined
-  }
-  const [, year, month, day, hour, minute, second, rawOffset] = match
-  const offset = rawOffset.toUpperCase() === 'Z' || rawOffset === '+00:00' || rawOffset === '-00:00'
-    ? 'UTC'
-    : `UTC${rawOffset}`
-  return `${year}-${month}-${day} ${hour}:${minute}:${second} ${offset}`
+  return `${formatTokyoDateTime(activeUntil).replaceAll('/', '-')} UTC+09:00`
 }
 
 function credentialUsageStats(identity: UsageIdentity) {
@@ -539,8 +530,8 @@ export function updateCredentialDetailStats(selection: CredentialDetailSelection
     credentialHealth: identity.credential_health,
     windowCacheReadRate: windowCacheReadRate(identity.credential_health),
   }
-  if (selection.kind === 'auth-file') {
-    return { kind: 'auth-file', row: { ...selection.row, identity, priorityLabel: credentialPriorityLabel(identity.priority), ...stats } }
+  if (selection.kind === 'credential') {
+    return { kind: 'credential', row: { ...selection.row, identity, priorityLabel: credentialPriorityLabel(identity.priority), ...stats } }
   }
   return { kind: 'ai-provider', row: { ...selection.row, identity, priorityLabel: credentialPriorityLabel(identity.priority), ...stats, lastUsedText: identity.last_used_at, statsUpdatedText: identity.stats_updated_at } }
 }

@@ -2,11 +2,22 @@ export const MONITORING_TIME_ZONE = 'Asia/Tokyo'
 
 type DateTimeInput = Date | number | string
 
+export const parseTokyoDate = (value: DateTimeInput): Date => {
+  if (value instanceof Date) return value
+  // Legacy timestamps without an offset describe the project clock, not the browser clock.
+  const normalized = typeof value === 'string'
+    ? value.trim().replace(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/, '$1T$2+09:00')
+    : value
+  return new Date(typeof normalized === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(normalized)
+    ? `${normalized}T00:00:00+09:00`
+    : normalized)
+}
+
 const getParts = (
   value: DateTimeInput,
   options: Intl.DateTimeFormatOptions,
 ): Record<string, string> | null => {
-  const date = value instanceof Date ? value : new Date(value)
+  const date = parseTokyoDate(value)
   if (Number.isNaN(date.getTime())) return null
 
   return Object.fromEntries(

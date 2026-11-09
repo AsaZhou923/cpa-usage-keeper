@@ -1,4 +1,6 @@
 import type { UsageComparisonItem } from '@/lib/types';
+import { getIntlTimeZone } from '@/utils/usage/timeLabels';
+import { parseTokyoDate } from '@/utils/time';
 
 export interface ComparisonRow extends UsageComparisonItem {
   share: number | null;
@@ -32,16 +34,15 @@ export function buildComparisonView(items: UsageComparisonItem[], othersLabel: s
   return {rows,total};
 }
 
-// 日桶是项目本地日期，不进行 UTC 转换；小时桶使用响应时区，Local 则保留 API 的本地钟面。
+// 日桶是项目本地日期，不进行 UTC 转换；小时桶使用响应时区，缺省时统一东京时间。
 export function formatComparisonBucket(bucket: string, granularity: 'hourly' | 'daily', timezone: string | undefined, locale: string, full = false): string {
   const literal = bucket.match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}))?/);
   if (!literal) return bucket;
   const fallback = granularity === 'hourly' && !full ? literal[2] ?? bucket : `${literal[1]} ${granularity === 'hourly' ? literal[2] ?? '' : ''}`.trim();
-  const date = new Date(granularity === 'daily' ? `${literal[1]}T12:00:00Z` : bucket);
+  const date = parseTokyoDate(granularity === 'daily' ? `${literal[1]}T12:00:00Z` : bucket);
   try {
-    if (granularity === 'hourly' && (!timezone || timezone === 'Local')) return fallback;
     return new Intl.DateTimeFormat(locale, {
-      timeZone: granularity === 'daily' ? 'UTC' : timezone,
+      timeZone: granularity === 'daily' ? 'UTC' : getIntlTimeZone(timezone),
       ...(full ? {year: 'numeric' as const} : {}),
       ...(granularity === 'daily' || full ? {month: 'short' as const, day: 'numeric' as const} : {}),
       ...(granularity === 'hourly' ? {hour: '2-digit' as const, minute: '2-digit' as const, hourCycle: 'h23' as const} : {}),

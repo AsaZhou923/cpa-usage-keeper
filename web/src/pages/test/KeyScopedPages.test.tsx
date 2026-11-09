@@ -7,6 +7,8 @@ import i18n from '@/i18n';
 
 const api = vi.hoisted(() => ({
   fetchKeyOverviewUsageEvents: vi.fn(),
+  openKeyOverviewUsageEventsLive: vi.fn(),
+  openUsageEventsLive: vi.fn(),
   fetchKeyOverviewUsageEventModelFilterOptions: vi.fn(),
   fetchKeyOverviewUsageEventSourceFilterOptions: vi.fn(),
   fetchKeyOverviewUsageIdentitiesPage: vi.fn(),
@@ -34,6 +36,16 @@ describe('scoped viewer pages with the shared dashboard toolbar', () => {
     localStorage.clear();
     vi.resetAllMocks();
     api.fetchKeyOverviewUsageEvents.mockResolvedValue({ events: [], total_count: 0, has_more: false });
+    api.openKeyOverviewUsageEventsLive.mockImplementation(async (_request, _options, signal: AbortSignal) => {
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
+          events: [], total_count: 0, has_more: false, range_start: '2026-01-01T00:00:00Z',
+          range_end: '2026-12-31T00:00:00Z', end_exclusive: false,
+        })}\n\n`));
+        signal.addEventListener('abort', () => controller.close(), { once: true });
+      } });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+    });
     api.fetchKeyOverviewUsageEventModelFilterOptions.mockResolvedValue({ models: [] });
     api.fetchKeyOverviewUsageEventSourceFilterOptions.mockResolvedValue({ sources: [] });
     api.fetchKeyOverviewUsageIdentitiesPage.mockResolvedValue({ identities: [], total_count: 0, total_pages: 1 });
@@ -54,7 +66,7 @@ describe('scoped viewer pages with the shared dashboard toolbar', () => {
     await act(async () => root.render(page === 'events'
       ? <KeyEventsPage onNavigate={() => undefined} />
       : <KeyAuthFilesPage onNavigate={() => undefined} />));
-    const scopedFetch = page === 'events' ? api.fetchKeyOverviewUsageEvents : api.fetchKeyOverviewUsageIdentitiesPage;
+    const scopedFetch = page === 'events' ? api.openKeyOverviewUsageEventsLive : api.fetchKeyOverviewUsageIdentitiesPage;
     expect(scopedFetch).toHaveBeenCalledOnce();
     const refresh = container.querySelector<HTMLButtonElement>('[data-dashboard-refresh]');
     expect(refresh).not.toBeNull();
@@ -62,6 +74,7 @@ describe('scoped viewer pages with the shared dashboard toolbar', () => {
     await act(async () => refresh!.click());
     expect(scopedFetch).toHaveBeenCalledTimes(2);
     expect(api.fetchUsageEvents).not.toHaveBeenCalled();
+    expect(api.openUsageEventsLive).not.toHaveBeenCalled();
     expect(api.fetchUsageIdentitiesPage).not.toHaveBeenCalled();
     expect(api.fetchUsageQuotaCache).not.toHaveBeenCalled();
     expect(api.fetchUsageQuotaInspectionStatus).not.toHaveBeenCalled();

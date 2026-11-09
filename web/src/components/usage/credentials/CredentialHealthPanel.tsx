@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { UsageCredentialHealth } from '@/lib/types'
 import { healthGreenThreshold } from '@/utils/usage/health'
 import { IconRefreshCw, IconTimer } from '@/components/ui/icons'
-import { formatTokyoClock, formatTokyoMonthDayTime } from '@/utils/time'
+import { formatTokyoClock, formatTokyoMonthDayTime, parseTokyoDate } from '@/utils/time'
 import { cacheReadRateTone, credentialToneClassName, formatCredentialPercent } from './CredentialSectionShell'
 import styles from './CredentialSections.module.scss'
 
@@ -33,6 +33,9 @@ interface CredentialHealthPanelProps {
   statsUpdatedAt?: string
   /** 最近 5h 窗口缓存率；传入时在 meta 区多加一行文字，不额外画图形。 */
   windowCacheReadRate?: number | null
+  /** 卡片仅压缩呈现，详情仍使用默认的完整面板。 */
+  variant?: 'full' | 'compact'
+  showCompactMeta?: boolean
 }
 
 const HEALTH_WINDOW_MINUTES = 5 * 60
@@ -56,22 +59,23 @@ const healthMetaToneClassName: Record<CredentialHealthSummaryTone, string> = {
   quiet: styles.credentialHealthMetaQuiet,
 }
 
-export function CredentialHealthPanel({ displayName, health, lastUsedAt, statsUpdatedAt, windowCacheReadRate }: CredentialHealthPanelProps) {
+export function CredentialHealthPanel({ displayName, health, lastUsedAt, statsUpdatedAt, windowCacheReadRate, variant = 'full', showCompactMeta = false }: CredentialHealthPanelProps) {
   const { t } = useTranslation()
   const buckets = useMemo(() => buildHealthBuckets(health), [health])
   const score = resolveCredentialHealthScore(health, buckets)
   const summary = resolveCredentialHealthSummary(buckets, health, t)
-  const lastUsed = formatCredentialHealthDate(lastUsedAt)
+  const lastUsed = formatCredentialHealthDate(lastUsedAt, variant === 'compact' ? '-' : '/')
   const statsUpdated = formatCredentialHealthDate(statsUpdatedAt)
   const showWindowCacheReadRate = windowCacheReadRate !== undefined
+  const compact = variant === 'compact'
 
   return (
-    <div className={styles.credentialHealthPanel}>
+    <div className={`${styles.credentialHealthPanel} ${compact ? styles.credentialHealthCompact : ''}`.trim()} data-credential-health-variant={variant}>
       <div className={styles.credentialHealthChart}>
-        <div className={styles.credentialHealthHeader}>
+        {compact ? <span className={styles.credentialHealthWindow} title={t('usage_stats.credentials_health_last_5h')}>5h</span> : <div className={styles.credentialHealthHeader}>
           <span>{t('usage_stats.credentials_health_last_5h')}</span>
           <strong>{score.toFixed(1)}%</strong>
-        </div>
+        </div>}
         <div
           className={styles.credentialHealthGrid}
           role="list"
@@ -92,7 +96,7 @@ export function CredentialHealthPanel({ displayName, health, lastUsedAt, statsUp
                   failureCount: bucket.failureCount,
                   rate: bucket.successRateLabel,
                 })}
-                style={{ height: `${bucket.heightPx}px` }}
+                style={{ height: `${compact ? 9 : bucket.heightPx}px` }}
               >
                 <span
                   className={`${styles.credentialHealthTooltip} ${
@@ -116,8 +120,24 @@ export function CredentialHealthPanel({ displayName, health, lastUsedAt, statsUp
             )
           })}
         </div>
+        {compact && <strong className={styles.credentialHealthCompactScore}>{score.toFixed(1)}%</strong>}
       </div>
-      <div className={`${styles.credentialHealthMeta} ${healthMetaToneClassName[summary.tone]}`.trim()}>
+      {compact ? showCompactMeta && (
+        <div className={`${styles.credentialHealthCompactMeta} ${healthMetaToneClassName[summary.tone]}`.trim()}>
+          <span className={styles.credentialHealthMetaStatus}>{summary.label}</span>
+          {showWindowCacheReadRate && (
+            <span className={styles.credentialHealthCompactCache}>
+              <span>{t('usage_stats.credentials_health_cache_short')}</span>
+              <span className={credentialToneClassName('credentialMetricValue', cacheReadRateTone(windowCacheReadRate ?? null))}>{formatCredentialPercent(windowCacheReadRate ?? null)}</span>
+            </span>
+          )}
+          {lastUsed && (
+            <span className={styles.credentialHealthCompactLastUsed} aria-label={`${t('usage_stats.credentials_last_used')} ${lastUsed}`}>
+              <span>{t('usage_stats.credentials_last_used')}</span> {lastUsed}
+            </span>
+          )}
+        </div>
+      ) : <div className={`${styles.credentialHealthMeta} ${healthMetaToneClassName[summary.tone]}`.trim()}>
         <div className={styles.credentialHealthMetaPrimary}>
           <span className={styles.credentialHealthMetaStatus}>{summary.label}</span>
           <span className={styles.credentialHealthMetaDetail}>{summary.detail}</span>
@@ -146,7 +166,7 @@ export function CredentialHealthPanel({ displayName, health, lastUsedAt, statsUp
             )}
           </div>
         )}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -358,7 +378,7 @@ function parseDate(value: string | undefined): Date | undefined {
   if (!value) {
     return undefined
   }
-  const date = new Date(value)
+  const date = parseTokyoDate(value)
   if (Number.isNaN(date.getTime())) {
     return undefined
   }
@@ -387,11 +407,11 @@ function formatHealthTimeFromAPIValue(value: string | undefined, fallback: Date)
 }
 
 function formatHealthTimeFromAPIBase(value: string | undefined, offsetMinutes: number, fallback: Date): string {
-  const base = value ? new Date(value) : null
+  const base = value ? parseTokyoDate(value) : null
   if (!base || Number.isNaN(base.getTime())) return formatHealthTime(fallback)
   return formatTokyoClock(base.getTime() + offsetMinutes * 60_000)
 }
 
-function formatCredentialHealthDate(value: string | undefined): string {
-  return value ? formatTokyoMonthDayTime(value) : ''
+function formatCredentialHealthDate(value: string | undefined, dateSeparator: '-' | '/' = '/'): string {
+  return value ? formatTokyoMonthDayTime(value).replace('/', dateSeparator) : ''
 }

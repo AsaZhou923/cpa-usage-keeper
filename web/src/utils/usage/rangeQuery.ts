@@ -65,9 +65,10 @@ const parseCustomDateParam = (value: string | undefined): { value: string; times
   const yearNumber = Number(year);
   const monthNumber = Number(month);
   const dayNumber = Number(day);
-  const date = new Date(yearNumber, monthNumber - 1, dayNumber, 0, 0, 0, 0);
+  // 日期键只参与校验与排序，使用 UTC 避免浏览器时区或当地 DST 改写日期。
+  const date = new Date(`${trimmed}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return undefined;
-  if (date.getFullYear() !== yearNumber || date.getMonth() !== monthNumber - 1 || date.getDate() !== dayNumber) return undefined;
+  if (date.getUTCFullYear() !== yearNumber || date.getUTCMonth() !== monthNumber - 1 || date.getUTCDate() !== dayNumber) return undefined;
   return { value: trimmed, timestampMs: date.getTime() };
 };
 

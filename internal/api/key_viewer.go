@@ -188,7 +188,7 @@ func registerKeyUsageIdentityRoutes(
 		if !ok {
 			return
 		}
-		if request.AuthType == nil || *request.AuthType != entities.UsageIdentityAuthTypeAuthFile {
+		if request.AuthType == nil || *request.AuthType != entities.UsageIdentityAuthTypeCredential {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "auth_type must be 1"})
 			return
 		}
@@ -251,7 +251,7 @@ func registerKeyQuotaRoutes(
 			c.JSON(http.StatusBadRequest, gin.H{"error": "auth_indexes are required"})
 			return
 		}
-		authType := entities.UsageIdentityAuthTypeAuthFile
+		authType := entities.UsageIdentityAuthTypeCredential
 		allowedAuthIndexes, err := usageIdentityProvider.ListActiveUsageIdentityAuthIndexes(c.Request.Context(), service.ListUsageIdentitiesRequest{
 			AuthType:    &authType,
 			APIGroupKey: apiKey.APIKey,
