@@ -11,7 +11,7 @@ import { PortalTooltip, usePortalTooltip } from '@/components/ui/PortalTooltip'
 import quotaCostIcon from '@/assets/icons/quota-cost.svg'
 import quotaTokenIcon from '@/assets/icons/quota-token.svg'
 import styles from './CredentialSections.module.scss'
-import { formatCredentialTimestamp, type CredentialRow, type DisplayQuota } from './credentialViewModels'
+import { credentialSIWCState, formatCredentialTimestamp, type CredentialRow, type DisplayQuota } from './credentialViewModels'
 import { deleteCredentials, fetchClaudeResetGrants, fetchQuotaAutoRefreshSettings, fetchUsageQuotaResetCredits, setCredentialsDisabled, updateQuotaAutoRefreshSettings, type UsageIdentityPageSort } from '@/lib/api'
 import type { ClaudeResetGrantsResponse, QuotaAutoRefreshScheduleUnit, QuotaAutoRefreshSettings, UsageQuotaInspectionResult, UsageQuotaInspectionResultStatus, UsageQuotaInspectionStatusResponse, UsageQuotaResetCreditsResponse, UsageQuotaResetResponse } from '@/lib/types'
 import { CredentialAliasEditor, CredentialEditButton } from './CredentialAliasEditor'
@@ -23,6 +23,7 @@ import { CredentialPriorityEditor } from './CredentialPriorityEditor'
 import { ProviderBrandIcon, providerBrandIconKey } from '@/components/ProviderBrandIcon'
 import { CredentialStatusToggle } from './CredentialStatusToggle'
 import { MONITORING_TIME_ZONE, formatTokyoDateTime, formatTokyoMonthDayTime, parseTokyoDate } from '@/utils/time'
+import { credentialBrandOverride } from './credentialBrand'
 
 type Translate = (key: string, options?: Record<string, string>) => string
 type InspectionIndicatorTone = 'idle' | 'running' | 'completed'
@@ -62,7 +63,7 @@ const RESET_CREDITS_POPOVER_VIEWPORT_MARGIN = 12
 const RESET_CREDITS_POPOVER_OFFSET = 8
 const RESET_CREDITS_POPOVER_MAX_HEIGHT = 360
 // 与后端默认额度处理器一致；品牌图标支持的类型不等于额度接口支持的类型。
-const QUOTA_PROVIDER_TYPES = new Set(['antigravity', 'codex', 'gemini-cli', 'claude', 'kimi', 'xai'])
+const QUOTA_PROVIDER_TYPES = new Set(['antigravity', 'codex', 'gemini-cli', 'claude', 'kimi', 'meta', 'xai'])
 const CREDENTIAL_EXPIRY_TOOLTIP_SAFE_WIDTH = 300
 const CREDENTIAL_EXPIRY_TOOLTIP_ESTIMATED_HEIGHT = 48
 const CREDENTIAL_EXPIRY_TOOLTIP_OFFSET = 10
@@ -255,6 +256,8 @@ export function CredentialsSection({ rows, timeZone, total, page, totalPages, pa
         const resetCredits = (isClaude ? row.claudeResetGrants?.availableCount : row.quotaResetCreditsAvailableCount) ?? 0
         const canResetQuota = canManage && resetCredits > 0 && !row.identity.is_deleted && !rowRefreshing && !row.quotaResetting
         const rowKey = row.identity.id || row.identity.identity
+        const siwcState = credentialSIWCState(row.identity)
+        const brandType = credentialBrandOverride(row.identity.type)?.iconType ?? row.identity.type
         const openDetails = onOpenDetails ? () => onOpenDetails(row) : undefined
         const rowExpiryTooltipText = row.expiresAtLabel
           ? t('usage_stats.credentials_expiry_tooltip', { value: row.expiresAtLabel })
@@ -263,13 +266,13 @@ export function CredentialsSection({ rows, timeZone, total, page, totalPages, pa
           <CredentialCardShell
             key={rowKey}
             identityId={rowKey}
-            icon={<ProviderBrandIcon providerType={row.identity.type} size={30} />}
+            icon={<ProviderBrandIcon providerType={brandType} size={30} />}
             status={(
               // 认证文件沿用品牌类型的现有支持范围，不套用 AI Provider 的能力白名单。
               canManage && providerBrandIconKey(row.identity.type) && (
                 <CredentialStatusToggle
                   variant="switch"
-                  providerType={row.identity.type}
+                  providerType={brandType}
                   displayName={row.displayName}
                   disabled={row.identity.disabled}
                   pending={statusPendingIdentityIds?.has(row.identity.id || row.identity.identity) ?? false}
@@ -341,6 +344,12 @@ export function CredentialsSection({ rows, timeZone, total, page, totalPages, pa
             )}
             health={<CredentialHealthPanel variant="compact" showCompactMeta displayName={row.displayName} health={row.credentialHealth} lastUsedAt={row.identity.last_used_at} windowCacheReadRate={row.windowCacheReadRate} />}
             quota={<CredentialQuotaPanel variant="compact" row={row} quotaUsageMode={quotaUsageMode} timeZone={timeZone} />}
+            footerLeft={siwcState && (
+              <span className={styles.credentialSIWCStatus} data-siwc-state={siwcState}>
+                <span className={styles.credentialSIWCDot} aria-hidden="true" />
+                <span>SIWC {t(`usage_stats.credentials_siwc_${siwcState}`)}</span>
+              </span>
+            )}
             actions={canManage ? (
               <>
                   {onEdit && <CredentialEditButton identityId={row.identity.id} disabled={row.identity.is_deleted} onEdit={() => onEdit(row)} />}
@@ -1580,7 +1589,7 @@ function InspectionResultRow({ result }: { result: UsageQuotaInspectionResult })
   return (
     <div className={styles.credentialInspectionResultRow}>
       <span className={styles.credentialInspectionTypeIcon}>
-        <ProviderBrandIcon providerType={result.type} size={20} />
+        <ProviderBrandIcon providerType={credentialBrandOverride(result.type)?.iconType ?? result.type} size={20} />
       </span>
       <span className={styles.credentialInspectionIdentity}>
         <strong>{result.name || result.file_name || '-'}</strong>
